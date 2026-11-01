@@ -7,6 +7,11 @@ services:
       QYRIX_AGENT_TOKEN: ${QYRIX_AGENT_TOKEN:?set in .env}
       QYRIX_APPROVED_DOMAINS: ${QYRIX_APPROVED_DOMAINS:-}
       QYRIX_ENABLE_DEMO_RESET: ${QYRIX_ENABLE_DEMO_RESET:-0}
+      QYRIX_APPROVAL_TTL_SECONDS: ${QYRIX_APPROVAL_TTL_SECONDS:-900}
+      QYRIX_GRANT_TTL_SECONDS: ${QYRIX_GRANT_TTL_SECONDS:-120}
+      QYRIX_PUBLIC_DEMO: ${QYRIX_PUBLIC_DEMO:-1}
+      QYRIX_DEMO_RATE_PER_MIN: ${QYRIX_DEMO_RATE_PER_MIN:-20}
+      QYRIX_DEMO_GLOBAL_RATE_PER_MIN: ${QYRIX_DEMO_GLOBAL_RATE_PER_MIN:-600}
       META_API_KEY: ${META_API_KEY:-}
       META_MODEL: ${META_MODEL:-}
       BASETEN_API_KEY: ${BASETEN_API_KEY:-}
@@ -18,7 +23,10 @@ services:
     security_opt: ["no-new-privileges:true"]
     networks: [internal]
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
     environment:
       BACKEND_URL: http://backend:8000
       QYRIX_COOKIE_SECURE: ${QYRIX_COOKIE_SECURE:-0}

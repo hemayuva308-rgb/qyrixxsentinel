@@ -1,0 +1,227 @@
+{
+ "format": "qyrix-proof-bundle/v2",
+ "chain": [
+  {
+   "v": 2,
+   "n": 1,
+   "ts": "2026-11-01T16:12:47.495397+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "92adeec0-cfa2-4cf6-9b32-ed538bee7529",
+   "tool": "http",
+   "method": "GET",
+   "verdict": "ALLOW",
+   "rule_ids": [],
+   "blocked_dest": null,
+   "lineage": [
+    "b191b1e2-6954-4549-846d-0a286e5bbd1d:TRUSTED"
+   ],
+   "data": null,
+   "ext_calls": 0,
+   "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+   "hash": "3c76f13ac90b76c9ce9eba15d041739b0de31a1f7b31dd821f6cc4731b0820c4"
+  },
+  {
+   "v": 2,
+   "n": 2,
+   "ts": "2026-11-01T16:12:47.497631+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "1b7451b2-e6f8-4487-8a1e-26c26c87df72",
+   "tool": "file.read",
+   "method": "GET",
+   "verdict": "ALLOW",
+   "rule_ids": [],
+   "blocked_dest": null,
+   "lineage": [
+    "a8daea30-0873-492f-b09e-3c440a55120e:TRUSTED"
+   ],
+   "data": null,
+   "ext_calls": 0,
+   "prev": "3c76f13ac90b76c9ce9eba15d041739b0de31a1f7b31dd821f6cc4731b0820c4",
+   "hash": "49090ac966cbc6096d9f5b799f0051b4f10b3d6dc1edf4a5318ab7762e6776a7"
+  },
+  {
+   "v": 2,
+   "n": 3,
+   "ts": "2026-11-01T16:12:47.498539+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "9a29283b-e093-44d4-847b-e2733d1f2a68",
+   "tool": "http",
+   "method": "POST",
+   "verdict": "ALLOW",
+   "rule_ids": [],
+   "blocked_dest": null,
+   "lineage": [
+    "29e209e4-a158-4357-acaa-2a0a2005a9f0:TRUSTED"
+   ],
+   "data": "[REDACTED len=9]",
+   "ext_calls": 0,
+   "prev": "49090ac966cbc6096d9f5b799f0051b4f10b3d6dc1edf4a5318ab7762e6776a7",
+   "hash": "eaf2897717a1cf35fa132a99dabfcbe731e5eb8ae2ead553d6f3985a2b941467"
+  },
+  {
+   "v": 2,
+   "n": 4,
+   "ts": "2026-11-01T16:12:47.499300+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "f68026ea-3e9b-45b7-8e52-15c355f1bb11",
+   "tool": "http",
+   "method": "POST",
+   "verdict": "BLOCK",
+   "rule_ids": [
+    "R1_DEST_NOT_APPROVED",
+    "R2_SECRET_EXFIL",
+    "R3_UNTRUSTED_LINEAGE"
+   ],
+   "blocked_dest": "render-internal.com",
+   "lineage": [
+    "e702ce4e-8fa0-4156-9494-e3f6cfd080e2:UNVERIFIED"
+   ],
+   "data": "[REDACTED len=20]",
+   "ext_calls": 0,
+   "prev": "eaf2897717a1cf35fa132a99dabfcbe731e5eb8ae2ead553d6f3985a2b941467",
+   "hash": "156d8247c4bc64814d335ee60702d0ae441b21ba68406206b053493fef693f95"
+  },
+  {
+   "v": 2,
+   "n": 5,
+   "ts": "2026-11-01T16:12:47.499754+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "3e7972bb-1e10-4059-94b1-1fa5b74fce48",
+   "tool": "shell",
+   "method": "GET",
+   "verdict": "BLOCK",
+   "rule_ids": [
+    "R8_UNSUPPORTED_TOOL",
+    "R3_UNTRUSTED_LINEAGE",
+    "R5_COMMAND_INJECTION"
+   ],
+   "blocked_dest": "evil.sh",
+   "lineage": [
+    "a235fc11-a29f-4862-bbfe-9c5fce5d0cce:UNTRUSTED"
+   ],
+   "data": null,
+   "ext_calls": 0,
+   "prev": "156d8247c4bc64814d335ee60702d0ae441b21ba68406206b053493fef693f95",
+   "hash": "4fd3281ef6055ed3063dffbd9235ce5b9a1833e113da5d0cfb08645f1b8bf17f"
+  },
+  {
+   "v": 2,
+   "n": 6,
+   "ts": "2026-11-01T16:12:47.500474+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "2eb62984-51e9-4a48-b4fc-33a637000033",
+   "tool": "http",
+   "method": "POST",
+   "verdict": "BLOCK",
+   "rule_ids": [
+    "R1_DEST_NOT_APPROVED",
+    "R2_SECRET_EXFIL",
+    "R3_UNTRUSTED_LINEAGE"
+   ],
+   "blocked_dest": "paste.evil.io",
+   "lineage": [
+    "de6a5d16-8f32-4893-8b7f-93cf22a41b6a:UNTRUSTED"
+   ],
+   "data": "[REDACTED len=15]",
+   "ext_calls": 0,
+   "prev": "4fd3281ef6055ed3063dffbd9235ce5b9a1833e113da5d0cfb08645f1b8bf17f",
+   "hash": "9cea14e67f1315db2a46a4903ef98e16459a670e566c5273d2b9d644bdf8aca4"
+  },
+  {
+   "v": 2,
+   "n": 7,
+   "ts": "2026-11-01T16:12:47.501103+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "e7e8d746-8ee0-426c-92b2-7586c90cde69",
+   "tool": "http",
+   "method": "POST",
+   "verdict": "BLOCK",
+   "rule_ids": [
+    "R1_DEST_NOT_APPROVED",
+    "R2_SECRET_EXFIL",
+    "R3_UNTRUSTED_LINEAGE"
+   ],
+   "blocked_dest": "ahr0chm6ly9yzw5kzxitaw50zxjuywwuy29t",
+   "lineage": [
+    "24012d52-c63e-46ef-9a09-7d239030e064:UNTRUSTED"
+   ],
+   "data": "[REDACTED len=13]",
+   "ext_calls": 0,
+   "prev": "9cea14e67f1315db2a46a4903ef98e16459a670e566c5273d2b9d644bdf8aca4",
+   "hash": "de5e80603a74b61a88303dc414e3d06e91eeb5182fd40a89bd6b5fa3ac815f89"
+  },
+  {
+   "v": 2,
+   "n": 8,
+   "ts": "2026-11-01T16:12:47.502011+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "b3ac4fc5-fc3d-4644-af0e-212fd9daf648",
+   "tool": "http",
+   "method": "POST",
+   "verdict": "BLOCK",
+   "rule_ids": [
+    "R1_DEST_NOT_APPROVED",
+    "R2_SECRET_EXFIL",
+    "R3_UNTRUSTED_LINEAGE"
+   ],
+   "blocked_dest": "render-internal.com",
+   "lineage": [
+    "39289bc7-f01f-4b37-87dd-ab731e394f10:UNVERIFIED"
+   ],
+   "data": "[REDACTED len=16]",
+   "ext_calls": 0,
+   "prev": "de5e80603a74b61a88303dc414e3d06e91eeb5182fd40a89bd6b5fa3ac815f89",
+   "hash": "8930ee8a41660ec3e4acf39e48e16572be5f3f8f02c54ab26cda2dc50110b222"
+  },
+  {
+   "v": 2,
+   "n": 9,
+   "ts": "2026-11-01T16:12:47.503172+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "fddb9999-2af0-4915-8849-12cf4fbc2c98",
+   "tool": "http",
+   "method": "POST",
+   "verdict": "BLOCK",
+   "rule_ids": [
+    "R2_SECRET_EXFIL"
+   ],
+   "blocked_dest": "https://github.com/api/gist",
+   "lineage": [
+    "a5e7c78b-9a86-4dbc-84e3-4105f5a7daa1:UNTRUSTED",
+    "e1afe406-9e9f-425a-af2b-507626da019e:UNTRUSTED"
+   ],
+   "data": "[REDACTED len=15]",
+   "ext_calls": 0,
+   "prev": "8930ee8a41660ec3e4acf39e48e16572be5f3f8f02c54ab26cda2dc50110b222",
+   "hash": "923948af44a73ec0061677d7ad049cf6d3a26e7744ab018c6575d2ab2c5adcf8"
+  },
+  {
+   "v": 2,
+   "n": 10,
+   "ts": "2026-11-01T16:12:47.504018+00:00",
+   "kind": "gate_decision",
+   "gate_evaluation_id": "dc94d927-a40c-496c-89a6-1a4af91baefd",
+   "tool": "http",
+   "method": "POST",
+   "verdict": "BLOCK",
+   "rule_ids": [
+    "R4_APPROVAL_SCOPE_MISMATCH"
+   ],
+   "blocked_dest": "https://api.render.com/v1/services/delete",
+   "lineage": [
+    "c473674a-9ebf-4547-bccc-c15ae5600451:TRUSTED"
+   ],
+   "data": null,
+   "ext_calls": 0,
+   "prev": "923948af44a73ec0061677d7ad049cf6d3a26e7744ab018c6575d2ab2c5adcf8",
+   "hash": "ea0c42de488735a2d70ac2521d27a85d5b1a2a39dd80146cbc2c9c6bc97ec74a"
+  }
+ ],
+ "verify": {
+  "valid": true,
+  "status": "PARTIAL_UNANCHORED",
+  "length": 10,
+  "head": "ea0c42de488735a2d70ac2521d27a85d5b1a2a39dd80146cbc2c9c6bc97ec74a",
+  "anchor_status": "UNANCHORED"
+ }
+}

@@ -1,0 +1,6 @@
+redirected to http://127.0.0.1:3000/login?next=%2Fdashboard
+after login http://127.0.0.1:3000/dashboard
+verdict ALLOW
+executed true
+bench 7/7 attacks blocked, 3/3 safe tasks allowed. Measured on these 10 synthetic cases only - not a claim about real-world attack coverage.
+errors []

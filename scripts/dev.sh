@@ -4,5 +4,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
 (cd backend && pip install -q -r requirements.txt && python -m uvicorn app.main:app --port 8000) &
-(cd frontend && npm install --no-audit --no-fund && npm run build && BACKEND_URL=http://127.0.0.1:8000 node .next/standalone/server.js) &
+(cd frontend && npm install --no-audit --no-fund && npm run build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/ && BACKEND_URL=http://127.0.0.1:8000 node .next/standalone/server.js) &
 wait
