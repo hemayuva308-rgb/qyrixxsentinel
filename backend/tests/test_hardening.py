@@ -187,22 +187,35 @@ class _FakeClient:
         return R()
 
 
+def _execute(r, cl=c):
+    return cl.post("/api/v1/tools/execute", json={"gate_evaluation_id": r["gate_evaluation_id"], "grant_id": r["grant_id"]})
+
+
 def test_execute_resolves_validates_pins_and_records_before_request(monkeypatch):
     monkeypatch.setattr(netguard.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("140.82.112.3", 0))])
     monkeypatch.setattr(netguard.httpx, "Client", _FakeClient)
     _FakeClient.calls.clear()
-    seen = {}
-    real_prove = g._prove
-    def spy(*a, **k):
-        seen["calls_at_proof_time"] = len(_FakeClient.calls)
-        return real_prove(*a, **k)
-    monkeypatch.setattr(g, "_prove", spy)
-    r = gate(tool="http", dest="https://github.com/octocat", execute=True, lineage=[step()])
-    assert r["verdict"] == "ALLOW" and r["executed"] and r["exec_status"] == 204 and r["external_calls"] == 1
-    assert seen["calls_at_proof_time"] == 0            # decision recorded BEFORE any request
+    seen = []
+    real_record = g._record
+    def spy(ctx, fields):
+        seen.append((fields.get("verdict"), len(_FakeClient.calls)))
+        return real_record(ctx, fields)
+    monkeypatch.setattr(g, "_record", spy)
+    r = gate(tool="http", dest="https://github.com/octocat", lineage=[step()])
+    assert r["verdict"] == "ALLOW" and r["grant_id"] and not r["executed"] and r["external_calls"] == 0
+    x = _execute(r).json()
+    assert x["executed"] and x["result"]["status"] == 204 and x["external_calls"] == 1
+    # decision recorded at evaluation, execution start recorded BEFORE the request, result after it
+    assert [v for v, _ in seen] == ["ALLOW", "EXECUTION_STARTED", "EXECUTED"]
+    assert dict(seen)["EXECUTION_STARTED"] == 0 and dict(seen)["EXECUTED"] == 1
     method, url, headers, ext = _FakeClient.calls[0]
     assert url.startswith("https://140.82.112.3") and headers["Host"] == "github.com" and ext == {"sni_hostname": "github.com"}
     assert _FakeClient.kw["follow_redirects"] is False
+
+
+def test_evaluate_with_execute_flag_is_rejected():
+    r = c.post(P + "/gate/evaluate", json={"tool": "http", "dest": "https://github.com/x", "execute": True, "lineage": [step()]})
+    assert r.status_code == 400 and "EXECUTE_MOVED" in r.json()["detail"]
 
 
 def test_dns_answer_in_private_range_blocks_and_makes_no_request(monkeypatch):
@@ -210,9 +223,10 @@ def test_dns_answer_in_private_range_blocks_and_makes_no_request(monkeypatch):
     _FakeClient.calls.clear()
     for answers in (["127.0.0.1"], ["140.82.112.3", "10.0.0.1"]):     # rebinding-to-internal and MIXED answers
         monkeypatch.setattr(netguard.socket, "getaddrinfo", lambda *a, _a=answers, **k: [(2, 1, 6, "", (x, 0)) for x in _a])
-        r = gate(tool="http", dest="https://github.com/x", execute=True, lineage=[step()])
-        assert r["verdict"] == "BLOCK" and "R9_SSRF_BLOCKED" in r["rules"] and not r["executed"]
-    assert _FakeClient.calls == [] and c.get(P + "/status").json()["external_calls"] == 0
+        r = gate(tool="http", dest="https://github.com/x", lineage=[step()])
+        x = _execute(r).json()
+        assert x["executed"] is False and "prohibited address" in x["result"]["error"]
+    assert _FakeClient.calls == []
 
 
 def test_decision_without_execute_does_no_dns_and_no_egress(monkeypatch):

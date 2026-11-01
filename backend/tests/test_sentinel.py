@@ -61,7 +61,7 @@ def test_base64_destination_is_blocked():
 
 def test_unknown_label_never_becomes_trusted():
     sid = step("totally-trusted-bro")
-    assert c.get(P + "/provenance").json()["steps"][-1]["label"] == "unverified"
+    assert c.get(P + "/provenance").json()["steps"][-1]["label"] == "UNVERIFIED"
     assert gate(tool="http", dest="https://evil.io", lineage=[sid])["verdict"] == "BLOCK"
 
 
