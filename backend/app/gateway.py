@@ -23,7 +23,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import adapter as adapters, netguard, proof, provenance as prov
+from app import adapter as adapters, anchor, netguard, persistence, proof, provenance as prov
 from app.auth import principal, require_admin
 
 router = APIRouter(prefix="/api/v1/sentinel", tags=["sentinel"], dependencies=[Depends(principal)])
@@ -218,6 +218,9 @@ class GateContext:
         self.state = {"degraded": False}
         self.evals: "OrderedDict[str, Dict]" = OrderedDict()
         self.grants: Dict[str, Dict] = {}
+        self.db = None                       # optional persistence.PgPersistence (production only)
+        self.state["persistence"] = "memory" # memory | postgres | down
+        self.anchors: List[Dict] = []        # external proof anchors (RFC 3161), see app/anchor.py
 
 
 PROD = GateContext("production", prov.default_store(), CHAIN_FILE, netguard.approved_domains,
@@ -236,21 +239,98 @@ def _verify(chain: List[Dict]) -> Dict:
     return proof.verify_records(chain)
 
 
+_token_cache: Dict[tuple, tuple] = {}
+
+
+def _cached_verify_token(head: str, token_b64: str):
+    """openssl verification of an anchor token, cached per (token, CA file mtime) so status polling stays cheap."""
+    ca = anchor.config()["ca"] or ""
+    key = (_sha(token_b64), head, ca, os.path.getmtime(ca) if ca and os.path.exists(ca) else 0)
+    if key not in _token_cache:
+        _token_cache.clear() if len(_token_cache) > 256 else None
+        _token_cache[key] = anchor.verify_token(head, token_b64)
+    return _token_cache[key]
+
+
 def verify_chain(ctx: Optional[GateContext] = None) -> Dict:
     ctx = ctx or PROD
     with ctx.lock:
-        return {**proof.verify_records(ctx.chain), "degraded": ctx.state["degraded"]}
+        chain, anchors = list(ctx.chain), list(ctx.anchors)
+        degraded = ctx.state["degraded"]
+    v = proof.evaluate_anchors(chain, anchors, _cached_verify_token if anchor.can_verify() else None)
+    if v.get("anchor_status") == "ANCHOR_MISMATCH":
+        with ctx.lock:
+            ctx.state["degraded"] = True              # stored evidence contradicts its external anchor: fail closed
+        degraded = True
+    return {**v, "degraded": degraded}
+
+
+def _anchor_file(ctx: "GateContext") -> Optional[str]:
+    return ctx.chain_file + ".anchors.jsonl" if ctx.chain_file else None
+
+
+def _load_anchors(ctx: "GateContext") -> None:
+    f = _anchor_file(ctx)
+    if f and os.path.exists(f):
+        try:
+            with open(f) as fh:
+                ctx.anchors.extend(json.loads(l) for l in fh if l.strip())
+        except ValueError:
+            ctx.state["degraded"] = True
+    if ctx.anchors and proof.evaluate_anchors(ctx.chain, ctx.anchors).get("anchor_status") == "ANCHOR_MISMATCH":
+        ctx.state["degraded"] = True
+
+
+def create_anchor(ctx: Optional[GateContext] = None) -> Dict:
+    """Anchor the current chain head at the configured RFC 3161 TSA. Network call happens OUTSIDE the Gate lock;
+    the result is stored only if it verified and the anchored record is still in the chain. Never affects decisions."""
+    ctx = ctx or PROD
+    with ctx.lock:
+        if ctx.state["degraded"]:
+            raise anchor.AnchorError("PROOF_DEGRADED", "chain failed verification")
+        if not ctx.chain:
+            raise anchor.AnchorError("EMPTY_PROOF_BUNDLE", "nothing to anchor")
+        if not proof.verify_records(ctx.chain)["valid"]:
+            raise anchor.AnchorError("PROOF_DEGRADED", "chain failed verification")
+        n, head = len(ctx.chain), ctx.chain[-1]["hash"]
+    a = anchor.create_anchor(head, n)
+    with ctx.lock:
+        if len(ctx.chain) < n or ctx.chain[n - 1]["hash"] != head:
+            raise anchor.AnchorError("ANCHOR_STALE", "chain changed while anchoring")
+        f = _anchor_file(ctx)
+        if f:
+            with open(f, "a") as fh:
+                fh.write(json.dumps(a) + "\n"); fh.flush(); os.fsync(fh.fileno())
+        if ctx.db is not None:
+            try:
+                ctx.db.save_anchor(a)
+            except Exception:
+                ctx.state["persistence"] = "down"
+        ctx.anchors.append(a)
+        return {k: v for k, v in a.items() if k != "token_b64"}
+
+
+def _load_chain(ctx: "GateContext") -> None:
+    if ctx.chain_file and os.path.exists(ctx.chain_file):
+        with open(ctx.chain_file) as f:
+            try:
+                ctx.chain.extend(json.loads(l) for l in f if l.strip())
+            except ValueError:
+                ctx.state["degraded"] = True
+    if not proof.verify_records(ctx.chain)["valid"]:
+        ctx.state["degraded"] = True     # FR-135: broken evidence => fail closed until an admin investigates
 
 
 def _load() -> None:
-    if os.path.exists(CHAIN_FILE):
-        with open(CHAIN_FILE) as f:
-            try:
-                _chain.extend(json.loads(l) for l in f if l.strip())
-            except ValueError:
-                _state["degraded"] = True
-    if not proof.verify_records(_chain)["valid"]:
-        _state["degraded"] = True        # FR-135: broken evidence => fail closed until an admin investigates
+    _load_chain(PROD)
+    _load_anchors(PROD)
+    url = os.getenv("QYRIX_DATABASE_URL", "").strip()
+    if url:                              # durable mode: any problem => persistence 'down' => Gate blocks (R17)
+        from app import persistence
+        try:
+            attach_persistence(PROD, persistence.PgPersistence(url))
+        except Exception:
+            PROD.state["persistence"] = "down"
 
 
 def _record(ctx: GateContext, fields: Dict) -> Dict:
@@ -263,7 +343,37 @@ def _record(ctx: GateContext, fields: Dict) -> Dict:
             f.flush()
             os.fsync(f.fileno())
     ctx.chain.append(r)
+    if ctx.db is not None and ctx.state["persistence"] == "postgres":
+        try:
+            ctx.db.save_proof(r)
+        except Exception:
+            ctx.state["persistence"] = "down"   # fail closed from now on (R17) until the mirror is caught up
     return r
+
+
+def _persistence_down(ctx: "GateContext") -> bool:
+    """True when the context needs PostgreSQL and it is unavailable. Tries to recover at most every 2 s."""
+    if ctx.state["persistence"] != "down":
+        return False
+    if ctx.db is None or time.time() - ctx.state.get("db_retry", 0) < 2:
+        return True
+    ctx.state["db_retry"] = time.time()
+    try:
+        _sync_proof_mirror(ctx)
+        ctx.state["persistence"] = "postgres"
+        return False
+    except Exception:
+        return True
+
+
+def _sync_proof_mirror(ctx: "GateContext") -> None:
+    """The DB mirror must be a prefix of the verified file chain; missing rows are back-filled. Anything else is tampering."""
+    idx = ctx.db.load_proof_index()
+    if len(idx) > len(ctx.chain) or any(idx[i]["hash"] != ctx.chain[i]["hash"] for i in range(len(idx))):
+        ctx.state["degraded"] = True
+        raise RuntimeError("proof mirror does not match the chain file")
+    for r in ctx.chain[len(idx):]:
+        ctx.db.save_proof(r)
 
 
 def _prove(a: "Action", verdict: str, rules: List[str], dest: Optional[str], lin: List[Dict],
@@ -327,6 +437,8 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
             tool, method = a.tool, a.method.upper()
             if ctx.state["degraded"]:
                 rules.append("R11_PROOF_DEGRADED")
+            if _persistence_down(ctx):
+                rules.append("R17_PERSISTENCE_UNAVAILABLE")
             approved = ctx.approved()
             ins = inspect_text(a.dest + " " + a.cmd, approved)
             ids = [str(i) for i in a.lineage]
@@ -387,6 +499,8 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
         params = params_of(a)
         digest = params_digest(params)
         grant = None
+        ev = {"id": eval_id, "verdict": verdict, "rules": rules, "params": params, "digest": digest,
+              "hop": hop, "host": host, "redirect_location": None, "ts": time.time()}
         if verdict == "ALLOW":
             try:                                              # grant + approval consumption are one unit
                 grant = _new_grant(ctx, eval_id, digest)
@@ -397,18 +511,49 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
                     ctx.grants.pop(grant["id"], None)
                 grant = None
                 verdict, rules = "BLOCK", ["R0_FAIL_CLOSED"]
+            if grant is not None and ctx.db is not None:     # durable, atomic in the DB BEFORE the decision is recorded
+                try:
+                    ctx.db.save_evaluation(ev, grant, a.approval_id if ap is not None else None)
+                except Exception as e:
+                    ctx.grants.pop(grant["id"], None)
+                    grant = None
+                    if isinstance(e, persistence.PersistenceConflict):   # consumed by another process: replay
+                        if ap is not None:
+                            ap["used"] = True
+                        verdict, rules = "BLOCK", ["R6_APPROVAL_REPLAY"]
+                    else:
+                        if ap is not None:
+                            ap["used"] = False
+                        ctx.state["persistence"] = "down"
+                        verdict, rules = "BLOCK", ["R17_PERSISTENCE_UNAVAILABLE"]
+        ev["verdict"], ev["rules"] = verdict, rules
         rec = None
         try:
             rec = _prove(a, verdict, rules, dest, lin, ctx=ctx, evaluation_id=eval_id)   # audit BEFORE any execution
         except Exception:
             if grant:                                         # roll back: no evidence => no grant, approval unused
                 ctx.grants.pop(grant["id"], None)
+                if ctx.db is not None:                        # best-effort compensation; a grant without an ALLOW
+                    try:                                      # proof record is never loaded after a restart anyway
+                        ctx.db.revoke_grant(grant["id"], "system:proof-write-failed")
+                    except Exception:
+                        pass
                 grant = None
             if ap is not None and verdict == "ALLOW":
                 ap["used"] = False
+                if ctx.db is not None:
+                    try:
+                        ctx.db.save_approval(ap)
+                    except Exception:
+                        pass
             verdict, rules = "BLOCK", ["R0_FAIL_CLOSED"]
-        _store_eval(ctx, {"id": eval_id, "verdict": verdict, "rules": rules, "params": params, "digest": digest,
-                          "hop": hop, "host": host, "redirect_location": None, "ts": time.time()})
+        ev["verdict"], ev["rules"] = verdict, rules
+        if verdict == "BLOCK" and ctx.db is not None and ctx.state["persistence"] == "postgres":
+            try:                                              # audit history of blocked evaluations (never authorises)
+                ctx.db.save_evaluation(ev)
+            except Exception:
+                ctx.state["persistence"] = "down"
+        _store_eval(ctx, ev)
         ms = (time.perf_counter() - t0) * 1000
         ctx.lat.append(ms)
         return {"verdict": verdict, "rules": rules, "blocked_dest": dest,
@@ -440,6 +585,8 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
             code = "PROOF_DEGRADED"
         elif not ev or not g or g["gate_evaluation_id"] != eid or ev["verdict"] != "ALLOW":
             code = "GRANT_INVALID"
+        elif g.get("revoked"):
+            code = "GRANT_REVOKED"
         elif g["used"]:
             code = "GRANT_REPLAY"
         elif time.time() > g["exp"]:
@@ -448,13 +595,25 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
             code = "PARAMS_DIGEST_MISMATCH"
         elif ev["params"]["tool"] not in ctx.adapters:
             code = "NO_ADAPTER"
+        elif not _revalidate(ctx, ev["params"]):
+            code = "REVALIDATION_FAILED"
+        elif ctx.db is not None:
+            if _persistence_down(ctx):
+                code = "PERSISTENCE_UNAVAILABLE"
+            else:
+                try:                                       # atomic single-use in the database (survives restarts)
+                    if not ctx.db.consume_grant(gid, eid, g["digest"]):
+                        code = "GRANT_REPLAY"
+                except Exception:
+                    ctx.state["persistence"] = "down"
+                    code = "PERSISTENCE_UNAVAILABLE"
         if code:
             try:
                 _record(ctx, {"kind": "execution", "verdict": "EXECUTION_REFUSED", "gate_evaluation_id": eid,
                               "tool": ev["params"]["tool"] if ev else None, "rule_ids": [code], "ext_calls": ctx.ext["calls"]})
             except Exception:
                 pass
-            raise ExecRefused(code, 409 if code in ("GRANT_REPLAY", "GRANT_EXPIRED") else 403)
+            raise ExecRefused(code, 409 if code in ("GRANT_REPLAY", "GRANT_EXPIRED", "GRANT_REVOKED") else 503 if code == "PERSISTENCE_UNAVAILABLE" else 403)
         g["used"] = True                                   # consumed before the adapter runs: no replay, ever
         params = dict(ev["params"])
         try:
@@ -474,6 +633,11 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
     with ctx.lock:
         if ok and isinstance(result, dict) and result.get("redirect"):
             ev["redirect_location"] = result["redirect"]["location"]
+            if ctx.db is not None:
+                try:
+                    ctx.db.set_redirect(eid, ev["redirect_location"])
+                except Exception:
+                    ctx.state["persistence"] = "down"
             result["redirect"]["hop"] = ev["hop"] + 1
             result["redirect"]["max_hops"] = MAX_REDIRECTS
         try:
@@ -486,6 +650,77 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
         return {"executed": ok, "tool": params["tool"], "gate_evaluation_id": eid, "result": result,
                 "adapter": getattr(run, "name", "unknown"), "external_calls": ctx.ext["calls"],
                 "proof_start": start, "proof_result": done}
+
+
+def _revalidate(ctx: GateContext, p: Dict) -> bool:
+    """Deterministic re-check of the stored parameters against the CURRENT policy right before execution
+    (allowlist / workspace may have changed since the decision, e.g. across a restart)."""
+    if p["tool"] not in TOOLS:
+        return False
+    if p["tool"] == "http":
+        return netguard.check_http_dest(p["dest"], ctx.approved()).ok and not INJECT.search(norm(p["cmd"]))
+    if p["tool"] == "file.read":
+        return bool(ctx.workspace) and netguard.confine_path(ctx.workspace, p["dest"])
+    return False
+
+
+def revoke_grant(gid: str, who: str, ctx: Optional[GateContext] = None) -> Dict:
+    ctx = ctx or PROD
+    with ctx.lock:
+        g = ctx.grants.get(gid)
+        if g is None or g["used"] or g.get("revoked"):
+            raise ExecRefused("GRANT_NOT_REVOCABLE", 409)
+        if ctx.db is not None:
+            try:
+                if not ctx.db.revoke_grant(gid, who):
+                    raise ExecRefused("GRANT_NOT_REVOCABLE", 409)
+            except ExecRefused:
+                raise
+            except Exception:
+                ctx.state["persistence"] = "down"
+                raise ExecRefused("PERSISTENCE_UNAVAILABLE", 503)
+        g["revoked"] = True
+        _record(ctx, {"kind": "grant", "verdict": "GRANT_REVOKED", "gate_evaluation_id": g["gate_evaluation_id"],
+                      "tool": None, "rule_ids": [], "revoked_by": who, "ext_calls": ctx.ext["calls"]})
+        return {"grant_id": gid, "revoked": True}
+
+
+def attach_persistence(ctx: GateContext, db) -> None:
+    """Connect, migrate, cross-check and load durable state. Any failure => persistence 'down' (Gate blocks with R17).
+    Only grants whose evaluation has an ALLOW record in the verified proof chain are loaded; grants already
+    started per the chain are marked used. A DB row alone never authorises anything."""
+    ctx.db = db
+    ctx.state["persistence"] = "down"
+    db.migrate()
+    _sync_proof_mirror(ctx)
+    allowed = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("kind", "gate_decision") == "gate_decision" and r["verdict"] == "ALLOW"}
+    started = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("verdict") == "EXECUTION_STARTED"}
+    recent, index = db.load_steps(ctx.prov.memory_limit, prov.INDEX_LIMIT)
+    ctx.prov.restore(recent, index)
+    ctx.appr.clear()
+    for a_ in db.load_approvals():
+        ctx.appr[a_["id"]] = a_
+    evs, grants = db.load_evaluations(MAX_EVALS)
+    ctx.evals.clear(); ctx.grants.clear()
+    for ev in evs:
+        if ev["verdict"] == "ALLOW" and ev["id"] not in allowed:
+            continue                                   # no ALLOW evidence => not executable
+        ctx.evals[ev["id"]] = ev
+    for g_ in grants:
+        ev = ctx.evals.get(g_["gate_evaluation_id"])
+        if ev is None or ev["verdict"] != "ALLOW":
+            continue
+        if g_["gate_evaluation_id"] in started:
+            g_["used"] = True
+        ctx.grants[g_["id"]] = g_
+    known = {a_["id"] for a_ in ctx.anchors}
+    for a_ in db.load_anchors():                      # union of file + DB anchors; each is re-checked against the chain
+        if a_["id"] not in known:
+            ctx.anchors.append(a_)
+    if ctx.anchors and proof.evaluate_anchors(ctx.chain, ctx.anchors).get("anchor_status") == "ANCHOR_MISMATCH":
+        ctx.state["degraded"] = True
+    ctx.prov.persist = db.save_step
+    ctx.state["persistence"] = "postgres"
 
 
 # ---------------- REST ----------------
@@ -507,7 +742,15 @@ def inspect_ep(b: Text):
 
 @router.post("/provenance/step")
 def step_ep(b: Step):
-    return prov.add_step(b.source, b.label, _redact(b.text), [str(p) for p in b.parents])   # redact before storage
+    if _persistence_down(PROD):
+        raise HTTPException(503, "PERSISTENCE_UNAVAILABLE")
+    try:
+        return prov.add_step(b.source, b.label, _redact(b.text), [str(p) for p in b.parents])   # redact before storage
+    except Exception as e:
+        if PROD.db is not None:
+            PROD.state["persistence"] = "down"
+            raise HTTPException(503, "PERSISTENCE_UNAVAILABLE")
+        raise
 
 
 @router.get("/provenance")
@@ -534,6 +777,15 @@ async def execute_ep(request: Request):
         raise HTTPException(e.status, e.code)
 
 
+@router.post("/grants/{gid}/revoke")
+def revoke_ep(gid: str, who: str = Depends(require_admin)):
+    """Human (admin) revocation of an unused grant. Recorded in the proof chain."""
+    try:
+        return revoke_grant(gid[:64], who)
+    except ExecRefused as e:
+        raise HTTPException(e.status, e.code)
+
+
 @router.get("/proofs")
 def proofs_ep():
     with _lock:
@@ -549,8 +801,27 @@ def verify_ep():
 def export_ep():
     """Offline-verifiable bundle. Contains only redacted proof records (no raw secrets are ever recorded)."""
     with _lock:
-        return {"format": "qyrix-proof-bundle/v2", "exported_at": datetime.now(timezone.utc).isoformat(),
-                "anchor_status": "UNANCHORED", "chain": list(_chain), "verify": verify_chain()}
+        chain, anchors = list(_chain), list(PROD.anchors)
+    v = verify_chain()
+    return {"format": "qyrix-proof-bundle/v2", "exported_at": datetime.now(timezone.utc).isoformat(),
+            "anchor_status": v.get("anchor_status"), "chain": chain, "anchors": anchors, "verify": v}
+
+
+@router.post("/proofs/anchor")
+def anchor_ep(_: str = Depends(require_admin)):
+    try:
+        return create_anchor()
+    except anchor.AnchorError as e:
+        code = {"ANCHOR_NOT_CONFIGURED": 409, "EMPTY_PROOF_BUNDLE": 422, "PROOF_DEGRADED": 409, "ANCHOR_STALE": 409}.get(e.code, 503)
+        raise HTTPException(code, "%s: %s" % (e.code, e.detail) if e.detail else e.code)
+
+
+@router.get("/proofs/anchors")
+def anchors_ep():
+    p = anchor.problem()
+    with _lock:
+        return {"configured": p is None, "problem": p, "can_verify": anchor.can_verify(),
+                "tsa_url": anchor.config()["url"], "anchors": [{k: v for k, v in a.items() if k != "token_b64"} for a in PROD.anchors]}
 
 
 @router.post("/proofs/verify-bundle")
@@ -563,7 +834,7 @@ async def verify_bundle_ep(request: Request):
     except ValueError:
         raise HTTPException(400, "INVALID_JSON")
     try:
-        return proof.verify_bundle(bundle)
+        return proof.verify_bundle_with_anchors(bundle, _cached_verify_token if anchor.can_verify() else None)
     except proof.EmptyBundle:
         raise HTTPException(422, "EMPTY_PROOF_BUNDLE")
 
@@ -591,17 +862,59 @@ def _public_appr(x: Dict) -> Dict:
     return {k: v for k, v in x.items() if k not in ("exp",)}
 
 
-@router.post("/approvals")
-def appr_create(b: ApprovalReq):
+def create_approval(b: "ApprovalReq", ctx: Optional[GateContext] = None) -> Dict:
+    ctx = ctx or PROD
     now = time.time()
     aid = "apr_" + _sha("%s%s%s%s" % (now, b.dest, b.cmd, os.urandom(8).hex()))[:10]
-    with _lock:
-        _appr[aid] = {"id": aid, "status": "pending", "used": False, "digest": _digest(b.tool, b.method, b.dest, b.cmd, b.data),
-                      "scope": {"tool": b.tool, "method": b.method.upper(), "dest": b.dest, "cmd": b.cmd,
-                                "data_sha256": _sha(b.data) if b.data else None},
-                      "requested_by": b.requested_by, "ts": datetime.now(timezone.utc).isoformat(), "exp": now + APPROVAL_TTL,
-                      "expires_at": datetime.fromtimestamp(now + APPROVAL_TTL, timezone.utc).isoformat(), "decided_by": None}
-        return _public_appr(_appr[aid])
+    with ctx.lock:
+        x = {"id": aid, "status": "pending", "used": False, "digest": _digest(b.tool, b.method, b.dest, b.cmd, b.data),
+             "scope": {"tool": b.tool, "method": b.method.upper(), "dest": b.dest, "cmd": b.cmd,
+                       "data_sha256": _sha(b.data) if b.data else None},
+             "requested_by": b.requested_by, "ts": datetime.now(timezone.utc).isoformat(), "exp": now + APPROVAL_TTL,
+             "expires_at": datetime.fromtimestamp(now + APPROVAL_TTL, timezone.utc).isoformat(), "decided_by": None}
+        if ctx.db is not None:                        # durable before it becomes visible
+            if _persistence_down(ctx):
+                raise ExecRefused("PERSISTENCE_UNAVAILABLE", 503)
+            try:
+                ctx.db.save_approval(x)
+            except Exception:
+                ctx.state["persistence"] = "down"
+                raise ExecRefused("PERSISTENCE_UNAVAILABLE", 503)
+        ctx.appr[aid] = x
+        return _public_appr(x)
+
+
+def decide_approval(aid: str, decision: str, who: str, ctx: Optional[GateContext] = None) -> Dict:
+    """Humans (admin role) decide; the agent token cannot approve (separation of duty). Approving is NOT executing:
+    the agent must resubmit to the gate, which consumes the approval atomically with grant creation."""
+    ctx = ctx or PROD
+    with ctx.lock:
+        x = ctx.appr.get(aid)
+        if x is None or decision not in ("approve", "deny"):
+            raise ExecRefused("unknown approval or decision", 404)
+        if x["status"] != "pending" or x["used"]:
+            raise ExecRefused("approval already decided", 409)
+        status = "approved" if decision == "approve" else "denied"
+        if ctx.db is not None:                        # DB guard: only a pending, unused approval can be decided
+            if _persistence_down(ctx):
+                raise ExecRefused("PERSISTENCE_UNAVAILABLE", 503)
+            try:
+                ctx.db.decide_approval(aid, status, who)
+            except persistence.PersistenceConflict:
+                raise ExecRefused("approval already decided", 409)
+            except Exception:
+                ctx.state["persistence"] = "down"
+                raise ExecRefused("PERSISTENCE_UNAVAILABLE", 503)
+        x["status"], x["decided_by"] = status, who
+        return _public_appr(x)
+
+
+@router.post("/approvals")
+def appr_create(b: ApprovalReq):
+    try:
+        return create_approval(b)
+    except ExecRefused as e:
+        raise HTTPException(e.status, e.code)
 
 
 @router.get("/approvals")
@@ -612,26 +925,24 @@ def appr_list():
 
 @router.post("/approvals/{aid}/{decision}")
 def appr_decide(aid: str, decision: str, who: str = Depends(require_admin)):
-    """Humans (admin role) decide; the agent token cannot approve (separation of duty). Approving is NOT executing:
-    the agent must resubmit to the gate, which consumes the approval atomically with grant creation."""
-    with _lock:
-        x = _appr.get(aid)
-        if x is None or decision not in ("approve", "deny"):
-            raise HTTPException(404, "unknown approval or decision")
-        if x["status"] != "pending" or x["used"]:
-            raise HTTPException(409, "approval already decided")
-        x["status"] = "approved" if decision == "approve" else "denied"
-        x["decided_by"] = who
-        return _public_appr(x)
+    try:
+        return decide_approval(aid, decision, who)
+    except ExecRefused as e:
+        raise HTTPException(e.status, e.code)
 
 
 def _reset_state(ctx: Optional[GateContext] = None) -> None:
     ctx = ctx or PROD
     ctx.prov.reset(); ctx.appr.clear(); ctx.chain.clear(); ctx.lat.clear(); ctx.ext["calls"] = 0
-    ctx.evals.clear(); ctx.grants.clear()
+    ctx.evals.clear(); ctx.grants.clear(); ctx.anchors.clear()
     ctx.state["degraded"] = False
     if ctx.chain_file:
         open(ctx.chain_file, "w").close()
+        if os.path.exists(ctx.chain_file + ".anchors.jsonl"):
+            open(ctx.chain_file + ".anchors.jsonl", "w").close()
+    if ctx.db is not None:
+        ctx.db.reset()                                # demo/eval mode only (endpoint is guarded)
+        ctx.state["persistence"] = "postgres"
 
 
 @router.post("/reset")
@@ -661,7 +972,8 @@ def status_snapshot(ctx: GateContext, role: Optional[str]) -> Dict:
                 "executions": sum(1 for r in ctx.chain if r.get("verdict") == "EXECUTED"),
                 "avg_latency_ms": round(sum(ls) / len(ls), 3) if ls else None,
                 "p95_ms": round(ls[max(int(len(ls) * .95) - 1, 0)], 3) if ls else None,
-                "chain_head": v.get("head"), "chain_status": v["status"], "anchor_status": "UNANCHORED", "role": role,
+                "chain_head": v.get("head"), "chain_status": v["status"], "anchor_status": v.get("anchor_status", "UNANCHORED"),
+                "persistence": ctx.state["persistence"], "anchors": len(ctx.anchors), "role": role,
                 "demo_mode": _demo_enabled(), "recent": ctx.chain[-6:][::-1]}
 
 

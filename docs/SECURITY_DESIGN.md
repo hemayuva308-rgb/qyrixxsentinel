@@ -63,8 +63,23 @@ hash, sequence or format; PARTIAL_UNANCHORED when consistent; PASS reserved for 
 is NOT IMPLEMENTED**, so PASS is never returned. Empty bundle ⇒ `EMPTY_PROOF_BUNDLE`. On startup a broken stored chain puts the
 gate into degraded mode (blocks everything, refuses execution) until an admin investigates.
 
-**NOT IMPLEMENTED (from master plan §11):** S3 Object Lock / WORM anchoring, signing key isolation and revocation,
-clock-anomaly DEGRADED/FAIL/recovery thresholds.
+**External anchoring (IMPLEMENTED, RFC 3161):** `POST /proofs/anchor` sends the head hash as the imprint to `QYRIX_TSA_URL`; the
+token is stored only after `openssl ts -verify` (imprint, nonce, TSA signature, chain to `QYRIX_TSA_CA_FILE`) succeeds. Status is
+**PASS only when a verified token covers the current head**; a prefix anchor gives PARTIAL_UNANCHORED (`anchored_through`); any anchor
+that contradicts the chain, or a token that no longer verifies, gives FAIL, and a contradiction degrades the Gate (block all).
+Anchoring runs outside the Gate lock and never influences decisions. Tested against a real local TSA (`tests/tsa_local.py`);
+**anchoring with a public TSA is NOT VERIFIED** here (all public TSAs are blocked by this environment's egress policy).
+**NOT IMPLEMENTED:** S3 Object Lock / WORM, scheduled anchoring, signing-key isolation, clock-anomaly thresholds.
+
+## 7a. Persistence (PostgreSQL)
+Single tenant, one backend process per database. ALLOW persists {evaluation, grant, approval consumption} in **one transaction before**
+the decision is recorded; a conflict (approval already consumed elsewhere) ⇒ `R6_APPROVAL_REPLAY`; any DB error ⇒ BLOCK
+`R17_PERSISTENCE_UNAVAILABLE`. Execution: in-memory checks → **Gate revalidation of the stored parameters against the current policy**
+→ atomic `UPDATE grants … RETURNING` (unused, not revoked, unexpired, digest match) → start record → adapter. A DB row alone never
+authorises: at startup only grants whose evaluation has an ALLOW record in the verified chain are loaded, and grants with an
+EXECUTION_STARTED record are marked used. The DB proof mirror must be a prefix of the chain file (truncation/rewrite ⇒ degraded).
+Placeholder (`CHANGE_ME`) database URLs are refused. Proof mirror and anchors are append-only (trigger). Tested on real PostgreSQL:
+restart (incl. SIGKILL of a real uvicorn process), replay across processes, expiry, revocation, forged rows, outage + recovery.
 
 ## 8. AI minimisation
 Redacted and bounded (4,000 chars) input sent as JSON data under a fixed system prompt, temperature 0, no tools; reply must be
@@ -95,6 +110,6 @@ redacted instruction text; per-client (from `x-qyrix-demo-client`, set by the fr
 kill switch `QYRIX_PUBLIC_DEMO=0`. Tested: production chain unchanged after all scenarios; no DNS or LLM call.
 
 ## 11. Known gaps (do not claim)
-Single tenant; in-memory provenance/approvals/grants; no per-destination network allowlist when the egress override is enabled; TLS SNI with
-pinned IP not verified live; DNS has no explicit timeout; broad secret regex; CSP allows inline scripts; no external anchor; Meta Llama not live-verified;
+Single tenant (one backend process per database); in-memory state when no database is configured; no per-destination network allowlist when the egress override is enabled; TLS SNI with
+pinned IP not verified live; DNS has no explicit timeout; broad secret regex; CSP allows inline scripts; public-TSA anchoring not verified; Meta Llama not live-verified;
 no third-party audit or penetration test.

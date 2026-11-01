@@ -188,7 +188,7 @@ export default function LiveDemo({ compact = false }: { compact?: boolean }) {
                         <span className="col-span-2 truncate font-mono text-slate-400 sm:col-span-1">{p.hash.slice(0, 24)}… ← {p.prev.slice(0, 8)}…</span>
                       </div>))}
                   </div>
-                  <p className="mt-2 text-xs text-slate-400">{run.proof.verify.length} hash-linked records, chain intact. <b className="text-slate-200">PARTIAL_UNANCHORED</b>: internally consistent, no external anchor. This is not shown as a full PASS. Demo evidence is kept separate from the production audit chain.</p>
+                  <p className="mt-2 text-xs text-slate-400">{run.proof.verify.length} hash-linked records, chain intact. <b className="text-slate-200">PARTIAL_UNANCHORED</b>: internally consistent; sandbox chains are never externally anchored, so this is not shown as PASS. Demo evidence is kept separate from the production audit chain.</p>
                 </StageCard>
               </div>)}
           </div>

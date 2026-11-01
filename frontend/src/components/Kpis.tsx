@@ -12,6 +12,7 @@ export default function Kpis({ s }: { s: Status | null }) {
       <div className="flex flex-wrap gap-2">
         {s ? (["api", "gate", "provenance", "proof"] as const).map((k) => <Badge key={k} t={dot(s[k])}>● {k.toUpperCase()}: {s[k]}</Badge>) : null}
         {s && <Badge t={s.ai_provider === "available" ? "ok" : "warn"}>● AI: {s.ai_provider === "available" ? s.ai_providers.join("+") : "fallback heuristic"}</Badge>}
+        {s?.persistence && <Badge t={s.persistence === "postgres" ? "ok" : s.persistence === "down" ? "crit" : "warn"}>● STORAGE: {s.persistence === "postgres" ? "PostgreSQL" : s.persistence === "down" ? "DOWN (fail closed)" : "in-memory"}</Badge>}
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {m("DECISIONS", s?.decisions ?? null)}{m("BLOCKED", s?.blocked ?? null)}{m("ALLOWED", s?.allowed ?? null)}

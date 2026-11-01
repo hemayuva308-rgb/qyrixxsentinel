@@ -5,6 +5,7 @@ WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
+COPY migrations ./migrations
 COPY workspace ./workspace
 USER 10001
 ENV QYRIX_CHAIN_FILE=/data/proof_chain.jsonl QYRIX_WORKSPACE=/srv/workspace

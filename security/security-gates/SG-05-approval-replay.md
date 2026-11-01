@@ -20,6 +20,11 @@ Artifact: `evidence/pytest-junit.xml` (SHA-256 recorded in `docs/IMPLEMENTATION_
 | SG05-T5 | grant insertion failure rolls back approval | `test_v12_controls.py::test_grant_creation_failure_rolls_back_approval` | as expected | PASS |
 | SG05-T6 | grant replay refused | `test_v12_controls.py::test_file_read_executes_through_grant_and_is_single_use` | as expected | PASS |
 | SG05-T7 | no public consume endpoint | `test_v12_controls.py::test_no_public_approval_consume_endpoint` | as expected | PASS |
+| SG05-T8 | grant survives restart, executes once, replay refused after a 2nd restart | `test_persistence.py::test_records_survive_restart_and_grant_executes_once` | as expected | PASS |
+| SG05-T9 | replay across two processes sharing PostgreSQL | `test_persistence.py::test_replay_across_two_processes_sharing_the_database` | as expected | PASS |
+| SG05-T10 | approval consumed once across processes (R6) | `test_persistence.py::test_approval_consumed_once_across_processes` | as expected | PASS |
+| SG05-T11 | expired / revoked grants refused after restart | `test_persistence.py::test_expired_and_revoked_grants_cannot_execute_after_restart` | as expected | PASS |
+| SG05-T12 | real uvicorn process SIGKILLed and restarted over HTTP | `test_persistence.py::test_real_backend_process_restart_over_http` + `evidence/persistence-docker-restart.txt` | as expected | PASS |
 
 ## Open items (not claimed)
-- Approvals, evaluations and grants are in memory (lost on restart).
+- Supported deployment: one backend process per database (a second process fails closed).

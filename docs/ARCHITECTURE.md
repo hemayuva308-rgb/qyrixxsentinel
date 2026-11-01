@@ -28,7 +28,8 @@ Status legend: **IMPLEMENTED** (code exists) · **TESTED** (automated test execu
 ```
 
 Style: **modular monolith**. One FastAPI process, modules separated by file and by an explicit `GateContext`.
-PostgreSQL is the **planned** persistent store (see DATABASE_DESIGN.md); it is **NOT IMPLEMENTED** in this build.
+PostgreSQL persistence is **IMPLEMENTED** (optional; enabled by `QYRIX_DATABASE_URL`, on by default in Docker Compose).
+Multi-tenancy is **NOT_IMPLEMENTED** (see SAAS_PRODUCTION_REQUIREMENTS.md). Supported deployment: **one backend process per database**.
 
 ## 2. Backend modules
 
@@ -44,6 +45,8 @@ PostgreSQL is the **planned** persistent store (see DATABASE_DESIGN.md); it is *
 | Network guard | `app/netguard.py` | Destination parsing, SSRF classification, all-answer DNS validation, IP pinning, path confinement | TESTED |
 | Verifiable Proof | `app/proof.py` | Canonical JSON v2 records, SHA-256 chain, PASS/FAIL/PARTIAL_UNANCHORED, bundle verification | TESTED |
 | Public demo | `app/demo.py` | Fixed scenarios in a fresh isolated `GateContext` per request; sandbox adapter; rate limit | TESTED |
+| Persistence | `app/persistence.py`, `migrations/001_core_persistence.sql` | PostgreSQL: provenance, approvals, evaluations, grants (atomic consume/revoke), append-only proof mirror and anchors | TESTED (real PostgreSQL, restart + outage) |
+| External anchoring | `app/anchor.py` | RFC 3161 TSA client; tokens verified with `openssl ts -verify`; PASS only when a verified token covers the head | TESTED against a local TSA; public TSA NOT VERIFIED |
 
 ### GateContext
 
@@ -92,13 +95,18 @@ Evaluation performs no DNS lookup and no network I/O. DNS resolution and the req
 No animation library was added (CSS + SVG/SMIL + IntersectionObserver only). Runtime dependencies are unchanged:
 `next`, `react`, `react-dom`, `lucide-react`.
 
-## 5. Persistence (current)
+## 5. Persistence
 
 | Data | Where | Durability |
 |---|---|---|
-| Proof chain | `QYRIX_CHAIN_FILE` JSONL, fsync per record | survives restart; verified on load (broken ⇒ gate degraded, blocks all) |
-| Provenance, approvals, evaluations, grants | process memory | **lost on restart** |
+| Proof chain | `QYRIX_CHAIN_FILE` JSONL, fsync per record (source of truth) + append-only `proof_records` mirror in PostgreSQL | survives restart; file verified on load; DB mirror must be a prefix of the file (else gate degraded) |
+| Provenance, approvals, evaluations, grants | PostgreSQL when `QYRIX_DATABASE_URL` is set (memory otherwise) | survive restart; grants loaded only if their evaluation has an ALLOW record in the verified chain |
+| Anchors | `<chain>.anchors.jsonl` + `proof_anchors` table | survive restart; re-checked against the chain on load |
 | Demo state | per-request memory | discarded after the response |
+
+Write order (fail closed): ALLOW → DB transaction {evaluation, grant, approval consumption} → proof record (file fsync → memory → DB mirror).
+Execution: memory checks → Gate revalidation of stored params → atomic DB `UPDATE grants … RETURNING` → EXECUTION_STARTED → adapter.
+DB unavailable ⇒ `persistence: down` ⇒ evaluations BLOCK with `R17_PERSISTENCE_UNAVAILABLE`, writes 503, execution refused; recovers automatically.
 
 ## 6. Deployment
 

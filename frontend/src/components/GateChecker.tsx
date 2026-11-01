@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Play, Zap } from "lucide-react";
+import { Ban, Play, Zap } from "lucide-react";
 import { api, S } from "@/lib/api";
 import { RULE_HELP } from "@/lib/rules";
 import type { Approval, ExecResult, GateResult, Step } from "@/lib/types";
@@ -12,7 +12,7 @@ export default function GateChecker({ steps, approvals, onDone }: { steps: Step[
   const toast = useToast();
   const [f, setF] = useState({ tool: "http", method: "GET", dest: "https://api.render.com/v1/services", cmd: "", data: "", approval_id: "" });
   const [lin, setLin] = useState<string[]>([]);
-  const [busy, setBusy] = useState<"eval" | "exec" | null>(null);
+  const [busy, setBusy] = useState<"eval" | "exec" | "revoke" | null>(null);
   const [res, setRes] = useState<GateResult | null>(null);
   const [ex, setEx] = useState<ExecResult | null>(null);
   const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
@@ -36,6 +36,12 @@ export default function GateChecker({ steps, approvals, onDone }: { steps: Step[
       setEx(r); setRes({ ...res, grant_id: null }); onDone();
       toast(r.executed ? "ok" : "err", r.executed ? "Executed through grant" : "Adapter refused / failed");
     } catch (e) { toast("err", (e as Error).message); } finally { setBusy(null); }
+  }
+  async function revoke() {
+    if (!res?.grant_id || !confirm(`Revoke grant ${res.grant_id.slice(0, 12)}…? It can never be executed afterwards.`)) return;
+    setBusy("revoke");
+    try { await api(`${S}/grants/${res.grant_id}/revoke`, { method: "POST" }); setRes({ ...res, grant_id: null }); onDone(); toast("ok", "Grant revoked (recorded in the proof chain)"); }
+    catch (e) { toast("err", (e as Error).message); } finally { setBusy(null); }
   }
   return (
     <Card title="EXECUTION GATE">
@@ -75,6 +81,7 @@ export default function GateChecker({ steps, approvals, onDone }: { steps: Step[
           {res.grant_id && (
             <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
               <Btn kind="ghost" loading={busy === "exec"} onClick={execute}><Zap className="h-3.5 w-3.5" />EXECUTE WITH GRANT</Btn>
+              <Btn kind="danger" loading={busy === "revoke"} onClick={revoke} title="admin only"><Ban className="h-3.5 w-3.5" />REVOKE</Btn>
               <span className="text-[11px] text-mute">single-use grant <Mono>{res.grant_id.slice(0, 12)}…</Mono>, expires {res.grant_expires_at ? new Date(res.grant_expires_at).toLocaleTimeString() : "-"}</span>
             </div>)}
         </div>)}

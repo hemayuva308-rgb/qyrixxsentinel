@@ -3,9 +3,25 @@
 # outside world, so it cannot reach the internet at all. Real outbound tool execution (HttpAdapter) and Meta Llama
 # calls require the explicit opt-in override:  docker compose -f docker-compose.yml -f docker-compose.egress.yml up
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: qyrix
+      POSTGRES_DB: qyrix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U qyrix -d qyrix"], interval: 3s, timeout: 3s, retries: 20 }
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]   # minimum the official entrypoint needs
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal]                 # not published, no egress
   backend:
     build: ./backend
+    depends_on: { db: { condition: service_healthy } }
     environment:
+      QYRIX_DATABASE_URL: postgresql://qyrix:${POSTGRES_PASSWORD:?set in .env}@db:5432/qyrix
+      QYRIX_TSA_URL: ${QYRIX_TSA_URL:-}
+      QYRIX_TSA_CA_FILE: ${QYRIX_TSA_CA_FILE:-}
       QYRIX_ADMIN_TOKEN: ${QYRIX_ADMIN_TOKEN:?set in .env}
       QYRIX_AGENT_TOKEN: ${QYRIX_AGENT_TOKEN:?set in .env}
       QYRIX_APPROVED_DOMAINS: ${QYRIX_APPROVED_DOMAINS:-}
@@ -42,4 +58,4 @@ services:
 networks:
   internal: { internal: true }          # no egress
   edge: {}
-volumes: { chain: {} }
+volumes: { chain: {}, pgdata: {} }

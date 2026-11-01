@@ -16,5 +16,6 @@ export const RULE_HELP: Record<string, string> = {
   R14_APPROVAL_EXPIRED: "Approval expired.",
   R15_REDIRECT_LIMIT: "More than 5 redirect hops - blocked.",
   R16_REDIRECT_INVALID: "Redirect target does not match the Location returned by the previous gated hop.",
+  R17_PERSISTENCE_UNAVAILABLE: "Durable storage (PostgreSQL) is unavailable - nothing can be authorised until it recovers (fail closed).",
   LINEAGE_CYCLE_DETECTED: "The lineage graph contains a cycle - provenance cannot be trusted, blocked.",
 };

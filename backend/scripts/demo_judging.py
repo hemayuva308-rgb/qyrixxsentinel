@@ -60,8 +60,8 @@ s, j = call("POST", "/api/session", {"token": TOKEN}, proxy=False)
 if s != 200:
     sys.exit("login failed (HTTP %s): %s" % (s, j))
 s, st0 = call("GET", "sentinel/status")
-print(C(DIM, "   signed in as role=%s · gate=%s · proof=%s · decisions so far=%s · external calls so far=%s"
-             % (st0["role"], st0["gate"], st0["proof"], st0["decisions"], st0["external_calls"])))
+print(C(DIM, "   signed in as role=%s · gate=%s · proof=%s · storage=%s · decisions so far=%s · external calls so far=%s"
+             % (st0["role"], st0["gate"], st0["proof"], st0.get("persistence", "memory"), st0["decisions"], st0["external_calls"])))
 ext0 = st0["external_calls"]
 
 # 1. ATTACK
@@ -118,7 +118,10 @@ tampered = json.loads(json.dumps(bundle)); tampered["chain"][p["n"] - 1]["verdic
 s, vt = call("POST", "sentinel/proofs/verify-bundle", tampered)
 print("   live chain: %s (%d records)   exported bundle: %s   tampered copy: %s at #%s"
       % (C(YEL, v["status"]), v["length"], vb["status"], C(RED, vt["status"]), vt.get("broken_at")))
-check(v["valid"] and v["status"] == "PARTIAL_UNANCHORED", "chain intact; honest status PARTIAL_UNANCHORED (no external anchor)")
+s, an = call("GET", "sentinel/proofs/anchors")
+print("   external anchoring (RFC 3161): %s%s" % ("configured, TSA " + str(an["tsa_url"]) if an["configured"] else "NOT CONFIGURED - ", "" if an["configured"] else an["problem"]))
+check(v["valid"] and (v["status"] == "PARTIAL_UNANCHORED" or (v["status"] == "PASS" and v.get("anchor_status") == "ANCHORED")),
+      "chain intact; status %s (PASS only with a verified anchor on the head)" % v["status"])
 check(vt["status"] == "FAIL", "tampering detected")
 check(SECRET not in json.dumps(bundle), "no raw secret anywhere in the exported evidence")
 rec("proof", {"record": p, "verify": v, "bundle_verify": vb, "tampered_verify": vt})

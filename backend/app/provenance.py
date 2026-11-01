@@ -68,6 +68,8 @@ class ProvenanceStore:
         self._lock = threading.RLock()
 
     # ---- writes
+    persist = None          # optional callable(step) -> None; raises to veto (fail closed). Set by the GateContext.
+
     def add_step(self, source: str, label: str, text: str, parents: Optional[List[str]] = None) -> Dict:
         declared = normalize_label(label)
         parents = list(dict.fromkeys(str(p) for p in (parents or [])))          # de-duplicate, keep order
@@ -78,6 +80,8 @@ class ProvenanceStore:
             step = {"id": str(uuid.uuid4()), "source": str(source)[:64], "label": effective, "declared_label": declared,
                     "text": str(text)[:500], "parents": parents, "unknown_parents": unknown,
                     "tainted": effective != TRUSTED, "ts": datetime.now(timezone.utc).isoformat()}
+            if self.persist is not None:
+                self.persist(step)          # durable BEFORE the step becomes visible; an exception leaves no trace
             self._mem.append(step)
             self._index[step["id"]] = effective
             while len(self._index) > INDEX_LIMIT:          # oldest ids leave the index; a child naming one => UNVERIFIED
@@ -121,6 +125,16 @@ class ProvenanceStore:
     def all_steps(self) -> List[Dict]:
         with self._lock:
             return list(self._mem)
+
+    def restore(self, recent: List[Dict], index: List[tuple]) -> None:
+        """Reload persisted state after a restart (trust index first, then the 50-step window)."""
+        with self._lock:
+            self._mem.clear(); self._index.clear()
+            for sid, lab in index[-INDEX_LIMIT:]:
+                self._index[sid] = lab
+            for st in recent[-self.memory_limit:]:
+                self._mem.append(st)
+                self._index[st["id"]] = st["label"]
 
     def reset(self) -> None:
         with self._lock:

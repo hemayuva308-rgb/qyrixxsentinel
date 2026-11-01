@@ -37,7 +37,11 @@ Tests: `backend/tests/` (`test_sentinel.py`=S, `test_hardening.py`=H, `test_v12_
 | FR-PRF-1 | Canonical JSON + SHA-256 chain, append-only (9.4) | `proof.py`, `_record` | V `test_new_records_are_canonical_v2…` | TESTED |
 | FR-PRF-2 | Empty bundle fails; malformed hash FAIL; tampered FAIL; no anchor ⇒ PARTIAL_UNANCHORED | `verify_bundle` | V `test_bundle_verification_outcomes` | TESTED |
 | FR-PRF-3 | No raw secrets in proof | `_prove` | S `test_raw_secret_never_stored_in_proof` | TESTED |
-| FR-PRF-4 | Trusted external anchoring; signing key isolation/revocation; clock anomaly handling | — | — | NOT IMPLEMENTED |
+| FR-PRF-4 | Trusted external anchoring of the chain head | `app/anchor.py`, `proof.evaluate_anchors` | `tests/test_anchor.py` (local TSA) | IMPLEMENTED_NOT_VERIFIED (public TSA) |
+| FR-PRF-5 | Signing key isolation/revocation; clock anomaly handling | — | — | NOT IMPLEMENTED |
+| FR-PER-1 | Durable provenance, approvals, evaluations, grants, proof metadata in PostgreSQL with migrations | `app/persistence.py`, `migrations/` | `tests/test_persistence.py`, `evidence/persistence-docker-restart.txt` | TESTED |
+| FR-PER-2 | Expired/revoked grants never execute; replay rejected across restarts and processes | `execute_grant`, `consume_grant`, `revoke_grant` | `tests/test_persistence.py` | TESTED |
+| FR-PER-3 | DB outage never creates an authorisation bypass | R17, fail-closed writes | `test_database_outage_fails_closed_and_recovers`, Docker outage evidence | TESTED |
 | FR-LLM-1 | Meta Llama advisory classification, strict schema, timeouts, fallback (10) | `classify` | C suite incl. real-socket `test_real_provider_timeout_falls_back_within_budget`, `test_real_provider_failures_never_produce_an_allow` | TESTED (failure paths on real sockets); live **NOT LIVE VERIFIED** (`evidence/llama-verification.txt`) |
 | FR-DEMO-3 | Judging workflow ATTACK→INSPECT→PROVENANCE→BLOCK→PROOF→SAFE against a running deployment, every claim asserted | `scripts/demo_judging.py` | `evidence/demo-judging-console.txt` | TESTED |
 | FR-DEMO-1 | Public demo: fixed scenarios, isolated state, separate chain, no egress, rate limited (5 §6) | `demo.py`, `/api/demo` | V demo tests | TESTED |

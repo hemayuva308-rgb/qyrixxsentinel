@@ -1,4 +1,7 @@
-# QYRIX SENTINEL — Final Implementation, Security & Validation Report
+# QYRIX SENTINEL — Implementation, Security & Validation Report (hackathon close-out round)
+
+> **Superseded for current status by `docs/FINAL_SUBMISSION_READINESS_REPORT.md`** (adds PostgreSQL persistence, RFC 3161 anchoring,
+> Llama live-check tooling, demo recording materials). Figures below are from the earlier close-out round and remain accurate for it.
 
 Branch `claude/hopeful-franklin-5ggx72` · **not pushed, not merged** (awaiting owner approval) · 2026-11-01 · backend v1.2.0.
 Every result below comes from a command that was actually executed; artifacts are in `evidence/` with SHA-256 hashes in §10.

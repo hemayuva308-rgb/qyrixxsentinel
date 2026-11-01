@@ -18,8 +18,12 @@ Artifact: `evidence/pytest-junit.xml` (SHA-256 recorded in `docs/IMPLEMENTATION_
 | SG06-T3 | proof write failure blocks | `test_hardening.py::test_proof_write_failure_fails_closed` | as expected | PASS |
 | SG06-T4 | corrupted chain degrades gate to block-all | `test_hardening.py::test_corrupted_chain_degrades_gate_to_block_all` | as expected | PASS |
 | SG06-T5 | offline verification of benchmark bundle | `evidence/benchmark-proof-bundle.json + scripts/verify_proof.py` | as expected | PASS |
+| SG06-T6 | RFC 3161 anchor covering head ⇒ PASS; growth ⇒ PARTIAL; tamper / mismatch / forged token ⇒ FAIL | `test_anchor.py` (13 tests, real local TSA) | as expected | PASS |
+| SG06-T7 | token independently verifiable with plain `openssl ts -verify` | `test_anchor.py::test_token_independently_verifiable_with_openssl` | as expected | PASS |
+| SG06-T8 | append-only proof mirror (UPDATE/DELETE rejected) | `test_persistence.py::test_proof_mirror_and_anchors_are_append_only`, `evidence/persistence-docker-restart.txt` | as expected | PASS |
+| SG06-T9 | truncated chain file vs DB mirror ⇒ gate degraded | `test_persistence.py::test_truncated_chain_file_vs_mirror_degrades_gate` | as expected | PASS |
 
 ## Open items (not claimed)
-- External WORM / S3 Object Lock anchoring: NOT IMPLEMENTED.
+- Anchoring with a public/independent RFC 3161 TSA: NOT VERIFIED (blocked by the build environment's network policy). S3 Object Lock: NOT IMPLEMENTED.
 - Signing key isolation and revocation: NOT IMPLEMENTED.
 - Clock-anomaly DEGRADED/FAIL/recovery: NOT IMPLEMENTED.

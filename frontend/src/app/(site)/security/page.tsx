@@ -51,8 +51,8 @@ export default function Security() {
         <Container className="grid gap-10 lg:grid-cols-2">
           <SectionHead id="limits" eyebrow="Known limitations" title="What this build does not claim." />
           <ul className="reveal space-y-3 text-[15px] leading-relaxed text-site-mute">
-            <li>• <b className="text-site-ink">Single tenant.</b> No organisations, tenant isolation, usage metering or quotas. Provenance, approvals and grants are in memory.</li>
-            <li>• <b className="text-site-ink">Unanchored evidence.</b> The hash chain is tamper-evident, not externally anchored; verification reports PARTIAL_UNANCHORED.</li>
+            <li>• <b className="text-site-ink">Single tenant.</b> No organisations, tenant isolation, usage metering or quotas. Provenance, approvals, evaluations and grants persist in PostgreSQL when configured (in memory otherwise).</li>
+            <li>• <b className="text-site-ink">Evidence anchoring.</b> RFC 3161 anchoring is implemented and tested against a local TSA; anchoring with a public TSA has not been verified yet. Without a verified anchor, verification reports PARTIAL_UNANCHORED.</li>
             <li>• <b className="text-site-ink">Tool coverage.</b> HTTP and file read execute through the adapter; shell never executes.</li>
             <li>• <b className="text-site-ink">AI provider.</b> Meta Llama live calls are not verified here; the classifier is advisory regardless.</li>
             <li>• <b className="text-site-ink">Benchmark scope.</b> The 10-case benchmark measures those synthetic cases only.</li>

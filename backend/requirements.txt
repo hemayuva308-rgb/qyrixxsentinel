@@ -3,3 +3,4 @@ uvicorn[standard]>=0.29
 pydantic>=2.6
 httpx>=0.27
 pytest>=8
+psycopg[binary]>=3.2,<4

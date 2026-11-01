@@ -1,20 +1,24 @@
-# Docker Compose validation - 2026-11-01T16:36:08Z
-Images: committed Dockerfiles; this sandbox's TLS proxy CA injected into the build stage only (see IMPLEMENTATION_REPORT).
-backend Up 1 second 8000/tcp
-frontend Up 1 second 127.0.0.1:3000->3000/tcp
-backend: networks=qyrixxsentinel_internal user=10001 readonly=true capdrop=[ALL] secopt=[no-new-privileges:true]
-frontend: networks=qyrixxsentinel_edge qyrixxsentinel_internal user=10001 readonly=true capdrop=[ALL] secopt=[no-new-privileges:true]
+# Docker Compose validation - 2026-11-01T17:09:16Z
+Images: committed Dockerfiles; this sandbox's TLS proxy CA injected into the build stage only (see report).
+backend Up 38 seconds 8000/tcp
+db Up 34 seconds (healthy) 5432/tcp
+frontend Up About a minute 127.0.0.1:3000->3000/tcp
+db: networks=qyrixxsentinel_internal user= readonly=false capdrop=[ALL] capadd=[CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETGID CAP_SETUID] secopt=[no-new-privileges:true]
+backend: networks=qyrixxsentinel_internal user=10001 readonly=true capdrop=[ALL] capadd=[] secopt=[no-new-privileges:true]
+frontend: networks=qyrixxsentinel_edge qyrixxsentinel_internal user=10001 readonly=true capdrop=[ALL] capadd=[] secopt=[no-new-privileges:true]
 API published on host: no
-Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:
+PostgreSQL published on host: no
+Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-sr
 X-Frame-Options: DENY
-X-Content-Type-Options: nosniff
-Referrer-Policy: no-referrer
 Cross-Origin-Opener-Policy: same-origin
-Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
 ## egress from backend container (default deployment)
 tcp 1.1.1.1:443 -> BLOCKED OSError
 dns github.com -> BLOCKED gaierror
 Gate ALLOW for approved host -> executed=False result={'error': 'dns failure'} (network layer blocks egress even when policy allows)
+## anchoring in the default deployment
+anchors info: {'configured': False, 'problem': 'QYRIX_TSA_URL not configured', 'can_verify': False, 'tsa_url': None}
+POST /proofs/anchor -> {'http': 409, 'detail': 'ANCHOR_NOT_CONFIGURED: QYRIX_TSA_URL not configured'}
+chain verify -> {'status': 'PARTIAL_UNANCHORED', 'anchor_status': 'UNANCHORED', 'length': 14}
 ## public demo through the frontend relay
 safe ALLOW expected ALLOW match True ext 0 PARTIAL_UNANCHORED
 direct BLOCK expected BLOCK match True ext 0 PARTIAL_UNANCHORED
@@ -24,4 +28,4 @@ relay {"scenario":"safe","dest":"http://169.254.169.254/"} -> HTTP 422
 relay ["safe"] -> HTTP 422
 relay {"scenario":"custom"} -> HTTP 422
 unauthenticated /api/proxy/sentinel/status -> HTTP 401
-unauthenticated /dashboard -> HTTP 307 http://127.0.0.1:3000/login?next=%2Fdashboard
+unauthenticated /dashboard -> HTTP 307

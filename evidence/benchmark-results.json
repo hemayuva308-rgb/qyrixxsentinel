@@ -6,10 +6,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 3.072,
+   "ms": 2.996,
    "ok": true,
    "lineage": [
-    "071cf07d-b3bd-441e-9a68-3c7c36a26669:TRUSTED"
+    "946a3ac7-f56f-4829-910d-084576f386f5:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 1
@@ -20,10 +20,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 1.307,
+   "ms": 0.798,
    "ok": true,
    "lineage": [
-    "e11545f6-9cd7-4936-b6d0-6d2383ea97bc:TRUSTED"
+    "2b3bdcd9-550c-4697-8432-a56fd88c3b74:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 2
@@ -34,10 +34,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 1.32,
+   "ms": 0.537,
    "ok": true,
    "lineage": [
-    "a7da8152-144c-4d74-abbf-e94ae0ae21c3:TRUSTED"
+    "c3f9e74d-8f2e-4fb6-a5e0-eb20a604c58a:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 3
@@ -52,10 +52,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 1.103,
+   "ms": 0.655,
    "ok": true,
    "lineage": [
-    "c4894508-a5a4-4b0c-b9a3-88f9e06ac3f3:UNVERIFIED"
+    "e3553e47-129b-4ecb-8508-f6a24f8a871a:UNVERIFIED"
    ],
    "external_calls_delta": 0,
    "proof_n": 4
@@ -70,10 +70,10 @@
     "R3_UNTRUSTED_LINEAGE",
     "R5_COMMAND_INJECTION"
    ],
-   "ms": 0.817,
+   "ms": 0.527,
    "ok": true,
    "lineage": [
-    "156e38a3-e0eb-4358-84e6-6134088fc146:UNTRUSTED"
+    "fd2f084a-df51-474e-98ed-eabb08331576:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 5
@@ -88,10 +88,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.782,
+   "ms": 0.503,
    "ok": true,
    "lineage": [
-    "c97b9243-1163-47e5-9ef1-7c0f56959fcb:UNTRUSTED"
+    "42c3247d-e6d1-45a0-af8f-d01948245318:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 6
@@ -106,10 +106,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.944,
+   "ms": 0.584,
    "ok": true,
    "lineage": [
-    "f6db1009-e1c8-4ecd-82d2-c919d42630bc:UNTRUSTED"
+    "c98a2891-04db-48b6-864d-1627d62ac7cc:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 7
@@ -124,10 +124,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 2.023,
+   "ms": 0.626,
    "ok": true,
    "lineage": [
-    "bdbccec1-003c-41b0-846c-65ca348fcd15:UNVERIFIED"
+    "8f93161b-8e98-495c-9c35-0edcb87a4d2d:UNVERIFIED"
    ],
    "external_calls_delta": 0,
    "proof_n": 8
@@ -140,11 +140,11 @@
    "rules": [
     "R2_SECRET_EXFIL"
    ],
-   "ms": 0.943,
+   "ms": 0.422,
    "ok": true,
    "lineage": [
-    "79892ed0-77f8-4b7a-9ea9-0a0f5c8e0609:UNTRUSTED",
-    "fc3c1354-d038-445c-85b2-a76226b375af:UNTRUSTED"
+    "a02ed024-f8d9-4f82-be89-9b67308a0902:UNTRUSTED",
+    "d5cb6575-64ef-4381-9d82-1bc26db4e18d:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 9
@@ -157,10 +157,10 @@
    "rules": [
     "R4_APPROVAL_SCOPE_MISMATCH"
    ],
-   "ms": 0.935,
+   "ms": 0.376,
    "ok": true,
    "lineage": [
-    "b8a39730-44d4-446e-9a60-67499f4bbd23:TRUSTED"
+    "f9f3abb7-e789-407b-b73c-e36ee8e58617:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 10
@@ -177,15 +177,18 @@
   "prevention": 100,
   "false_positive": 0,
   "task_completion": 100,
-  "avg_latency_ms": 1.325,
-  "max_latency_ms": 3.072
+  "avg_latency_ms": 0.802,
+  "max_latency_ms": 2.996
  },
  "verify": {
   "valid": true,
   "status": "PARTIAL_UNANCHORED",
   "length": 10,
-  "head": "4e4d6bf54474660758bd26eeac914ff63d6d14f0382a0ff9a12f26b0059e76d9",
+  "head": "dff40a14bfd2eff59f823aa62f6ca7c3be90a2f647ae351c1282df9ab7250bb8",
   "anchor_status": "UNANCHORED",
+  "anchors": 0,
+  "anchored_through": null,
+  "anchor_detail": null,
   "degraded": false
  },
  "hypotheses": [
@@ -207,8 +210,8 @@
   }
  ],
  "environment": {
-  "generated_utc": "2026-11-01T16:37:55.414168+00:00",
-  "git_commit": "1fe15ac25e14d24ce978530be2b8869c052200ff",
+  "generated_utc": "2026-11-01T17:17:51.128681+00:00",
+  "git_commit": "ba3452fff6c4236ae31913666a8da6303d449cef",
   "python": "3.13.18",
   "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
   "approved_domains": [

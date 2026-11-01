@@ -163,7 +163,7 @@ export default function ForensicExplorer() {
               {(bv || tv) && (
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {bv && <p className={`rounded-lg border px-3 py-2 text-xs ${bv.status === "FAIL" ? "border-rose-400/40 bg-rose-500/10 text-rose-100" : "border-amber-300/40 bg-amber-300/10 text-amber-100"}`}>
-                    Recomputed in this browser with WebCrypto SHA-256: <b>{bv.status}</b>. {bv.checked} records link correctly; no external anchor, so not PASS.</p>}
+                    Recomputed in this browser with WebCrypto SHA-256: <b>{bv.status}</b>. {bv.checked} records link correctly; sandbox chains are not externally anchored, so not PASS.</p>}
                   {tv && <p className="rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
                     Copy with record #1 verdict flipped: <b>{tv.status}</b> at record #{tv.brokenAt}. The original evidence is unchanged.</p>}
                 </div>)}

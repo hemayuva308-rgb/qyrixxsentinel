@@ -107,7 +107,7 @@ export default function Home() {
       <section className="py-20 sm:py-28" aria-labelledby="proof">
         <Container className="grid items-center gap-12 lg:grid-cols-[1fr_1.4fr]">
           <SectionHead id="proof" eyebrow="Forensic proof" title="Evidence you can verify, not just logs you trust."
-            lead={<>Each record stores the rule IDs, lineage and redacted data, and is chained by SHA-256 to the one before. Change or remove one record and verification fails. Without an external anchor the honest result is <b className="text-site-ink">PARTIAL_UNANCHORED</b>, never a full PASS.</>} />
+            lead={<>Each record stores the rule IDs, lineage and redacted data, and is chained by SHA-256 to the one before. Change or remove one record and verification fails. The head can be anchored with an RFC 3161 trusted timestamp: <b className="text-site-ink">PASS</b> only when a verified token covers it, otherwise <b className="text-site-ink">PARTIAL_UNANCHORED</b>.</>} />
           <div className="rounded-[28px] border border-site-line bg-site-mist p-5 sm:p-8">
             <ProofPreview />
             <div className="mt-6 flex flex-wrap gap-3"><ButtonLink href="/forensic-lab" kind="primary" arrow>Open the Forensic Lab</ButtonLink></div>

@@ -19,7 +19,7 @@ const DETAIL: Record<string, string[]> = {
     "ALLOW issues a grant bound to the parameter digest; execution accepts only gate_evaluation_id + grant_id", "Every redirect hop needs a fresh decision; max 5 hops"],
   proof: ["Canonical JSON (sorted keys, ASCII) hashed with SHA-256 and linked to the previous record", "Written and fsync'd before execution; write failure blocks",
     "Execution start / result recorded as separate events", "Tampered, missing or reordered records FAIL; empty bundles are rejected",
-    "Export bundles and verify offline (CLI) or in the browser (Forensic Lab)", "No external anchor yet: best result is PARTIAL_UNANCHORED"],
+    "Export bundles and verify offline (CLI) or in the browser (Forensic Lab)", "Optional RFC 3161 timestamp anchoring of the chain head: PASS only when a verified token covers the head, otherwise PARTIAL_UNANCHORED"],
 };
 
 export default function Features() {

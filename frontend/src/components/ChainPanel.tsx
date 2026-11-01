@@ -1,8 +1,8 @@
 "use client";
 import { useState } from "react";
-import { Download, FileSearch, Hammer } from "lucide-react";
+import { Anchor as AnchorIcon, Download, FileSearch, Hammer } from "lucide-react";
 import { api, S } from "@/lib/api";
-import type { Approval, Proof, Status, Step, Verify } from "@/lib/types";
+import type { AnchorInfo, Approval, Proof, Status, Step, Verify } from "@/lib/types";
 import { Badge, Btn, Card, Empty, ErrorBox, Loading, Mono, useToast, usePoll, verdictTone } from "./ui";
 
 function download(name: string, obj: unknown) {
@@ -12,7 +12,7 @@ function download(name: string, obj: unknown) {
 function chainLabel(v: Verify | null): [string, "ok" | "warn" | "crit" | "mute"] {
   if (!v) return ["PENDING", "mute"];
   if (!v.valid) return ["FAIL", "crit"];
-  return v.status === "PASS" ? ["PASS", "ok"] : ["PARTIAL_UNANCHORED", "warn"];   // never PASS without an external anchor
+  return v.status === "PASS" ? ["PASS", "ok"] : ["PARTIAL_UNANCHORED", "warn"];   // PASS only with a verified RFC 3161 anchor on the head
 }
 
 export default function ChainPanel({ status }: { status: Status | null }) {
@@ -20,6 +20,12 @@ export default function ChainPanel({ status }: { status: Status | null }) {
   const ch = usePoll(() => api<{ chain: Proof[]; verify: Verify }>(`${S}/proofs`), 6000);
   const [v, setV] = useState<Verify | null>(null); const [t, setT] = useState<Verify | null>(null); const [at, setAt] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const an = usePoll(() => api<AnchorInfo>(`${S}/proofs/anchors`), 15000);
+  async function anchorHead() {
+    setBusy("a");
+    try { const a = await api<{ n: number; serial: string | null }>(`${S}/proofs/anchor`, { method: "POST" }); toast("ok", `Anchored record #${a.n} (TSA serial ${a.serial ?? "-"})`); an.reload(); verify(); }
+    catch (e) { toast("err", (e as Error).message); } finally { setBusy(null); }
+  }
   const cur = v ?? ch.data?.verify ?? null; const [label, tone] = chainLabel(cur);
   async function verify() { setBusy("v"); try { setV(await api<Verify>(`${S}/proofs/verify`)); setAt(new Date().toLocaleTimeString()); } catch (e) { toast("err", (e as Error).message); } finally { setBusy(null); } }
   async function tamper() { setBusy("t"); try { setT(await api<Verify>(`${S}/proofs/tamper`, { method: "POST" })); } catch (e) { toast("err", (e as Error).message); } finally { setBusy(null); } }
@@ -43,12 +49,21 @@ export default function ChainPanel({ status }: { status: Status | null }) {
         <div><div className="text-mute">Anchor</div><b>{cur?.anchor_status ?? status?.anchor_status ?? "-"}</b></div>
         <div><div className="text-mute">Last verified (this session)</div><b>{at ?? "not yet"}</b></div>
       </div>
-      <p className="mt-2 text-[11px] text-mute">Canonical-JSON SHA-256 hash chain = tamper-evident, not tamper-proof. PARTIAL_UNANCHORED means the chain is internally consistent but no external anchor exists yet, so it is never shown as PASS.</p>
+      <p className="mt-2 text-[11px] text-mute">Canonical-JSON SHA-256 hash chain = tamper-evident, not tamper-proof. PASS only when an RFC 3161 timestamp token (verified against the configured TSA CA) covers the current head; otherwise PARTIAL_UNANCHORED.</p>
+      <div className="mt-2 rounded-lg border border-white/10 bg-bg2 p-2 text-[11px]">
+        <div className="flex flex-wrap items-center gap-2"><Badge t={an.data?.configured ? "neon" : "warn"}>{an.data ? (an.data.configured ? "TSA CONFIGURED" : "ANCHORING NOT CONFIGURED") : "…"}</Badge>
+          <span className="text-mute">{an.data?.configured ? <Mono>{an.data.tsa_url}</Mono> : an.data?.problem}</span>
+          {cur?.anchored_through ? <span className="text-mute">anchored through #{cur.anchored_through}</span> : null}</div>
+        {an.data?.anchors.slice(-3).reverse().map((a) => (
+          <p key={a.id} className="mt-1 text-mute">#{a.n} <Mono>{a.head_hash.slice(0, 16)}…</Mono> · {a.gen_time ?? "-"} · serial {a.serial ?? "-"} · <Mono>{a.tsa_url}</Mono></p>))}
+        {cur?.anchor_detail && <p className="mt-1 text-mute">{cur.anchor_detail}</p>}
+      </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <Btn kind="ghost" loading={busy === "v"} onClick={verify}><FileSearch className="h-3.5 w-3.5" />VERIFY CHAIN</Btn>
         <Btn kind="ghost" loading={busy === "t"} onClick={tamper}><Hammer className="h-3.5 w-3.5" />SIMULATE TAMPER (COPY)</Btn>
         <Btn kind="ghost" loading={busy === "e"} onClick={exportBundle} disabled={!ch.data?.chain.length}><Download className="h-3.5 w-3.5" />EXPORT PROOF BUNDLE</Btn>
         <Btn kind="ghost" loading={busy === "s"} onClick={snapshot}><Download className="h-3.5 w-3.5" />FORENSIC SNAPSHOT</Btn>
+        <Btn kind="ghost" loading={busy === "a"} onClick={anchorHead} disabled={!ch.data?.chain.length} title="admin only; requires a configured RFC 3161 TSA"><AnchorIcon className="h-3.5 w-3.5" />ANCHOR HEAD (RFC 3161)</Btn>
       </div>
       {t && <p className="mt-2 rounded-lg border border-white/10 bg-bg2 p-2 text-xs">Tamper simulation on a copy: chain <b className={t.valid ? "text-crit" : "text-ok"}>{t.valid ? "NOT detected (!)" : `detected - broken at #${t.broken_at}`}</b>. The real chain was not modified.</p>}
       <div className="mt-3 max-h-80 space-y-1.5 overflow-auto">

@@ -1,9 +1,23 @@
 # QYRIX SENTINEL — Database Design
 
-> **Status: PostgreSQL is PLANNED and NOT IMPLEMENTED in this build.** Section 1 documents what persists today.
-> Section 2 is the target schema for the multi-tenant phase; nothing in it exists in code yet.
+> **Status: single-tenant PostgreSQL persistence is IMPLEMENTED** (`backend/migrations/001_core_persistence.sql`,
+> `backend/app/persistence.py`, tests in `backend/tests/test_persistence.py`). Section 0 describes it.
+> Section 2 is the **multi-tenant target** (NOT_IMPLEMENTED; see SAAS_PRODUCTION_REQUIREMENTS.md).
 
-## 1. Current persistence (v1.2, implemented)
+## 0. Implemented schema (single tenant)
+| Table | Key fields | Lifecycle / guarantees |
+|---|---|---|
+| `provenance_steps` | `id uuid`, declared/effective label, redacted text, `parents[]`, `created_at`, `seq` | insert-only; reloaded (50-step window + trust index) at startup |
+| `approvals` | `id`, `status pending/approved/denied`, `used`, `digest`, `scope jsonb`, `expires_at` | decided only while pending (conditional UPDATE); consumed in the grant transaction |
+| `gate_evaluations` | `id uuid`, verdict, rule ids, `params jsonb`, `params_digest`, `hop`, `redirect_location` | ALLOW rows only executable if the chain holds a matching ALLOW record |
+| `grants` | `id`, `gate_evaluation_id` (unique FK), `params_digest`, `expires_at`, `used_at`, `revoked_at/by` | single use via `UPDATE … WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > now() RETURNING` |
+| `proof_records` | `n`, `hash`, `prev`, kind, verdict | append-only (trigger rejects UPDATE/DELETE); must be a prefix of the chain file |
+| `proof_anchors` | `id uuid`, `n`, `head_hash`, `tsa_url`, `token_b64`, `gen_time`, `serial` | append-only (trigger) |
+| `schema_migrations` | `name` | migrations applied in a transaction at startup |
+`gate_evaluations.params` can only contain data that passed the Gate (secret-pattern data is always BLOCKed by R2/R12), and the
+database is on an internal-only network; encryption at rest is still recommended for production.
+
+## 1. In-memory mode (when `QYRIX_DATABASE_URL` is unset)
 
 | Entity | Storage | Shape | Notes |
 |---|---|---|---|

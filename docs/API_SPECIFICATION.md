@@ -37,7 +37,10 @@ Response:
 Rules: `R0_FAIL_CLOSED`, `R1_DEST_NOT_APPROVED`, `R2_SECRET_EXFIL`, `R3_UNTRUSTED_LINEAGE`, `R4_APPROVAL_SCOPE_MISMATCH`,
 `R5_COMMAND_INJECTION`, `R6_APPROVAL_REPLAY`, `R7_APPROVAL_REQUIRED`, `R8_UNSUPPORTED_TOOL`, `R9_SSRF_BLOCKED`,
 `R10_PATH_NOT_ALLOWED`, `R11_PROOF_DEGRADED`, `R12_SECRET_TO_EXTERNAL`, `R13_LINEAGE_MISSING`, `R14_APPROVAL_EXPIRED`,
-`R15_REDIRECT_LIMIT`, `R16_REDIRECT_INVALID`, `LINEAGE_CYCLE_DETECTED`.
+`R15_REDIRECT_LIMIT`, `R16_REDIRECT_INVALID`, `R17_PERSISTENCE_UNAVAILABLE`, `LINEAGE_CYCLE_DETECTED`.
+
+### `POST /sentinel/grants/{grant_id}/revoke` — **admin only**
+Revokes an unused grant (DB + memory) and appends a `GRANT_REVOKED` proof record. Already used/revoked/unknown ⇒ `409 GRANT_NOT_REVOCABLE`.
 
 ## Controlled execution
 ### `POST /tools/execute` — any role
@@ -53,6 +56,9 @@ Body must be **exactly** `{"gate_evaluation_id": string ≤64, "grant_id": strin
 | grant expired (`QYRIX_GRANT_TTL_SECONDS`, default 120) | 409 | `GRANT_EXPIRED` |
 | stored params no longer match digest | 403 | `PARAMS_DIGEST_MISMATCH` |
 | proof chain degraded | 403 | `PROOF_DEGRADED` |
+| grant revoked | 409 | `GRANT_REVOKED` |
+| stored params no longer pass the current policy (allowlist/workspace) | 403 | `REVALIDATION_FAILED` |
+| PostgreSQL unavailable (persistence mode) | 503 | `PERSISTENCE_UNAVAILABLE` |
 | start record cannot be written | 503 | `PROOF_WRITE_FAILED` |
 
 Every refusal is appended to the proof chain as `EXECUTION_REFUSED`.
@@ -79,13 +85,21 @@ grant creation. There is **no** public consume endpoint and no public `CONSUMED`
 * `POST /sentinel/proofs/verify-bundle` (body = bundle or bare list, ≤20 MB): empty ⇒ `422 EMPTY_PROOF_BUNDLE`;
   malformed/tampered/reordered/missing ⇒ `status: FAIL`; consistent ⇒ `PARTIAL_UNANCHORED` (client-supplied anchors are ignored).
 * `POST /sentinel/proofs/tamper` → simulation on a copy; real chain untouched.
+* `POST /sentinel/proofs/anchor` — **admin only**. Anchors the current head at `QYRIX_TSA_URL` (RFC 3161). Stored only after the token
+  verified (imprint, nonce, signature, chain to `QYRIX_TSA_CA_FILE`). Errors: `409 ANCHOR_NOT_CONFIGURED`, `422 EMPTY_PROOF_BUNDLE`,
+  `409 PROOF_DEGRADED|ANCHOR_STALE`, `503 ANCHOR_UNAVAILABLE|ANCHOR_REJECTED|ANCHOR_INVALID`. Never changes Gate decisions.
+* `GET /sentinel/proofs/anchors` → `{configured, problem, can_verify, tsa_url, anchors[{id, n, head_hash, method, tsa_url, gen_time, serial, created_at}]}`.
+* Verification statuses with anchors: `PASS` (verified anchor covers head), `PARTIAL_UNANCHORED` (+ `anchor_status`
+  `UNANCHORED|ANCHORED_PREFIX|ANCHOR_UNVERIFIABLE`, `anchored_through`), `FAIL` (+ `ANCHOR_MISMATCH|ANCHOR_INVALID`).
+  `verify-bundle` accepts anchors in the bundle but verifies their tokens only against the **server's** configured TSA CA.
 
 Record v2 fields: `v, n, ts, kind (gate_decision|execution), gate_evaluation_id, tool, method, verdict, rule_ids,
 blocked_dest (redacted), lineage, data ("[REDACTED len=N]"), ext_calls, params_digest?, result_status?, prev, hash`.
 `hash = sha256(prev + canonical_json(record − hash))`.
 
 ## Operations
-* `GET /sentinel/status` — health of api/gate/provenance/proof/ai, counters, `chain_status`, recent records.
+* `GET /sentinel/status` — health of api/gate/provenance/proof/ai, counters, `chain_status`, `anchor_status`, `anchors`,
+  `persistence` (`memory|postgres|down`), recent records.
 * `POST /sentinel/reset`, `POST /sentinel/benchmark` — admin **and** `QYRIX_ENABLE_DEMO_RESET=1`, else 403.
   Benchmark response: `{cases[{name,type,expected,verdict,rules,ms,ok,lineage,external_calls_delta,proof_n}], counts, metrics, verify, hypotheses}`.
 
