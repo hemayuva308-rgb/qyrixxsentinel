@@ -8,7 +8,8 @@ services:
     environment:
       POSTGRES_USER: qyrix
       POSTGRES_DB: qyrix
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password   # read from the Docker secret, never from config
+    secrets: [db_password]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U qyrix -d qyrix"], interval: 3s, timeout: 3s, retries: 20 }
     cap_drop: [ALL]
@@ -18,8 +19,11 @@ services:
   backend:
     build: ./backend
     depends_on: { db: { condition: service_healthy } }
+    secrets: [db_password]                 # mounted at /run/secrets/db_password (app/persistence.py default)
     environment:
-      QYRIX_DATABASE_URL: postgresql://qyrix:${POSTGRES_PASSWORD:?set in .env}@db:5432/qyrix
+      QYRIX_DB_HOST: db
+      QYRIX_DB_NAME: qyrix
+      QYRIX_DB_USER: qyrix
       QYRIX_TSA_URL: ${QYRIX_TSA_URL:-}
       QYRIX_TSA_CA_FILE: ${QYRIX_TSA_CA_FILE:-}
       QYRIX_ADMIN_TOKEN: ${QYRIX_ADMIN_TOKEN:?set in .env}
@@ -55,6 +59,9 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     networks: [internal, edge]          # "edge" exists only so the published port works; the API stays internal
+secrets:
+  db_password:
+    file: ./secrets/db_password            # generated locally, git-ignored - see README "Run with Docker Compose"
 networks:
   internal: { internal: true }          # no egress
   edge: {}

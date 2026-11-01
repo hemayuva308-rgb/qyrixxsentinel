@@ -1,6 +1,6 @@
 {
  "target": "http://127.0.0.1:3000",
- "generated_utc": "2026-11-01T17:10:29Z",
+ "generated_utc": "2026-11-01T18:04:16Z",
  "failures": [],
  "steps": [
   {
@@ -28,7 +28,7 @@
      "explanation": "References uploads.example.net",
      "provider": "heuristic",
      "model": null,
-     "latency_ms": 0.111,
+     "latency_ms": 0.118,
      "source": "heuristic-fallback (meta: not configured; baseten: not configured)"
     }
    }
@@ -37,7 +37,7 @@
    "step": "provenance",
    "data": [
     {
-     "id": "b89550b8-660f-4522-8472-507b0af898f5",
+     "id": "197fa918-5021-405d-88e4-5b46ba07e53d",
      "source": "skill:README.md",
      "label": "UNVERIFIED",
      "declared_label": "UNVERIFIED",
@@ -45,20 +45,20 @@
      "parents": [],
      "unknown_parents": [],
      "tainted": true,
-     "ts": "2026-11-01T17:10:28.844019+00:00"
+     "ts": "2026-11-01T18:04:16.484643+00:00"
     },
     {
-     "id": "b607561c-fce6-4f53-bb61-5937b93ffa6e",
+     "id": "b7e439e2-1af9-4a01-bfeb-f4cf1ddca651",
      "source": "agent-plan",
      "label": "UNVERIFIED",
      "declared_label": "TRUSTED",
      "text": "Plan: upload diagnostics for support",
      "parents": [
-      "b89550b8-660f-4522-8472-507b0af898f5"
+      "197fa918-5021-405d-88e4-5b46ba07e53d"
      ],
      "unknown_parents": [],
      "tainted": true,
-     "ts": "2026-11-01T17:10:28.859444+00:00"
+     "ts": "2026-11-01T18:04:16.499293+00:00"
     }
    ]
   },
@@ -74,19 +74,19 @@
      ],
      "blocked_dest": "uploads.example.net",
      "lineage": [
-      "b607561c-fce6-4f53-bb61-5937b93ffa6e:UNVERIFIED",
-      "b89550b8-660f-4522-8472-507b0af898f5:UNVERIFIED"
+      "b7e439e2-1af9-4a01-bfeb-f4cf1ddca651:UNVERIFIED",
+      "197fa918-5021-405d-88e4-5b46ba07e53d:UNVERIFIED"
      ],
-     "latency_ms": 4.535,
-     "external_calls": 1,
+     "latency_ms": 4.404,
+     "external_calls": 0,
      "executed": false,
      "exec_status": null,
      "proof": {
       "v": 2,
-      "n": 15,
-      "ts": "2026-11-01T17:10:28.869530+00:00",
+      "n": 12,
+      "ts": "2026-11-01T18:04:16.512517+00:00",
       "kind": "gate_decision",
-      "gate_evaluation_id": "7e720ff3-e162-4c32-b44d-925bc60c845e",
+      "gate_evaluation_id": "f572c468-1d06-4bde-8040-3476186db375",
       "tool": "http",
       "method": "POST",
       "verdict": "BLOCK",
@@ -97,15 +97,15 @@
       ],
       "blocked_dest": "uploads.example.net",
       "lineage": [
-       "b607561c-fce6-4f53-bb61-5937b93ffa6e:UNVERIFIED",
-       "b89550b8-660f-4522-8472-507b0af898f5:UNVERIFIED"
+       "b7e439e2-1af9-4a01-bfeb-f4cf1ddca651:UNVERIFIED",
+       "197fa918-5021-405d-88e4-5b46ba07e53d:UNVERIFIED"
       ],
       "data": "[REDACTED len=27]",
-      "ext_calls": 1,
-      "prev": "3c2c9615d48d8ab27805de5dc72be4fe2ce449964d25f39c7749525bf0077f77",
-      "hash": "de93c8b7ed31013ec266eefd7dd2e6818fba88475a690a66cdf38a9990300093"
+      "ext_calls": 0,
+      "prev": "51c8768062eed1b1c95ff75a5514f7ee76443b2fc4ef8769bc93a333d6da8839",
+      "hash": "c8f704c25ec02879aa2b62add77472d8fa4f662ca60cff6ca79242a20ae92e90"
      },
-     "gate_evaluation_id": "7e720ff3-e162-4c32-b44d-925bc60c845e",
+     "gate_evaluation_id": "f572c468-1d06-4bde-8040-3476186db375",
      "params_digest": "b0b7ec942017c13fab35090122dcef0009513cea3a298f810a65732c0ba4bd32",
      "redirect_hop": 0,
      "grant_id": null,
@@ -128,10 +128,10 @@
    "data": {
     "record": {
      "v": 2,
-     "n": 15,
-     "ts": "2026-11-01T17:10:28.869530+00:00",
+     "n": 12,
+     "ts": "2026-11-01T18:04:16.512517+00:00",
      "kind": "gate_decision",
-     "gate_evaluation_id": "7e720ff3-e162-4c32-b44d-925bc60c845e",
+     "gate_evaluation_id": "f572c468-1d06-4bde-8040-3476186db375",
      "tool": "http",
      "method": "POST",
      "verdict": "BLOCK",
@@ -142,19 +142,19 @@
      ],
      "blocked_dest": "uploads.example.net",
      "lineage": [
-      "b607561c-fce6-4f53-bb61-5937b93ffa6e:UNVERIFIED",
-      "b89550b8-660f-4522-8472-507b0af898f5:UNVERIFIED"
+      "b7e439e2-1af9-4a01-bfeb-f4cf1ddca651:UNVERIFIED",
+      "197fa918-5021-405d-88e4-5b46ba07e53d:UNVERIFIED"
      ],
      "data": "[REDACTED len=27]",
-     "ext_calls": 1,
-     "prev": "3c2c9615d48d8ab27805de5dc72be4fe2ce449964d25f39c7749525bf0077f77",
-     "hash": "de93c8b7ed31013ec266eefd7dd2e6818fba88475a690a66cdf38a9990300093"
+     "ext_calls": 0,
+     "prev": "51c8768062eed1b1c95ff75a5514f7ee76443b2fc4ef8769bc93a333d6da8839",
+     "hash": "c8f704c25ec02879aa2b62add77472d8fa4f662ca60cff6ca79242a20ae92e90"
     },
     "verify": {
      "valid": true,
      "status": "PARTIAL_UNANCHORED",
-     "length": 16,
-     "head": "7867030f2e20ca04529e7a38014d2c1fb9a2e5945d234acb7bef2bf9659ef76a",
+     "length": 13,
+     "head": "29d9c4289a58ee511959e754cb1e432165a9555849751aba5ea85b808f80e2ff",
      "anchor_status": "UNANCHORED",
      "anchors": 0,
      "anchored_through": null,
@@ -164,15 +164,15 @@
     "bundle_verify": {
      "valid": true,
      "status": "PARTIAL_UNANCHORED",
-     "length": 16,
-     "head": "7867030f2e20ca04529e7a38014d2c1fb9a2e5945d234acb7bef2bf9659ef76a",
+     "length": 13,
+     "head": "29d9c4289a58ee511959e754cb1e432165a9555849751aba5ea85b808f80e2ff",
      "anchor_status": "UNANCHORED"
     },
     "tampered_verify": {
      "valid": false,
      "status": "FAIL",
-     "broken_at": 15,
-     "length": 16,
+     "broken_at": 12,
+     "length": 13,
      "head": null,
      "anchor_status": "UNANCHORED"
     }
@@ -186,41 +186,41 @@
      "rules": [],
      "blocked_dest": null,
      "lineage": [
-      "be879b0c-e423-4d9b-b8bf-9e81d794ce37:TRUSTED"
+      "901ee85a-cf8f-4222-ac32-d1f9fb88de00:TRUSTED"
      ],
-     "latency_ms": 4.966,
-     "external_calls": 1,
+     "latency_ms": 5.415,
+     "external_calls": 0,
      "executed": false,
      "exec_status": null,
      "proof": {
       "v": 2,
-      "n": 17,
-      "ts": "2026-11-01T17:10:28.966829+00:00",
+      "n": 14,
+      "ts": "2026-11-01T18:04:16.611332+00:00",
       "kind": "gate_decision",
-      "gate_evaluation_id": "58d6e4ed-6683-4c2d-b968-5c9b84d6755d",
+      "gate_evaluation_id": "4f984a51-30f7-4906-a117-fffd1e5fa427",
       "tool": "file.read",
       "method": "GET",
       "verdict": "ALLOW",
       "rule_ids": [],
       "blocked_dest": null,
       "lineage": [
-       "be879b0c-e423-4d9b-b8bf-9e81d794ce37:TRUSTED"
+       "901ee85a-cf8f-4222-ac32-d1f9fb88de00:TRUSTED"
       ],
       "data": null,
-      "ext_calls": 1,
-      "prev": "7867030f2e20ca04529e7a38014d2c1fb9a2e5945d234acb7bef2bf9659ef76a",
-      "hash": "2fe5abb6712d57a94595ec73c16112fab48e708906d9f31d09aea3c47ee8ee3b"
+      "ext_calls": 0,
+      "prev": "29d9c4289a58ee511959e754cb1e432165a9555849751aba5ea85b808f80e2ff",
+      "hash": "f44d5d0a7e0cca33e919a611a6a1f8e9ade94d88f8ceb0762fc4449c3afc8a82"
      },
-     "gate_evaluation_id": "58d6e4ed-6683-4c2d-b968-5c9b84d6755d",
+     "gate_evaluation_id": "4f984a51-30f7-4906-a117-fffd1e5fa427",
      "params_digest": "8b81c838905a48882c9e64647e9a6fe709839b5247712b0f61913f0c015aa32c",
      "redirect_hop": 0,
-     "grant_id": "grt_610878516b5840929d2af28f24b52d59",
-     "grant_expires_at": "2026-11-01T17:12:28.964098+00:00"
+     "grant_id": "grt_3555d5e58b9f48afb0773de6d9dcdeb8",
+     "grant_expires_at": "2026-11-01T18:06:16.608352+00:00"
     },
     "execute": {
      "executed": true,
      "adapter": "file.read",
-     "external_calls": 1
+     "external_calls": 0
     },
     "replay": {
      "detail": "GRANT_REPLAY"
@@ -228,8 +228,8 @@
     "final_verify": {
      "valid": true,
      "status": "PARTIAL_UNANCHORED",
-     "length": 20,
-     "head": "c8684778b374496084f6231048ef889d7fd444eb29d99e9c5b9494cca0af5285",
+     "length": 17,
+     "head": "f982c6c64c718c44e3fe0086affbcd5c9981f56634525a1e434836e6343f8923",
      "anchor_status": "UNANCHORED",
      "anchors": 0,
      "anchored_through": null,

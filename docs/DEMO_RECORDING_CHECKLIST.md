@@ -6,7 +6,8 @@ a timing/reference aid only — not the submission video (no narration, scripted
 
 ## 1. Environment (once, ~10 min)
 - [ ] Docker Desktop running; ports 3000 free.
-- [ ] `cp .env.example .env`; set `QYRIX_ADMIN_TOKEN`, `QYRIX_AGENT_TOKEN`, `POSTGRES_PASSWORD` to `openssl rand -hex 32` values;
+- [ ] `cp .env.example .env`; set `QYRIX_ADMIN_TOKEN`, `QYRIX_AGENT_TOKEN` to `openssl rand -hex 32` values; create the database secret:
+      `mkdir -p secrets && openssl rand -hex 32 > secrets/db_password && chmod 644 secrets/db_password`;
       `QYRIX_ENABLE_DEMO_RESET=1`. Never show `.env` on screen.
 - [ ] Optional, only if real: Meta key (`META_API_KEY`, `META_MODEL`) and/or an RFC 3161 TSA (`QYRIX_TSA_URL`, `QYRIX_TSA_CA_FILE`)
       plus `-f docker-compose.egress.yml`. Verify first: `python backend/scripts/llama_live_check.py` → must print `LIVE_VERIFIED`

@@ -324,11 +324,14 @@ def _load_chain(ctx: "GateContext") -> None:
 def _load() -> None:
     _load_chain(PROD)
     _load_anchors(PROD)
-    url = os.getenv("QYRIX_DATABASE_URL", "").strip()
-    if url:                              # durable mode: any problem => persistence 'down' => Gate blocks (R17)
-        from app import persistence
+    try:
+        dsn = persistence.dsn_from_env()
+    except Exception:                    # configured but secret missing/placeholder => fail closed
+        PROD.state["persistence"] = "down"
+        return
+    if dsn:                              # durable mode: any problem => persistence 'down' => Gate blocks (R17)
         try:
-            attach_persistence(PROD, persistence.PgPersistence(url))
+            attach_persistence(PROD, persistence.PgPersistence(dsn))
         except Exception:
             PROD.state["persistence"] = "down"
 

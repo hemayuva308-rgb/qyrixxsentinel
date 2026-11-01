@@ -1,6 +1,7 @@
 """PostgreSQL persistence for provenance, approvals, gate evaluations, grants, proof index and anchors.
 
-Enabled only when QYRIX_DATABASE_URL is set (otherwise the v1.2 in-memory behaviour is unchanged).
+Enabled when QYRIX_DATABASE_URL or QYRIX_DB_HOST (+ password file) is set - see dsn_from_env(); otherwise the
+v1.2 in-memory behaviour is unchanged.
 
 Security properties:
 - Fail closed: every method raises on any database error; callers turn that into BLOCK / refusal. Nothing is ever
@@ -25,6 +26,34 @@ class PersistenceError(Exception):
 
 class PersistenceConflict(PersistenceError):
     """A state conflict (e.g. approval already consumed by another process) - not an outage."""
+
+
+DEFAULT_PASSWORD_FILE = "/run/secrets/db_password"
+
+
+def dsn_from_env() -> Optional[str]:
+    """Database connection settings, without ever putting a password in configuration files.
+    1. QYRIX_DATABASE_URL (non-Docker convenience; prefer a ~/.pgpass file over embedding a password), or
+    2. QYRIX_DB_HOST [+ QYRIX_DB_PORT, QYRIX_DB_NAME, QYRIX_DB_USER] with the password read from a file:
+       QYRIX_DB_PASSWORD_FILE (default /run/secrets/db_password = the Docker Compose secret).
+    Returns None for in-memory mode. Raises PersistenceError (=> Gate fails closed) on a missing/empty/placeholder secret."""
+    url = os.getenv("QYRIX_DATABASE_URL", "").strip()
+    if url:
+        return url
+    host = os.getenv("QYRIX_DB_HOST", "").strip()
+    if not host:
+        return None
+    path = os.getenv("QYRIX_DB_PASSWORD_FILE", "").strip() or DEFAULT_PASSWORD_FILE
+    try:
+        with open(path) as f:
+            secret = f.read().strip()
+    except OSError:
+        raise PersistenceError("database password file not readable") from None
+    if not secret or "CHANGE_ME" in secret:
+        raise PersistenceError("database password missing or still a placeholder")
+    from psycopg.conninfo import make_conninfo   # escapes every value correctly
+    return make_conninfo(host=host, port=os.getenv("QYRIX_DB_PORT", "5432"), dbname=os.getenv("QYRIX_DB_NAME", "qyrix"),
+                         user=os.getenv("QYRIX_DB_USER", "qyrix"), password=secret, connect_timeout="5")
 
 
 def _ts(epoch: float) -> datetime:

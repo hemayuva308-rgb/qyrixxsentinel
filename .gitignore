@@ -1,4 +1,6 @@
 # Secrets / local config
+secrets/*
+!secrets/README.md
 .env
 .env.*
 !.env.example

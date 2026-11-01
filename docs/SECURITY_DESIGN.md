@@ -78,7 +78,8 @@ the decision is recorded; a conflict (approval already consumed elsewhere) ⇒ `
 → atomic `UPDATE grants … RETURNING` (unused, not revoked, unexpired, digest match) → start record → adapter. A DB row alone never
 authorises: at startup only grants whose evaluation has an ALLOW record in the verified chain are loaded, and grants with an
 EXECUTION_STARTED record are marked used. The DB proof mirror must be a prefix of the chain file (truncation/rewrite ⇒ degraded).
-Placeholder (`CHANGE_ME`) database URLs are refused. Proof mirror and anchors are append-only (trigger). Tested on real PostgreSQL:
+The database password is never in configuration: Docker Compose mounts it as the secret `db_password` (`POSTGRES_PASSWORD_FILE`
+for PostgreSQL, `/run/secrets/db_password` for the backend); missing, empty or `CHANGE_ME` secrets are refused (fail closed). Proof mirror and anchors are append-only (trigger). Tested on real PostgreSQL:
 restart (incl. SIGKILL of a real uvicorn process), replay across processes, expiry, revocation, forged rows, outage + recovery.
 
 ## 8. AI minimisation

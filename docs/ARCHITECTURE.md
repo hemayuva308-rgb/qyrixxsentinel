@@ -28,7 +28,8 @@ Status legend: **IMPLEMENTED** (code exists) · **TESTED** (automated test execu
 ```
 
 Style: **modular monolith**. One FastAPI process, modules separated by file and by an explicit `GateContext`.
-PostgreSQL persistence is **IMPLEMENTED** (optional; enabled by `QYRIX_DATABASE_URL`, on by default in Docker Compose).
+PostgreSQL persistence is **IMPLEMENTED** (optional; enabled by `QYRIX_DB_HOST` + a password file, or `QYRIX_DATABASE_URL`; on by default
+in Docker Compose, where the password is the Docker secret `db_password` mounted at `/run/secrets/db_password`).
 Multi-tenancy is **NOT_IMPLEMENTED** (see SAAS_PRODUCTION_REQUIREMENTS.md). Supported deployment: **one backend process per database**.
 
 ## 2. Backend modules
@@ -100,7 +101,7 @@ No animation library was added (CSS + SVG/SMIL + IntersectionObserver only). Run
 | Data | Where | Durability |
 |---|---|---|
 | Proof chain | `QYRIX_CHAIN_FILE` JSONL, fsync per record (source of truth) + append-only `proof_records` mirror in PostgreSQL | survives restart; file verified on load; DB mirror must be a prefix of the file (else gate degraded) |
-| Provenance, approvals, evaluations, grants | PostgreSQL when `QYRIX_DATABASE_URL` is set (memory otherwise) | survive restart; grants loaded only if their evaluation has an ALLOW record in the verified chain |
+| Provenance, approvals, evaluations, grants | PostgreSQL when database settings are present (memory otherwise) | survive restart; grants loaded only if their evaluation has an ALLOW record in the verified chain |
 | Anchors | `<chain>.anchors.jsonl` + `proof_anchors` table | survive restart; re-checked against the chain on load |
 | Demo state | per-request memory | discarded after the response |
 

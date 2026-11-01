@@ -17,7 +17,11 @@
 `gate_evaluations.params` can only contain data that passed the Gate (secret-pattern data is always BLOCKed by R2/R12), and the
 database is on an internal-only network; encryption at rest is still recommended for production.
 
-## 1. In-memory mode (when `QYRIX_DATABASE_URL` is unset)
+## 1. In-memory mode (no `QYRIX_DB_HOST` / `QYRIX_DATABASE_URL`)
+
+Connection settings (`app/persistence.py` `dsn_from_env`): `QYRIX_DB_HOST`, `QYRIX_DB_PORT` (5432), `QYRIX_DB_NAME` (qyrix), `QYRIX_DB_USER` (qyrix)
+and the password **from a file** — `QYRIX_DB_PASSWORD_FILE`, default `/run/secrets/db_password` (the Docker Compose secret). PostgreSQL itself reads
+the same secret via `POSTGRES_PASSWORD_FILE`. Missing, empty or `CHANGE_ME` secret ⇒ persistence down ⇒ Gate BLOCKs (R17).
 
 | Entity | Storage | Shape | Notes |
 |---|---|---|---|

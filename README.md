@@ -36,7 +36,8 @@ Start with `docs/FINAL_SUBMISSION_READINESS_REPORT.md` (current status of everyt
 
 ## Run with Docker Compose
 ```bash
-cp .env.example .env      # replace every CHANGE_ME value (tokens + POSTGRES_PASSWORD):  openssl rand -hex 32
+cp .env.example .env      # replace both CHANGE_ME tokens:  openssl rand -hex 32
+mkdir -p secrets && openssl rand -hex 32 > secrets/db_password && chmod 644 secrets/db_password   # PostgreSQL password (Docker secret, git-ignored)
 docker compose up --build # db + backend + frontend · http://127.0.0.1:3000 (sign in at /login with the admin or agent token)
 ```
 Only the web container is published (on 127.0.0.1). The API sits on an **internal-only network with no internet egress**; the Gate
@@ -86,7 +87,8 @@ adapter: no network, no files, no commands, nothing written to the production au
 
 ## Known limits (do not claim beyond this)
 - **Single tenant.** No organisations, tenant isolation, usage metering, quotas or billing. Pricing on the website is *proposed*.
-- One backend process per database. Without `QYRIX_DATABASE_URL` (non-Docker default) state is in memory and lost on restart.
+- One backend process per database. Without database settings (`QYRIX_DB_HOST` + password file, or `QYRIX_DATABASE_URL`; non-Docker default)
+  state is in memory and lost on restart. The database password is only ever read from a file (Docker secret), never from configuration.
 - Anchoring is implemented and tested against a local TSA, but **not verified with a public TSA**; without a configured TSA the chain
   reports `PARTIAL_UNANCHORED`, never `PASS`.
 - Default Docker deployment: backend has no network egress. With `docker-compose.egress.yml`, egress is limited by application controls only

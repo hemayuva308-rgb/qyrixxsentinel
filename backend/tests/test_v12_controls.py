@@ -64,7 +64,7 @@ def test_trust_survives_eviction_from_50_step_window():
     assert prov.get(u["id"]) is None                          # evicted from memory
     child = step("TRUSTED", [u["id"]])
     assert child["label"] == "UNTRUSTED"
-    r = gate(tool="http", method="POST", dest="https://github.com/api/gist", data="sk-synth-1a2b3c", lineage=[child["id"]])
+    r = gate(tool="http", method="POST", dest="https://github.com/api/gist", data="api_key=SYNTHETIC-NOT-A-KEY", lineage=[child["id"]])
     assert r["verdict"] == "BLOCK" and "R2_SECRET_EXFIL" in r["rules"]
 
 
