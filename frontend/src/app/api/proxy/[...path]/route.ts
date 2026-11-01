@@ -5,7 +5,7 @@ const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
   const rel = path.join("/");
-  if (rel.includes("..") || !(rel === "health" || rel.startsWith("sentinel/"))) return NextResponse.json({ detail: "not found" }, { status: 404 });
+  if (rel.includes("..") || !(rel === "health" || rel.startsWith("sentinel/") || rel === "tools/execute")) return NextResponse.json({ detail: "not found" }, { status: 404 });
   if (req.method !== "GET") {
     const o = req.headers.get("origin");
     if (req.headers.get("x-qs-csrf") !== "1" || (o && new URL(o).host !== req.headers.get("host")))

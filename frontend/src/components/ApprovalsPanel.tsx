@@ -25,7 +25,7 @@ export default function ApprovalsPanel({ items, error, loading, role, reload }: 
   }
   return (
     <Card title="APPROVALS" right={<Badge t="warn">{items?.filter((a) => a.status === "pending").length ?? 0} pending</Badge>}>
-      <div className="mb-3 grid grid-cols-[90px_1fr] gap-2">
+      <div className="mb-3 grid grid-cols-[112px_1fr] gap-2">
         <select aria-label="method" value={f.method} onChange={(e) => setF({ ...f, method: e.target.value })}>{["DELETE", "POST", "PUT", "GET"].map((m) => <option key={m}>{m}</option>)}</select>
         <input aria-label="destination" value={f.dest} onChange={(e) => setF({ ...f, dest: e.target.value })} />
       </div>

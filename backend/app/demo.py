@@ -123,7 +123,7 @@ def run_scenario(name: str) -> Dict:
     sc = SCENARIOS[name]
     ctx = new_context()
     t0 = time.perf_counter()
-    root = ctx.prov.add_step(sc["source"], sc["label"], sc["instruction"])
+    root = ctx.prov.add_step(sc["source"], sc["label"], g._redact(sc["instruction"]))     # redact before storage
     lineage = [root["id"]]
     if name == "delayed":
         for i in range(20):
@@ -146,7 +146,7 @@ def run_scenario(name: str) -> Dict:
         "notice": "Real Gate decisions on fixed fixtures in an isolated sandbox. Execution is simulated: no network, "
                   "no files, no commands. Nothing is written to the production audit chain.",
         "scenario": {"id": name, **{k: sc[k] for k in ("title", "category", "expected", "summary")}},
-        "instruction": {"source": sc["source"], "declared_label": sc["label"], "text": sc["instruction"]},
+        "instruction": {"source": sc["source"], "declared_label": sc["label"], "text": g._redact(sc["instruction"])},
         "action": {k: (g._redact(v) if k == "data" else v) for k, v in sc["action"].items()},
         "inspection": inspection,
         "provenance": {"steps": steps, "memory_limit": ctx.prov.memory_limit,

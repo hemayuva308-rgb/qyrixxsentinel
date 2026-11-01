@@ -8,13 +8,13 @@ import ApprovalsPanel from "@/components/ApprovalsPanel";
 import ProvenancePanel from "@/components/ProvenancePanel";
 import InspectorPanel from "@/components/InspectorPanel";
 import DecisionFeed from "@/components/DecisionFeed";
-import { ErrorBox, usePoll } from "@/components/ui";
+import { ErrorBox, refreshAll, usePoll } from "@/components/ui";
 
 export default function Dashboard() {
   const st = usePoll(() => api<Status>(`${S}/status`), 4000);
   const pv = usePoll(() => api<{ steps: Step[] }>(`${S}/provenance`), 6000);
   const ap = usePoll(() => api<{ approvals: Approval[] }>(`${S}/approvals`), 4000);
-  const refresh = () => { st.reload(); pv.reload(); ap.reload(); };
+  const refresh = () => refreshAll();
   return (
     <>
       <Navbar />

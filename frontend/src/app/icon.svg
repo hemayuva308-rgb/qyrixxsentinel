@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="QYRIX SENTINEL">
+  <defs><linearGradient id="qs-g" x1="10" y1="4" x2="54" y2="60" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#0A1A3F"/><stop offset=".62" stop-color="#1F5BFF"/><stop offset="1" stop-color="#06B6D4"/></linearGradient></defs>
+  <path d="M32 4 54 11.5V30c0 14.6-9.4 24.8-22 30-12.6-5.2-22-15.4-22-30V11.5L32 4z" fill="url(#qs-g)"/>
+  <path d="M33.9 39.8A11 11 0 1 1 42.8 30.9" fill="none" stroke="#fff" stroke-width="4.6" stroke-linecap="butt"/>
+  <path d="M32 29 46.5 43.5" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+  <path d="M37.7 38.9 41.9 34.7" stroke="#67E8F9" stroke-width="5.4" stroke-linecap="butt"/>
+  <circle cx="32" cy="29" r="3.6" fill="#67E8F9"/>
+</svg>

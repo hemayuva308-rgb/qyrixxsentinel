@@ -15,7 +15,7 @@ export default function Kpis({ s }: { s: Status | null }) {
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {m("DECISIONS", s?.decisions ?? null)}{m("BLOCKED", s?.blocked ?? null)}{m("ALLOWED", s?.allowed ?? null)}
-        {m("EXTERNAL CALLS", s?.external_calls ?? null, "real outbound requests made")}
+        {m("EXTERNAL CALLS", s?.external_calls ?? null, `real egress · ${s?.executions ?? 0} grant executions`)}
         {m("AVG LATENCY", s?.avg_latency_ms != null ? `${s.avg_latency_ms} ms` : null, s?.p95_ms != null ? `p95 ${s.p95_ms} ms` : "measured only")}
       </div>
     </div>);

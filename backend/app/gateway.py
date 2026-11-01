@@ -507,7 +507,7 @@ def inspect_ep(b: Text):
 
 @router.post("/provenance/step")
 def step_ep(b: Step):
-    return prov.add_step(b.source, b.label, b.text, [str(p) for p in b.parents])
+    return prov.add_step(b.source, b.label, _redact(b.text), [str(p) for p in b.parents])   # redact before storage
 
 
 @router.get("/provenance")

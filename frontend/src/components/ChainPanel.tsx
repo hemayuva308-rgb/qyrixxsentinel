@@ -11,8 +11,8 @@ function download(name: string, obj: unknown) {
 }
 function chainLabel(v: Verify | null): [string, "ok" | "warn" | "crit" | "mute"] {
   if (!v) return ["PENDING", "mute"];
-  if (!v.valid) return ["FAILED", "crit"];
-  return v.anchor_status === "ANCHORED" ? ["VERIFIED", "ok"] : ["UNANCHORED", "warn"];   // never VERIFIED without an external anchor
+  if (!v.valid) return ["FAIL", "crit"];
+  return v.status === "PASS" ? ["PASS", "ok"] : ["PARTIAL_UNANCHORED", "warn"];   // never PASS without an external anchor
 }
 
 export default function ChainPanel({ status }: { status: Status | null }) {
@@ -23,6 +23,11 @@ export default function ChainPanel({ status }: { status: Status | null }) {
   const cur = v ?? ch.data?.verify ?? null; const [label, tone] = chainLabel(cur);
   async function verify() { setBusy("v"); try { setV(await api<Verify>(`${S}/proofs/verify`)); setAt(new Date().toLocaleTimeString()); } catch (e) { toast("err", (e as Error).message); } finally { setBusy(null); } }
   async function tamper() { setBusy("t"); try { setT(await api<Verify>(`${S}/proofs/tamper`, { method: "POST" })); } catch (e) { toast("err", (e as Error).message); } finally { setBusy(null); } }
+  async function exportBundle() {
+    setBusy("e");
+    try { download(`qyrix-proof-bundle-${Date.now()}.json`, await api(`${S}/proofs/export`)); toast("ok", "Bundle exported - verify offline with backend/scripts/verify_proof.py"); }
+    catch (e) { toast("err", (e as Error).message); } finally { setBusy(null); }
+  }
   async function snapshot() {
     setBusy("s");
     try {
@@ -38,21 +43,20 @@ export default function ChainPanel({ status }: { status: Status | null }) {
         <div><div className="text-mute">Anchor</div><b>{cur?.anchor_status ?? status?.anchor_status ?? "-"}</b></div>
         <div><div className="text-mute">Last verified (this session)</div><b>{at ?? "not yet"}</b></div>
       </div>
-      <p className="mt-2 text-[11px] text-mute">Hash chain = tamper-evident, not tamper-proof. UNANCHORED means no external checkpoint exists yet, so the status is never shown as VERIFIED.</p>
+      <p className="mt-2 text-[11px] text-mute">Canonical-JSON SHA-256 hash chain = tamper-evident, not tamper-proof. PARTIAL_UNANCHORED means the chain is internally consistent but no external anchor exists yet, so it is never shown as PASS.</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <Btn kind="ghost" loading={busy === "v"} onClick={verify}><FileSearch className="h-3.5 w-3.5" />VERIFY CHAIN</Btn>
         <Btn kind="ghost" loading={busy === "t"} onClick={tamper}><Hammer className="h-3.5 w-3.5" />SIMULATE TAMPER (COPY)</Btn>
-        <Btn kind="ghost" onClick={() => ch.data && download("proof-chain.json", ch.data)} disabled={!ch.data?.chain.length}><Download className="h-3.5 w-3.5" />EXPORT CHAIN</Btn>
+        <Btn kind="ghost" loading={busy === "e"} onClick={exportBundle} disabled={!ch.data?.chain.length}><Download className="h-3.5 w-3.5" />EXPORT PROOF BUNDLE</Btn>
         <Btn kind="ghost" loading={busy === "s"} onClick={snapshot}><Download className="h-3.5 w-3.5" />FORENSIC SNAPSHOT</Btn>
-        <Btn kind="danger" disabled title="No backend endpoint exists for isolating an agent">ISOLATE AGENT (not available)</Btn>
       </div>
       {t && <p className="mt-2 rounded-lg border border-white/10 bg-bg2 p-2 text-xs">Tamper simulation on a copy: chain <b className={t.valid ? "text-crit" : "text-ok"}>{t.valid ? "NOT detected (!)" : `detected - broken at #${t.broken_at}`}</b>. The real chain was not modified.</p>}
       <div className="mt-3 max-h-80 space-y-1.5 overflow-auto">
         {ch.loading ? <Loading /> : ch.error ? <ErrorBox msg={ch.error} retry={ch.reload} /> : !ch.data?.chain.length ? <Empty text="Chain is empty" /> :
           [...ch.data.chain].reverse().map((p) => (
-            <div key={p.n} className="grid grid-cols-[48px_64px_1fr] items-center gap-2 rounded-lg border border-white/5 bg-bg2 px-2 py-1.5 text-[11px]">
+            <div key={p.n} className="grid grid-cols-[40px_150px_1fr] items-center gap-2 rounded-lg border border-white/5 bg-bg2 px-2 py-1.5 text-[11px]">
               <Mono>#{p.n}</Mono><Badge t={verdictTone(p.verdict)}>{p.verdict}</Badge>
-              <div className="min-w-0"><Mono>{p.hash.slice(0, 24)}...</Mono> <span className="text-mute">prev {p.prev.slice(0, 10)}... {p.rule_ids.join(" ")}</span></div></div>))}
+              <div className="min-w-0"><Mono>{p.hash.slice(0, 24)}...</Mono> <span className="text-mute">prev {p.prev.slice(0, 10)}... {p.kind === "execution" ? "exec " : ""}{p.rule_ids.join(" ")}</span></div></div>))}
       </div>
     </Card>);
 }
