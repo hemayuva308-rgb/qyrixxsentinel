@@ -1,0 +1,32 @@
+{
+ "generated_utc": "2026-11-01T05:15:07Z",
+ "cases": 18,
+ "heuristic": {
+  "n": 18,
+  "accuracy_pct": 77.8,
+  "recall_pct": 72.7,
+  "false_positive_pct": 14.3,
+  "tp": 8,
+  "fn": 3,
+  "fp": 1,
+  "tn": 6,
+  "by_category": {
+   "benign": {
+    "n": 7,
+    "correct": 6
+   },
+   "malicious": {
+    "n": 6,
+    "correct": 3
+   },
+   "obfuscated": {
+    "n": 5,
+    "correct": 5
+   }
+  }
+ },
+ "llm": {
+  "measured": false,
+  "reason": "no provider configured or no live answer"
+ }
+}

@@ -1,0 +1,7 @@
+@tailwind base; @tailwind components; @tailwind utilities;
+:root { color-scheme: dark; }
+body { @apply bg-bg text-ink antialiased; background-image: radial-gradient(1200px 500px at 50% -10%, rgba(0,212,255,.08), transparent); }
+::-webkit-scrollbar { width: 8px; height: 8px } ::-webkit-scrollbar-thumb { background: #1d2a44; border-radius: 8px }
+input, select, textarea { @apply bg-bg2 border border-white/10 rounded-lg px-3 py-2 text-sm w-full outline-none focus:border-neon/70 focus:ring-1 focus:ring-neon/40; }
+label { @apply text-xs text-mute block mb-1; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

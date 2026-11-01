@@ -1,0 +1,31 @@
+# Backend is NOT published to the host: only the frontend (which proxies server-side) is reachable.
+services:
+  backend:
+    build: ./backend
+    environment:
+      QYRIX_ADMIN_TOKEN: ${QYRIX_ADMIN_TOKEN:?set in .env}
+      QYRIX_AGENT_TOKEN: ${QYRIX_AGENT_TOKEN:?set in .env}
+      QYRIX_APPROVED_DOMAINS: ${QYRIX_APPROVED_DOMAINS:-}
+      QYRIX_ENABLE_DEMO_RESET: ${QYRIX_ENABLE_DEMO_RESET:-0}
+      META_API_KEY: ${META_API_KEY:-}
+      META_MODEL: ${META_MODEL:-}
+      BASETEN_API_KEY: ${BASETEN_API_KEY:-}
+      BASETEN_MODEL: ${BASETEN_MODEL:-}
+    volumes: ["chain:/data"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal]
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+      QYRIX_COOKIE_SECURE: ${QYRIX_COOKIE_SECURE:-0}
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [backend]
+    read_only: true
+    cap_drop: [ALL]
+    networks: [internal]
+networks: { internal: {} }
+volumes: { chain: {} }

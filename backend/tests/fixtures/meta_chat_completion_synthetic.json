@@ -1,0 +1,10 @@
+{
+  "_note": "SYNTHETIC fixture hand-written to match the documented OpenAI-compatible /chat/completions response shape. It was NOT recorded from the live Meta API. Run `python scripts/verify_meta.py --record` with a real key to create tests/fixtures/meta_live_recorded.json, which the fixture test then also uses.",
+  "id": "chatcmpl-synthetic-0001",
+  "object": "chat.completion",
+  "model": "muse-spark-1.3",
+  "choices": [{"index": 0, "finish_reason": "stop",
+               "message": {"role": "assistant",
+                           "content": "{\"label\":\"untrusted_instruction\",\"explanation\":\"Asks to upload credentials to an unapproved external host.\"}"}}],
+  "usage": {"prompt_tokens": 180, "completion_tokens": 30, "total_tokens": 210}
+}

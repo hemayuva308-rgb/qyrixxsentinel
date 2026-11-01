@@ -1,0 +1,17 @@
+export const RULE_HELP: Record<string, string> = {
+  R0_FAIL_CLOSED: "Internal error or the decision could not be recorded - blocked by design (fail-closed).",
+  R1_DEST_NOT_APPROVED: "Destination is not on the approved-domain allowlist (default deny).",
+  R2_SECRET_EXFIL: "Secret-looking data headed to an unapproved destination or from tainted lineage.",
+  R3_UNTRUSTED_LINEAGE: "The instruction chain traces back to an untrusted/unverified source.",
+  R4_APPROVAL_SCOPE_MISMATCH: "Approval does not cover this exact tool/method/destination/command/payload.",
+  R5_COMMAND_INJECTION: "Command chaining / injection pattern detected.",
+  R6_APPROVAL_REPLAY: "This approval was already used (single-use).",
+  R7_APPROVAL_REQUIRED: "High-impact action (DELETE) needs a human approval.",
+  R8_UNSUPPORTED_TOOL: "Tool is not supported in this MVP (only http and file.read execute).",
+  R9_SSRF_BLOCKED: "Internal/loopback/link-local/userinfo/non-canonical target, or DNS resolved to a prohibited address.",
+  R10_PATH_NOT_ALLOWED: "Path escapes the workspace or targets a protected file.",
+  R11_PROOF_DEGRADED: "Evidence chain is broken - gate is blocking everything until an admin investigates.",
+  R12_SECRET_TO_EXTERNAL: "Secret-looking data may not be sent to any external destination.",
+  R13_LINEAGE_MISSING: "Lineage missing/unknown - treated as unverified.",
+  R14_APPROVAL_EXPIRED: "Approval expired.",
+};
