@@ -69,12 +69,25 @@ clock-anomaly DEGRADED/FAIL/recovery thresholds.
 ## 8. AI minimisation
 Redacted and bounded (4,000 chars) input sent as JSON data under a fixed system prompt, temperature 0, no tools; reply must be
 exactly `{label, explanation}`; `-contributor` models and non-HTTPS endpoints refused; provider errors fall back to a labelled
-heuristic. Live provider: **NOT VERIFIED** in this environment.
+heuristic. Live provider: **NOT LIVE VERIFIED** — no credentials in this environment and the provider hosts are blocked by its egress
+policy (`evidence/llama-verification.txt`). Failure handling is tested against real sockets: a hanging provider is cut off by
+`QYRIX_LLM_TIMEOUT_SECONDS`; 5xx, non-JSON, prose and an attempted `"ALLOW"` label are all discarded, and the Gate still blocks.
 
 ## 9. Web security
 Token only in httpOnly, SameSite=Strict cookie (Secure when `QYRIX_COOKIE_SECURE=1`); proxy requires `x-qs-csrf: 1` and same origin
 for non-GET; proxy path allowlist (`health`, `sentinel/*`, `tools/execute`); login redirect allowlisted to `/dashboard|/forensic`;
-headers `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`. **No CSP yet.**
+headers `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`,
+`Permissions-Policy` (camera, mic, geolocation, payment, usb off) and a **Content-Security-Policy** (`frontend/next.config.ts`):
+`default-src 'self'`; `script-src 'self' 'unsafe-inline'` (no `'unsafe-eval'` in production); `style-src 'self' 'unsafe-inline'`;
+`img-src 'self' data: blob:`; `connect-src 'self'`; `object-src 'none'`; `base-uri 'self'`; `form-action 'self'`; `frame-ancestors 'none'`.
+Verified in the browser against the production build (`evidence/csp-check.txt`): in-document eval blocked, external fetch/images blocked and reported.
+**Known weakness:** `'unsafe-inline'` scripts remain because the Next.js App Router injects inline bootstrap scripts; removing it needs per-request
+nonces, which would force dynamic rendering of every page (deferred).
+
+## 9a. Network egress (deployment)
+`docker-compose.yml` puts the backend only on `internal` (`internal: true`, no route out). Tested in Docker: TCP and DNS from the backend fail, and an
+action the Gate ALLOWs to an approved host fails at the network layer (`EXECUTION_FAILED: dns failure`) — defence in depth.
+Real outbound tools and Meta Llama calls require the opt-in `docker-compose.egress.yml`; in that mode egress is limited by application controls only.
 
 ## 10. Public demo isolation
 Fresh context per request; fixed fixtures (RFC 2606 example domains); no workspace; sandbox adapter; heuristic-only inspector;
@@ -82,5 +95,6 @@ redacted instruction text; per-client (from `x-qyrix-demo-client`, set by the fr
 kill switch `QYRIX_PUBLIC_DEMO=0`. Tested: production chain unchanged after all scenarios; no DNS or LLM call.
 
 ## 11. Known gaps (do not claim)
-Single tenant; in-memory provenance/approvals/grants; no network-level egress firewall; TLS SNI with pinned IP not verified live;
-DNS has no explicit timeout; broad secret regex; no CSP; no external anchor; no third-party audit or penetration test.
+Single tenant; in-memory provenance/approvals/grants; no per-destination network allowlist when the egress override is enabled; TLS SNI with
+pinned IP not verified live; DNS has no explicit timeout; broad secret regex; CSP allows inline scripts; no external anchor; Meta Llama not live-verified;
+no third-party audit or penetration test.

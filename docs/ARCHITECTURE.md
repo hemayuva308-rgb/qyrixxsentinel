@@ -102,6 +102,7 @@ No animation library was added (CSS + SVG/SMIL + IntersectionObserver only). Run
 
 ## 6. Deployment
 
-`docker-compose.yml`: backend not published, read-only root FS, tmpfs `/tmp`, `cap_drop: ALL`,
-`no-new-privileges`, non-root uid 10001, named volume for the chain. Frontend published on `127.0.0.1:3000`,
-read-only, `cap_drop: ALL`. TLS termination is expected in front of the frontend (set `QYRIX_COOKIE_SECURE=1`).
+`docker-compose.yml`: backend not published and attached only to `internal` (`internal: true`: **no egress**), read-only
+root FS, tmpfs `/tmp`, `cap_drop: ALL`, `no-new-privileges`, non-root uid 10001, named volume for the chain. Frontend on `internal`
++ `edge` (for the published port `127.0.0.1:3000`), read-only, `cap_drop: ALL`, `no-new-privileges`. Outbound tool execution and
+Meta Llama calls require `-f docker-compose.egress.yml`. Security headers incl. CSP come from `frontend/next.config.ts`. TLS termination is expected in front of the frontend (set `QYRIX_COOKIE_SECURE=1`).

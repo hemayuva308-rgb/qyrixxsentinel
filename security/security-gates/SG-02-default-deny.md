@@ -6,7 +6,7 @@
 Unknown tool, destination, label or lineage blocks; strict request schemas; execution rejects client parameters.
 
 ## Evidence records
-Build: branch `claude/hopeful-franklin-5ggx72`, backend v1.2.0 · Environment: Linux, Python 3.13, pytest 8 (cloud container) ·
+Build: branch `claude/hopeful-franklin-5ggx72`, backend v1.2.0 · Environment: Linux, Python 3.13, pytest 8, Chromium 153, Docker 29 (cloud container) ·
 Owner: QYRIX SENTINEL engineering · Timestamp: 2026-11-01 (UTC) ·
 Artifact: `evidence/pytest-junit.xml` (SHA-256 recorded in `docs/IMPLEMENTATION_REPORT.md`). Preconditions: `backend/tests/conftest.py`
 (test tokens, temporary chain file and workspace, demo/eval mode on).

@@ -4,8 +4,8 @@
 export type GateStatus = "TESTED" | "PARTIAL" | "NOT IMPLEMENTED";
 export const SECURITY_GATES: { id: string; name: string; status: GateStatus; done: string; open: string }[] = [
   { id: "SG-01", name: "No direct egress", status: "PARTIAL",
-    done: "Only the controlled adapter performs requests, and only for a valid single-use grant. Evaluation never resolves DNS. Blocked actions make zero external calls (tested).",
-    open: "Egress is measured by an in-process counter; a network-level egress firewall on the containers is not configured or tested." },
+    done: "Only the controlled adapter performs requests, only for a valid single-use grant; evaluation never resolves DNS. In the default Docker deployment the backend sits on an internal-only network: DNS and TCP egress fail even for an allowed action (tested in Docker).",
+    open: "Real outbound tools need the opt-in egress override, where egress is then limited by application controls only (no per-destination network allowlist). Egress accounting is an in-process counter." },
   { id: "SG-02", name: "Default deny & schema validation", status: "TESTED",
     done: "Unknown tool, destination, label or lineage blocks. Strict request models; /tools/execute rejects any client parameter with 400 CLIENT_PARAMS_NOT_ALLOWED before lookup.", open: "-" },
   { id: "SG-03", name: "SSRF defence", status: "PARTIAL",
@@ -22,6 +22,6 @@ export const SECURITY_GATES: { id: string; name: string; status: GateStatus; don
     done: "Every API call authenticated; admin vs agent roles; agents cannot approve, reset or run the benchmark.",
     open: "No organisations, tenants, per-object ownership or the full role set (owner, reviewer, auditor...). Multi-tenancy is not implemented." },
   { id: "SG-08", name: "UI quality & no secret leakage", status: "PARTIAL",
-    done: "API token kept in an httpOnly SameSite=Strict cookie; same-origin proxy with CSRF header; no secrets in the browser bundle; public demo shows only redacted fixtures.",
-    open: "No Content-Security-Policy header yet; no automated accessibility test suite." },
+    done: "Content-Security-Policy (self-only sources, no eval, frame-ancestors none) verified in the browser; API token in an httpOnly SameSite=Strict cookie; CSRF-checked same-origin proxy; no secrets in the browser bundle; public demo shows only redacted fixtures.",
+    open: "script-src still allows 'unsafe-inline' (Next.js inline bootstrap; nonces not used); no automated accessibility (axe) suite." },
 ];

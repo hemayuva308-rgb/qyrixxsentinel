@@ -38,7 +38,8 @@ Tests: `backend/tests/` (`test_sentinel.py`=S, `test_hardening.py`=H, `test_v12_
 | FR-PRF-2 | Empty bundle fails; malformed hash FAIL; tampered FAIL; no anchor ⇒ PARTIAL_UNANCHORED | `verify_bundle` | V `test_bundle_verification_outcomes` | TESTED |
 | FR-PRF-3 | No raw secrets in proof | `_prove` | S `test_raw_secret_never_stored_in_proof` | TESTED |
 | FR-PRF-4 | Trusted external anchoring; signing key isolation/revocation; clock anomaly handling | — | — | NOT IMPLEMENTED |
-| FR-LLM-1 | Meta Llama advisory classification, strict schema, timeouts, fallback (10) | `classify` | C suite (mocked + local socket) | TESTED (mocked); live NOT VERIFIED |
+| FR-LLM-1 | Meta Llama advisory classification, strict schema, timeouts, fallback (10) | `classify` | C suite incl. real-socket `test_real_provider_timeout_falls_back_within_budget`, `test_real_provider_failures_never_produce_an_allow` | TESTED (failure paths on real sockets); live **NOT LIVE VERIFIED** (`evidence/llama-verification.txt`) |
+| FR-DEMO-3 | Judging workflow ATTACK→INSPECT→PROVENANCE→BLOCK→PROOF→SAFE against a running deployment, every claim asserted | `scripts/demo_judging.py` | `evidence/demo-judging-console.txt` | TESTED |
 | FR-DEMO-1 | Public demo: fixed scenarios, isolated state, separate chain, no egress, rate limited (5 §6) | `demo.py`, `/api/demo` | V demo tests | TESTED |
 | FR-DEMO-2 | UI shows ALLOW/BLOCK only after backend response; labelled SIMULATED DEMO | `LiveDemo.tsx` | Playwright run (validation report) | IMPLEMENTED |
 | FR-BEN-1 | Exact 10-case benchmark 3/3/2/2 with prevention, FP, completion, latency (13) | `benchmark_cases`, `run_benchmark` | V `test_benchmark_exact_composition_and_results`, `evidence/benchmark-results.json` | TESTED |
@@ -58,4 +59,5 @@ Tests: `backend/tests/` (`test_sentinel.py`=S, `test_hardening.py`=H, `test_v12_
 | NFR-1 | Gate latency measured | benchmark avg/max recorded in evidence |
 | NFR-2 | No secrets in source, bundle, logs | bundle grep + secret scan in validation report |
 | NFR-3 | Linear-time parsing (no ReDoS) on 100 KB input | existing regressions in C/H suites |
-| NFR-4 | Container hardening | compose config (read-only, cap_drop, non-root) |
+| NFR-4 | Container hardening | read-only, cap_drop ALL, no-new-privileges, non-root, internal-only backend network — verified with `docker inspect` (`evidence/docker-compose-validation.txt`) |
+| NFR-5 | Content-Security-Policy | enforced, inline scripts allowed (`evidence/csp-check.txt`) |

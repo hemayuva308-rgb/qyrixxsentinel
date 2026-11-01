@@ -1,4 +1,7 @@
 # Backend is NOT published to the host: only the frontend (which proxies server-side) is reachable.
+# Network-level egress control (SG-01): the backend sits ONLY on "internal", a Docker network with no route to the
+# outside world, so it cannot reach the internet at all. Real outbound tool execution (HttpAdapter) and Meta Llama
+# calls require the explicit opt-in override:  docker compose -f docker-compose.yml -f docker-compose.egress.yml up
 services:
   backend:
     build: ./backend
@@ -34,6 +37,9 @@ services:
     depends_on: [backend]
     read_only: true
     cap_drop: [ALL]
-    networks: [internal]
-networks: { internal: {} }
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal, edge]          # "edge" exists only so the published port works; the API stays internal
+networks:
+  internal: { internal: true }          # no egress
+  edge: {}
 volumes: { chain: {} }

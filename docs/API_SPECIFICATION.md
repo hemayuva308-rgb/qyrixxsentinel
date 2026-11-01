@@ -98,7 +98,8 @@ blocked_dest (redacted), lineage, data ("[REDACTED len=N]"), ext_calls, params_d
 
 ## Frontend routes (Next.js)
 `POST /api/session` (login), `DELETE /api/session` (logout), `GET|POST /api/proxy/{health|sentinel/*|tools/execute}`
-(cookie + `x-qs-csrf: 1` + same origin), `POST /api/demo` (public, scenario id only).
+(cookie + `x-qs-csrf: 1` + same origin), `POST /api/demo` (public; body must be exactly `{"scenario": "safe"|"direct"|"transformed"|"delayed"}`,
+anything else ⇒ 422; forwards only the id plus the client address for rate limiting).
 
 ## Divergences from the master plan's frozen specification
 The supplied API Specification v1.1 / Security Design v1.2 documents were empty in the repository, so the spec items

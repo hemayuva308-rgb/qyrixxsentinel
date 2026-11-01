@@ -1,0 +1,27 @@
+# Docker Compose validation - 2026-11-01T16:36:08Z
+Images: committed Dockerfiles; this sandbox's TLS proxy CA injected into the build stage only (see IMPLEMENTATION_REPORT).
+backend Up 1 second 8000/tcp
+frontend Up 1 second 127.0.0.1:3000->3000/tcp
+backend: networks=qyrixxsentinel_internal user=10001 readonly=true capdrop=[ALL] secopt=[no-new-privileges:true]
+frontend: networks=qyrixxsentinel_edge qyrixxsentinel_internal user=10001 readonly=true capdrop=[ALL] secopt=[no-new-privileges:true]
+API published on host: no
+Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:
+X-Frame-Options: DENY
+X-Content-Type-Options: nosniff
+Referrer-Policy: no-referrer
+Cross-Origin-Opener-Policy: same-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
+## egress from backend container (default deployment)
+tcp 1.1.1.1:443 -> BLOCKED OSError
+dns github.com -> BLOCKED gaierror
+Gate ALLOW for approved host -> executed=False result={'error': 'dns failure'} (network layer blocks egress even when policy allows)
+## public demo through the frontend relay
+safe ALLOW expected ALLOW match True ext 0 PARTIAL_UNANCHORED
+direct BLOCK expected BLOCK match True ext 0 PARTIAL_UNANCHORED
+transformed BLOCK expected BLOCK match True ext 0 PARTIAL_UNANCHORED
+delayed BLOCK expected BLOCK match True ext 0 PARTIAL_UNANCHORED
+relay {"scenario":"safe","dest":"http://169.254.169.254/"} -> HTTP 422
+relay ["safe"] -> HTTP 422
+relay {"scenario":"custom"} -> HTTP 422
+unauthenticated /api/proxy/sentinel/status -> HTTP 401
+unauthenticated /dashboard -> HTTP 307 http://127.0.0.1:3000/login?next=%2Fdashboard

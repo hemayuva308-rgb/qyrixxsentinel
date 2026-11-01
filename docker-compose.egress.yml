@@ -1,0 +1,8 @@
+# OPT-IN: give the backend outbound network access (needed for real HttpAdapter execution and Meta Llama calls).
+# Every request is still evaluated by the Gate, needs a single-use grant, is DNS-validated and IP-pinned.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.egress.yml up -d
+services:
+  backend:
+    networks: [internal, egress]
+networks:
+  egress: {}

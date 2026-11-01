@@ -1,0 +1,24 @@
+# Meta Llama live verification - 2026-11-01T16:19:30Z
+## credentials in this environment
+META_API_KEY=unset
+MODEL_API_KEY=unset
+META_MODEL=unset
+BASETEN_API_KEY=unset
+BASETEN_MODEL=unset
+## network reachability (sandbox egress policy)
+api.meta.ai: curl: (56) CONNECT tunnel failed, response 403
+inference.baseten.co: curl: (56) CONNECT tunnel failed, response 403
+## python scripts/verify_meta.py
+base_url: https://api.meta.ai/v1 | model: None | key set: False
+NOT VERIFIED: not configured (set META_API_KEY or MODEL_API_KEY, and META_MODEL)
+exit=1
+## failure path with a PLACEHOLDER key (not a real credential) against the real network
+malicious -> untrusted_instruction  provider=heuristic model=None latency=0.817ms
+          References render-internal.com
+          attempts=[{'provider': 'meta', 'ok': False, 'ms': 239.9, 'error': 'ProxyError'}, {'provider': 'baseten', 'ok': False, 'ms': 0, 'error': 'not configured'}]
+benign    -> benign                 provider=heuristic model=None latency=0.452ms
+          No unapproved destination or exfil pattern.
+          attempts=[{'provider': 'meta', 'ok': False, 'ms': 248.0, 'error': 'ProxyError'}, {'provider': 'baseten', 'ok': False, 'ms': 0, 'error': 'not configured'}]
+NOT VERIFIED: Meta did not return a valid answer (see attempts)
+exit=1
+## RESULT: NOT LIVE VERIFIED (no credentials; provider hosts blocked by this environment's egress policy)

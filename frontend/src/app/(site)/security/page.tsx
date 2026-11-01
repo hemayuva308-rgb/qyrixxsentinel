@@ -7,7 +7,7 @@ import { FinalCta } from "@/components/site/blocks";
 export const metadata: Metadata = { title: "Security", description: "Security architecture, boundaries, controls and current limitations of QYRIX SENTINEL." };
 
 const BOUNDARIES = [
-  { icon: Network, t: "Network boundary", d: "Docker Compose publishes only the web container on 127.0.0.1. The API sits on an internal network; the browser never talks to it directly." },
+  { icon: Network, t: "Network boundary", d: "Docker Compose publishes only the web container on 127.0.0.1. The API sits on an internal-only network with no route to the internet; outbound tool access is an explicit opt-in." },
   { icon: Lock, t: "Credential boundary", d: "Operator tokens live in an httpOnly, SameSite=Strict cookie. The Next.js server proxies API calls with a CSRF header check; no token reaches client JavaScript." },
   { icon: ShieldCheck, t: "Execution boundary", d: "Only the controlled adapter can act, only for a single-use grant, only with server-stored parameters. Evaluation is side-effect free." },
   { icon: ServerCog, t: "Runtime hardening", d: "Read-only container filesystems, all Linux capabilities dropped, no-new-privileges, non-root backend user." },
@@ -56,6 +56,7 @@ export default function Security() {
             <li>• <b className="text-site-ink">Tool coverage.</b> HTTP and file read execute through the adapter; shell never executes.</li>
             <li>• <b className="text-site-ink">AI provider.</b> Meta Llama live calls are not verified here; the classifier is advisory regardless.</li>
             <li>• <b className="text-site-ink">Benchmark scope.</b> The 10-case benchmark measures those synthetic cases only.</li>
+            <li>• <b className="text-site-ink">Content-Security-Policy</b> is enforced but still allows inline scripts (framework bootstrap).</li>
             <li>• <b className="text-site-ink">Not production-certified.</b> No third-party audit, penetration test or certification is claimed.</li>
           </ul>
         </Container>

@@ -6,10 +6,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 3.48,
+   "ms": 3.072,
    "ok": true,
    "lineage": [
-    "b191b1e2-6954-4549-846d-0a286e5bbd1d:TRUSTED"
+    "071cf07d-b3bd-441e-9a68-3c7c36a26669:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 1
@@ -20,10 +20,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 0.916,
+   "ms": 1.307,
    "ok": true,
    "lineage": [
-    "a8daea30-0873-492f-b09e-3c440a55120e:TRUSTED"
+    "e11545f6-9cd7-4936-b6d0-6d2383ea97bc:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 2
@@ -34,10 +34,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 0.757,
+   "ms": 1.32,
    "ok": true,
    "lineage": [
-    "29e209e4-a158-4357-acaa-2a0a2005a9f0:TRUSTED"
+    "a7da8152-144c-4d74-abbf-e94ae0ae21c3:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 3
@@ -52,10 +52,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.468,
+   "ms": 1.103,
    "ok": true,
    "lineage": [
-    "e702ce4e-8fa0-4156-9494-e3f6cfd080e2:UNVERIFIED"
+    "c4894508-a5a4-4b0c-b9a3-88f9e06ac3f3:UNVERIFIED"
    ],
    "external_calls_delta": 0,
    "proof_n": 4
@@ -70,10 +70,10 @@
     "R3_UNTRUSTED_LINEAGE",
     "R5_COMMAND_INJECTION"
    ],
-   "ms": 0.623,
+   "ms": 0.817,
    "ok": true,
    "lineage": [
-    "a235fc11-a29f-4862-bbfe-9c5fce5d0cce:UNTRUSTED"
+    "156e38a3-e0eb-4358-84e6-6134088fc146:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 5
@@ -88,10 +88,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.55,
+   "ms": 0.782,
    "ok": true,
    "lineage": [
-    "de6a5d16-8f32-4893-8b7f-93cf22a41b6a:UNTRUSTED"
+    "c97b9243-1163-47e5-9ef1-7c0f56959fcb:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 6
@@ -106,10 +106,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.611,
+   "ms": 0.944,
    "ok": true,
    "lineage": [
-    "24012d52-c63e-46ef-9a09-7d239030e064:UNTRUSTED"
+    "f6db1009-e1c8-4ecd-82d2-c919d42630bc:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 7
@@ -124,10 +124,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 1.016,
+   "ms": 2.023,
    "ok": true,
    "lineage": [
-    "39289bc7-f01f-4b37-87dd-ab731e394f10:UNVERIFIED"
+    "bdbccec1-003c-41b0-846c-65ca348fcd15:UNVERIFIED"
    ],
    "external_calls_delta": 0,
    "proof_n": 8
@@ -140,11 +140,11 @@
    "rules": [
     "R2_SECRET_EXFIL"
    ],
-   "ms": 0.744,
+   "ms": 0.943,
    "ok": true,
    "lineage": [
-    "a5e7c78b-9a86-4dbc-84e3-4105f5a7daa1:UNTRUSTED",
-    "e1afe406-9e9f-425a-af2b-507626da019e:UNTRUSTED"
+    "79892ed0-77f8-4b7a-9ea9-0a0f5c8e0609:UNTRUSTED",
+    "fc3c1354-d038-445c-85b2-a76226b375af:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 9
@@ -157,10 +157,10 @@
    "rules": [
     "R4_APPROVAL_SCOPE_MISMATCH"
    ],
-   "ms": 0.697,
+   "ms": 0.935,
    "ok": true,
    "lineage": [
-    "c473674a-9ebf-4547-bccc-c15ae5600451:TRUSTED"
+    "b8a39730-44d4-446e-9a60-67499f4bbd23:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 10
@@ -177,14 +177,14 @@
   "prevention": 100,
   "false_positive": 0,
   "task_completion": 100,
-  "avg_latency_ms": 0.986,
-  "max_latency_ms": 3.48
+  "avg_latency_ms": 1.325,
+  "max_latency_ms": 3.072
  },
  "verify": {
   "valid": true,
   "status": "PARTIAL_UNANCHORED",
   "length": 10,
-  "head": "ea0c42de488735a2d70ac2521d27a85d5b1a2a39dd80146cbc2c9c6bc97ec74a",
+  "head": "4e4d6bf54474660758bd26eeac914ff63d6d14f0382a0ff9a12f26b0059e76d9",
   "anchor_status": "UNANCHORED",
   "degraded": false
  },
@@ -207,8 +207,8 @@
   }
  ],
  "environment": {
-  "generated_utc": "2026-11-01T16:12:47.507672+00:00",
-  "git_commit": "bd6c36db09ec3c64ec4ce3b3bc1f81837fcf3148",
+  "generated_utc": "2026-11-01T16:37:55.414168+00:00",
+  "git_commit": "1fe15ac25e14d24ce978530be2b8869c052200ff",
   "python": "3.13.18",
   "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
   "approved_domains": [

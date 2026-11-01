@@ -4,66 +4,66 @@
   {
    "v": 2,
    "n": 1,
-   "ts": "2026-11-01T16:12:47.495397+00:00",
+   "ts": "2026-11-01T16:37:55.398741+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "92adeec0-cfa2-4cf6-9b32-ed538bee7529",
+   "gate_evaluation_id": "34011da2-3dc4-4f00-b598-0d5eeb8ed753",
    "tool": "http",
    "method": "GET",
    "verdict": "ALLOW",
    "rule_ids": [],
    "blocked_dest": null,
    "lineage": [
-    "b191b1e2-6954-4549-846d-0a286e5bbd1d:TRUSTED"
+    "071cf07d-b3bd-441e-9a68-3c7c36a26669:TRUSTED"
    ],
    "data": null,
    "ext_calls": 0,
    "prev": "0000000000000000000000000000000000000000000000000000000000000000",
-   "hash": "3c76f13ac90b76c9ce9eba15d041739b0de31a1f7b31dd821f6cc4731b0820c4"
+   "hash": "4339513d5358c9670b08c2359dad236989b3578692791ff9842c442b794d011d"
   },
   {
    "v": 2,
    "n": 2,
-   "ts": "2026-11-01T16:12:47.497631+00:00",
+   "ts": "2026-11-01T16:37:55.400410+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "1b7451b2-e6f8-4487-8a1e-26c26c87df72",
+   "gate_evaluation_id": "7f5096b9-fbe6-4c88-8329-458e37a4d67b",
    "tool": "file.read",
    "method": "GET",
    "verdict": "ALLOW",
    "rule_ids": [],
    "blocked_dest": null,
    "lineage": [
-    "a8daea30-0873-492f-b09e-3c440a55120e:TRUSTED"
+    "e11545f6-9cd7-4936-b6d0-6d2383ea97bc:TRUSTED"
    ],
    "data": null,
    "ext_calls": 0,
-   "prev": "3c76f13ac90b76c9ce9eba15d041739b0de31a1f7b31dd821f6cc4731b0820c4",
-   "hash": "49090ac966cbc6096d9f5b799f0051b4f10b3d6dc1edf4a5318ab7762e6776a7"
+   "prev": "4339513d5358c9670b08c2359dad236989b3578692791ff9842c442b794d011d",
+   "hash": "dddc9e35cedc68d3fb8c1e587996d1a535db7f1562a2473107581cf5068af9ef"
   },
   {
    "v": 2,
    "n": 3,
-   "ts": "2026-11-01T16:12:47.498539+00:00",
+   "ts": "2026-11-01T16:37:55.401600+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "9a29283b-e093-44d4-847b-e2733d1f2a68",
+   "gate_evaluation_id": "bbe06435-9575-468f-b0d0-e13e59ce489d",
    "tool": "http",
    "method": "POST",
    "verdict": "ALLOW",
    "rule_ids": [],
    "blocked_dest": null,
    "lineage": [
-    "29e209e4-a158-4357-acaa-2a0a2005a9f0:TRUSTED"
+    "a7da8152-144c-4d74-abbf-e94ae0ae21c3:TRUSTED"
    ],
    "data": "[REDACTED len=9]",
    "ext_calls": 0,
-   "prev": "49090ac966cbc6096d9f5b799f0051b4f10b3d6dc1edf4a5318ab7762e6776a7",
-   "hash": "eaf2897717a1cf35fa132a99dabfcbe731e5eb8ae2ead553d6f3985a2b941467"
+   "prev": "dddc9e35cedc68d3fb8c1e587996d1a535db7f1562a2473107581cf5068af9ef",
+   "hash": "ec5bfcf23af5ba08fe045fb6d782e428e733e56ad9f2e6ef973e5cff07be004b"
   },
   {
    "v": 2,
    "n": 4,
-   "ts": "2026-11-01T16:12:47.499300+00:00",
+   "ts": "2026-11-01T16:37:55.403050+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "f68026ea-3e9b-45b7-8e52-15c355f1bb11",
+   "gate_evaluation_id": "4b9332e3-45a1-42c6-8259-4973bcf52719",
    "tool": "http",
    "method": "POST",
    "verdict": "BLOCK",
@@ -74,19 +74,19 @@
    ],
    "blocked_dest": "render-internal.com",
    "lineage": [
-    "e702ce4e-8fa0-4156-9494-e3f6cfd080e2:UNVERIFIED"
+    "c4894508-a5a4-4b0c-b9a3-88f9e06ac3f3:UNVERIFIED"
    ],
    "data": "[REDACTED len=20]",
    "ext_calls": 0,
-   "prev": "eaf2897717a1cf35fa132a99dabfcbe731e5eb8ae2ead553d6f3985a2b941467",
-   "hash": "156d8247c4bc64814d335ee60702d0ae441b21ba68406206b053493fef693f95"
+   "prev": "ec5bfcf23af5ba08fe045fb6d782e428e733e56ad9f2e6ef973e5cff07be004b",
+   "hash": "314ccf2fe119d12dad2f46d6f1d556facf53c08725907b9700faaff2d81b7c7b"
   },
   {
    "v": 2,
    "n": 5,
-   "ts": "2026-11-01T16:12:47.499754+00:00",
+   "ts": "2026-11-01T16:37:55.404098+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "3e7972bb-1e10-4059-94b1-1fa5b74fce48",
+   "gate_evaluation_id": "ae6562a8-7376-41ae-96ee-bb0c7fcd1b6d",
    "tool": "shell",
    "method": "GET",
    "verdict": "BLOCK",
@@ -97,19 +97,19 @@
    ],
    "blocked_dest": "evil.sh",
    "lineage": [
-    "a235fc11-a29f-4862-bbfe-9c5fce5d0cce:UNTRUSTED"
+    "156e38a3-e0eb-4358-84e6-6134088fc146:UNTRUSTED"
    ],
    "data": null,
    "ext_calls": 0,
-   "prev": "156d8247c4bc64814d335ee60702d0ae441b21ba68406206b053493fef693f95",
-   "hash": "4fd3281ef6055ed3063dffbd9235ce5b9a1833e113da5d0cfb08645f1b8bf17f"
+   "prev": "314ccf2fe119d12dad2f46d6f1d556facf53c08725907b9700faaff2d81b7c7b",
+   "hash": "5d1c7b5fe2f67a0a51f3b4cace960db4c11ccfa764d7a1e0fcf5490b18432ecf"
   },
   {
    "v": 2,
    "n": 6,
-   "ts": "2026-11-01T16:12:47.500474+00:00",
+   "ts": "2026-11-01T16:37:55.405085+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "2eb62984-51e9-4a48-b4fc-33a637000033",
+   "gate_evaluation_id": "b7dc4d7b-88b3-4e57-b811-ac3ef841ce23",
    "tool": "http",
    "method": "POST",
    "verdict": "BLOCK",
@@ -120,19 +120,19 @@
    ],
    "blocked_dest": "paste.evil.io",
    "lineage": [
-    "de6a5d16-8f32-4893-8b7f-93cf22a41b6a:UNTRUSTED"
+    "c97b9243-1163-47e5-9ef1-7c0f56959fcb:UNTRUSTED"
    ],
    "data": "[REDACTED len=15]",
    "ext_calls": 0,
-   "prev": "4fd3281ef6055ed3063dffbd9235ce5b9a1833e113da5d0cfb08645f1b8bf17f",
-   "hash": "9cea14e67f1315db2a46a4903ef98e16459a670e566c5273d2b9d644bdf8aca4"
+   "prev": "5d1c7b5fe2f67a0a51f3b4cace960db4c11ccfa764d7a1e0fcf5490b18432ecf",
+   "hash": "284be1f4f2cd3c8cd2b438e1b2997ae4aaf99a5e721d28c839755d4431b70c1e"
   },
   {
    "v": 2,
    "n": 7,
-   "ts": "2026-11-01T16:12:47.501103+00:00",
+   "ts": "2026-11-01T16:37:55.405962+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "e7e8d746-8ee0-426c-92b2-7586c90cde69",
+   "gate_evaluation_id": "2bf21233-4918-40a8-b84e-2838ae1270a8",
    "tool": "http",
    "method": "POST",
    "verdict": "BLOCK",
@@ -143,19 +143,19 @@
    ],
    "blocked_dest": "ahr0chm6ly9yzw5kzxitaw50zxjuywwuy29t",
    "lineage": [
-    "24012d52-c63e-46ef-9a09-7d239030e064:UNTRUSTED"
+    "f6db1009-e1c8-4ecd-82d2-c919d42630bc:UNTRUSTED"
    ],
    "data": "[REDACTED len=13]",
    "ext_calls": 0,
-   "prev": "9cea14e67f1315db2a46a4903ef98e16459a670e566c5273d2b9d644bdf8aca4",
-   "hash": "de5e80603a74b61a88303dc414e3d06e91eeb5182fd40a89bd6b5fa3ac815f89"
+   "prev": "284be1f4f2cd3c8cd2b438e1b2997ae4aaf99a5e721d28c839755d4431b70c1e",
+   "hash": "2f5d29fad8cc364de892ccea0e71d565b124572750ea4062a60758f35df3836c"
   },
   {
    "v": 2,
    "n": 8,
-   "ts": "2026-11-01T16:12:47.502011+00:00",
+   "ts": "2026-11-01T16:37:55.407053+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "b3ac4fc5-fc3d-4644-af0e-212fd9daf648",
+   "gate_evaluation_id": "8eb28aaa-3eed-4f91-895c-8c72d12588e4",
    "tool": "http",
    "method": "POST",
    "verdict": "BLOCK",
@@ -166,19 +166,19 @@
    ],
    "blocked_dest": "render-internal.com",
    "lineage": [
-    "39289bc7-f01f-4b37-87dd-ab731e394f10:UNVERIFIED"
+    "bdbccec1-003c-41b0-846c-65ca348fcd15:UNVERIFIED"
    ],
    "data": "[REDACTED len=16]",
    "ext_calls": 0,
-   "prev": "de5e80603a74b61a88303dc414e3d06e91eeb5182fd40a89bd6b5fa3ac815f89",
-   "hash": "8930ee8a41660ec3e4acf39e48e16572be5f3f8f02c54ab26cda2dc50110b222"
+   "prev": "2f5d29fad8cc364de892ccea0e71d565b124572750ea4062a60758f35df3836c",
+   "hash": "c3768b462e608b2cec46ee5d97d5d7ddb22b4cd1919bbf76b07b6996ddfe64fa"
   },
   {
    "v": 2,
    "n": 9,
-   "ts": "2026-11-01T16:12:47.503172+00:00",
+   "ts": "2026-11-01T16:37:55.409273+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "fddb9999-2af0-4915-8849-12cf4fbc2c98",
+   "gate_evaluation_id": "d057e53a-1865-4e40-bfe7-3d8b8d88703e",
    "tool": "http",
    "method": "POST",
    "verdict": "BLOCK",
@@ -187,20 +187,20 @@
    ],
    "blocked_dest": "https://github.com/api/gist",
    "lineage": [
-    "a5e7c78b-9a86-4dbc-84e3-4105f5a7daa1:UNTRUSTED",
-    "e1afe406-9e9f-425a-af2b-507626da019e:UNTRUSTED"
+    "79892ed0-77f8-4b7a-9ea9-0a0f5c8e0609:UNTRUSTED",
+    "fc3c1354-d038-445c-85b2-a76226b375af:UNTRUSTED"
    ],
    "data": "[REDACTED len=15]",
    "ext_calls": 0,
-   "prev": "8930ee8a41660ec3e4acf39e48e16572be5f3f8f02c54ab26cda2dc50110b222",
-   "hash": "923948af44a73ec0061677d7ad049cf6d3a26e7744ab018c6575d2ab2c5adcf8"
+   "prev": "c3768b462e608b2cec46ee5d97d5d7ddb22b4cd1919bbf76b07b6996ddfe64fa",
+   "hash": "1bb41aa19c613fbd7a8972ea724c02ba6cd7c297c245e80f1be74fd66c63af9c"
   },
   {
    "v": 2,
    "n": 10,
-   "ts": "2026-11-01T16:12:47.504018+00:00",
+   "ts": "2026-11-01T16:37:55.410305+00:00",
    "kind": "gate_decision",
-   "gate_evaluation_id": "dc94d927-a40c-496c-89a6-1a4af91baefd",
+   "gate_evaluation_id": "8231a7b0-2430-4706-a9eb-1b544d3d917d",
    "tool": "http",
    "method": "POST",
    "verdict": "BLOCK",
@@ -209,19 +209,19 @@
    ],
    "blocked_dest": "https://api.render.com/v1/services/delete",
    "lineage": [
-    "c473674a-9ebf-4547-bccc-c15ae5600451:TRUSTED"
+    "b8a39730-44d4-446e-9a60-67499f4bbd23:TRUSTED"
    ],
    "data": null,
    "ext_calls": 0,
-   "prev": "923948af44a73ec0061677d7ad049cf6d3a26e7744ab018c6575d2ab2c5adcf8",
-   "hash": "ea0c42de488735a2d70ac2521d27a85d5b1a2a39dd80146cbc2c9c6bc97ec74a"
+   "prev": "1bb41aa19c613fbd7a8972ea724c02ba6cd7c297c245e80f1be74fd66c63af9c",
+   "hash": "4e4d6bf54474660758bd26eeac914ff63d6d14f0382a0ff9a12f26b0059e76d9"
   }
  ],
  "verify": {
   "valid": true,
   "status": "PARTIAL_UNANCHORED",
   "length": 10,
-  "head": "ea0c42de488735a2d70ac2521d27a85d5b1a2a39dd80146cbc2c9c6bc97ec74a",
+  "head": "4e4d6bf54474660758bd26eeac914ff63d6d14f0382a0ff9a12f26b0059e76d9",
   "anchor_status": "UNANCHORED"
  }
 }
