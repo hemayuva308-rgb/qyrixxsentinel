@@ -27,11 +27,13 @@ from app import observability as obs, adapter as adapters, anchor, netguard, per
 
 TOOLS = ("http", "file.read")            # `shell` is recognised but never executable in this MVP (R8)
 SECRET = re.compile(r"(sk-[a-z]+-\w{3,}|api[_-]?key|secret|token|password|aws_\w+|\.env)", re.I)
-# key=value redaction. Linear-time by construction (names are only tried at word starts); the previous single regex
-# backtracked cubically (a 2 KB input of "key"*700 took ~9 s and could stall the gate through the proof record).
-_KV_NAME = re.compile(r"(?<![\w.-])[\w.-]+(?=\s*[=:])")
-_KV_WORD = re.compile(r"key|token|secret|passw(?:or)?d", re.I)
-_KV_VAL = re.compile(r"(\s*[=:]\s*)[^\s&\"',;]+")
+# key=value redaction: a deterministic single-pass scanner (see _redact). Every character is visited a bounded number of
+# times, so cost is O(len) for any input. The earlier regexes `(?<![\w.-])[\w.-]+(?=\s*[=:])` and `(\s*[=:]\s*)[^...]+`
+# were only linear because of the lookbehind / anchored match; the patterns themselves are quadratic on long runs of
+# hyphens or spaces (CodeQL py/polynomial-redos, PR #1). Matching behaviour is unchanged (differential-tested).
+_KV_WORD = re.compile(r"key|token|secret|passw(?:or)?d", re.I)   # literal alternation on a bounded name: linear
+_KV_VAL_STOP = frozenset("&\"',;")
+REDACT_MAX_CHARS = 1024 * 1024 + 4096   # > every legitimate caller (file.read is capped at 1 MiB); larger input fails closed
 INJECT = re.compile(r"[;&|`]\s*(curl|wget|bash|sh|nc|powershell)\b", re.I)
 CMDS = re.compile(r"\b(curl|wget|bash|sh -c|nc|powershell|rm -rf|eval)\b", re.I)
 _TLDS = frozenset(("com", "io", "net", "org", "dev", "ai", "sh", "xyz", "app", "cloud", "co"))
@@ -96,15 +98,40 @@ def inspect_text(text: str, approved: Optional[tuple] = None) -> Dict:
             "unapproved": [d for d in doms if d not in approved]}
 
 
+def _kv_name_char(c: str) -> bool:
+    return c.isalnum() or c in "_.-"            # == regex [\w.-] (re's \w is str.isalnum() or "_")
+
+
 def _redact(s: Any) -> str:
-    s, out, pos = str(s or ""), [], 0
-    for m in _KV_NAME.finditer(s):
-        if m.start() < pos or not _KV_WORD.search(m.group(0)):
+    """Redact `name<ws>[=:]<ws>value` where name contains key/token/secret/passw(or)d, then SECRET tokens.
+    Scanner, not regex: runs are disjoint and each character is visited a constant number of times (<= 3), so O(len)."""
+    s = str(s or "")
+    if len(s) > REDACT_MAX_CHARS:
+        return "[REDACTED: input too large]"      # fail closed: never return unredacted oversized text
+    out, pos, i, n = [], 0, 0, len(s)
+    while i < n:
+        if not _kv_name_char(s[i]):
+            i += 1
             continue
-        v = _KV_VAL.match(s, m.end())
-        if v:
-            out.append(s[pos:m.end()] + v.group(1) + "[REDACTED]")
-            pos = v.end()
+        start = i                                 # a maximal [\w.-] run (the old lookbehind: start of a run)
+        while i < n and _kv_name_char(s[i]):
+            i += 1
+        name_end = j = i
+        while j < n and s[j].isspace():
+            j += 1
+        if j >= n or s[j] not in "=:":
+            continue                              # not followed by \s*[=:] -> not a name; resume after the run
+        if start < pos or not _KV_WORD.search(s[start:name_end]):
+            continue                              # inside an already-redacted value, or not a secret-like name
+        j += 1
+        while j < n and s[j].isspace():
+            j += 1
+        k = j
+        while k < n and not s[k].isspace() and s[k] not in _KV_VAL_STOP:
+            k += 1
+        if k > j:                                 # value must be non-empty (old `[^\s&"',;]+`)
+            out.append(s[pos:name_end] + s[name_end:j] + "[REDACTED]")
+            pos = k
     return SECRET.sub("[REDACTED]", "".join(out) + s[pos:])
 
 

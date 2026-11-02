@@ -99,3 +99,64 @@ How to verify any of them yourself without exposing values: open the commit in G
 fixture/reference used only by tests or docs, and that no deployment config, CI secret or `.env` uses it. If a finding
 ever matches a value used by a real system, treat it as real: rotate it in that system first, then resolve.
 None of the 7 needs rotation. The check stays red until the owner resolves them in the dashboard (98e5694 added none).
+
+---
+
+# Round 3 (uncommitted, awaiting owner approval)
+
+| Alert | Rule | Location | Status |
+|---|---|---|---|
+| #3 | py/clear-text-logging-sensitive-data | backend/scripts/demo_judging.py:79 | **Defensive fix applied**: the line now prints only `len(ins.get("secrets") or [])`. The list was already redacted by the Inspector (no secret was ever printed). Test: `backend/tests/test_demo_logging.py` (3 tests; verified to FAIL against the old line and pass with the fix). |
+| #8 | py/weak-sensitive-data-hashing | backend/app/identity.py:95 (`token_digest`) | **Retained SHA-256 — false positive.** No new evidence of a vulnerability: caller trace, AST scan and runtime probe (672 digest calls, 0 hashed without the minted-token format, 0 passwords hashed) unchanged. Replacing it would invalidate every stored API-key/session digest (see the migration table above). Copilot's suggested SHA-256 replacement NOT applied. 4 "password" sources = 4 paths to this one sink; the source locations themselves are **not verified** (SARIF unavailable). |
+| 2 × HIGH | py/polynomial-redos | backend/app/gateway.py:101 (repeated `-`) and :104 (repeated ` `) | Identified by the owner from the Security tab. **Fixed in round 4** below. |
+
+Nothing dismissed in CodeQL or GitGuardian. Suite at the time of round 3: 321 passed, 1 skipped (see round 4 for the current count). Benchmark unchanged (7/7, 3/3, 0 FP).
+
+Note on #3: the Inspector's `secrets` list holds matched keyword names (`api_key`, `token`, …), `sk-***` masks and any
+`aws_…` identifier, which is printed in full. It never held a `sk-` value. The script now prints only the count.
+
+---
+
+# Round 4 (uncommitted, awaiting owner approval): py/polynomial-redos in `_redact`
+
+**Sinks.** `gateway.py:101` `_KV_NAME.finditer(s)` with `(?<![\w.-])[\w.-]+(?=\s*[=:])` (hyphens), and `:104`
+`_KV_VAL.match(s, pos)` with `(\s*[=:]\s*)[^\s&"',;]+` (spaces). **Sources** (uncontrolled text reaching `_redact`): provenance
+step text (`api.py`, ≤5 000), gate `dest`/`cmd` in BLOCK proof records (≤2 048/4 096), `file.read` content (≤1 MiB),
+LLM reply `explanation`, `/inspect` text before the LLM call (≤100 000), demo scenario text.
+
+**Backtracking.** Without its lookbehind, `[\w.-]+(?=…)` restarts at every position of a hyphen run and rescans to its
+end: O(n²). Measured locally: 40 000 hyphens took 20.5 s. `\s*[=:]\s*` under unanchored search does the same on space runs:
+40 000 spaces took 7.3 s. As deployed, both were linear (the lookbehind admits only run starts and `match` is anchored;
+`_redact` took 3 ms on 40 000 chars). Safety therefore rested on two subtle properties that CodeQL does not model and a
+later edit could silently remove.
+
+**Fix.** The two regexes are replaced by a deterministic single-pass scanner. Name runs are disjoint, the whitespace and
+value after a name are scanned at most once more, and an overlapping name is skipped before its value is scanned, so
+each character is visited a constant number of times: O(n) by construction. `_KV_WORD` (a literal alternation on a name slice)
+is kept. An explicit limit `REDACT_MAX_CHARS` = 1 MiB + 4 KiB, above every legitimate caller (file.read is 1 MiB),
+returns `[REDACTED: input too large]` instead of the text (fail closed). `token_digest()` is untouched.
+
+**Tests (`backend/tests/test_redact_redos.py`, 53).**
+- Output is byte-identical to the old implementation (used as an oracle) on 31 normal and edge inputs (Unicode
+  spaces/letters, Kelvin sign, long s, superscripts) and on 4 000 seeded random strings.
+- Linearity is measured by counting executed lines (deterministic, no wall-clock thresholds) on 8 adversarial shapes
+  (long hyphens, long spaces, mixed): 4× input ⇒ ≤ 4× steps + 50. Two quadratic mutations each FAIL this test: retrying from
+  the next character (as the regex does without its lookbehind) fails the hyphen cases, and rescanning whitespace from
+  every position fails the three space cases.
+- 200 000-char adversarial inputs complete with output identical to the oracle.
+- Exhaustive check over all 1 114 112 code points: `str.isalnum()`/`"_.-"` equals `[\w.-]` and `str.isspace()` equals `\s`
+  (0 mismatches on Python 3.13 and on 3.12, the CI version). A 50 000-case differential run on 3.12 had 0 mismatches.
+- The rest of `_redact` stays linear: `SECRET.sub` measured on adversarial inputs (`sk-` repeats, `aws_` repeats,
+  `key=` + hyphens, `=: ` repeats) is roughly 4× the time for 4× the input.
+- Oversized input fails closed.
+- A full 1 MiB file and the file adapter still redact normally.
+
+**Results.**
+- Full suite: 374 passed, 1 skipped (live Meta API).
+- Benchmark unchanged: 7/7 blocked, 3/3 allowed, 0 FP. Its regenerated evidence files were restored, so there is no
+  churn.
+- bandit (`backend/app`, `backend/scripts`): 31 LOW, 0 Medium/High (unchanged; none in the changed lines).
+- `gitleaks git` (the CI mode): no leaks, including on a simulated commit of these changes in a scratch clone. A `gitleaks dir` scan of the working tree hits only untracked `.next` build output, the
+  ignored benchmark fixture, and `gateway.py:958`, the existing synthetic D1 benchmark case. That last entry's
+  working-tree fingerprint in `.gitleaksignore` (`:886`) was already stale at HEAD (line 931); it is not changed here.
+- CodeQL could not be run locally. Confirmation needs the next CI run.
