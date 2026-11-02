@@ -64,8 +64,11 @@ def read_jailed(root: str, rel: str, limit: int = MAX_FILE_BYTES) -> bytes:
 class HttpAdapter:
     name = "http"
 
+    def __init__(self, approved: Callable[[], tuple] = None):
+        self.approved = approved or netguard.approved_domains   # per-tenant allowlist (never another tenant's)
+
     def __call__(self, params: Dict) -> Dict:
-        chk = netguard.check_http_dest(params["dest"], netguard.approved_domains())
+        chk = netguard.check_http_dest(params["dest"], self.approved())
         if not chk.ok:                                   # re-validated at execution time (policy may have changed)
             raise AdapterError("destination no longer allowed")
         ips = netguard.resolve_public(chk.host)          # all answers validated; NetguardError propagates

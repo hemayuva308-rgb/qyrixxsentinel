@@ -1,0 +1,56 @@
+QYRIX SENTINEL v1.3 — production-hardening validation record
+Date: 2026-11-02 (UTC) · Branch: claude/hopeful-franklin-5ggx72 (uncommitted working tree at time of run, then committed)
+Environment: Linux cloud container, Docker 29.9.2, Python 3.13 (host) / 3.12 (image + locked venv), PostgreSQL 16 (Compose) and
+local PostgreSQL clusters (pytest), Node 22.
+
+1. Backend test suite (host, Python 3.13): 210 passed, 1 skipped (opt-in live Meta Llama test; needs real credentials).
+   evidence/pytest-junit.xml  sha256 cd749baf4cf6b124d906a41e63b77102e67ec8a49ca1a4d0e8e7ddeee51fcfa5
+   Same suite on Python 3.12 against the hash-locked requirements.lock in a clean venv: 208 passed, 1 skipped
+   (run before the two regression tests added in step 3 below).
+   New security acceptance files: test_identity.py (32), test_tenancy.py (15, real PostgreSQL), test_backup.py (6, real PostgreSQL).
+
+2. Dependency audit
+   npm audit (frontend): initially 2 findings (postcss <=8.5.22 nested inside next@15.5.28: GHSA-qx2v-qp2m-jg93, GHSA-6g55-p6wh-862q,
+     GHSA-fxqj-rqcc-2cmp, GHSA-r28c-9q8g-f849). Fixed with package.json "overrides" (next -> postcss 8.5.32, already the top-level
+     version) instead of a breaking Next 16 upgrade. After: "found 0 vulnerabilities". tsc --noEmit clean; production build OK (image).
+   pip-audit --vulnerability-service pypi -r requirements.lock --require-hashes: "No known vulnerabilities found" (25 pinned packages).
+   (osv.dev is not reachable from this environment; the PyPI advisory service was used.)
+
+3. Docker Compose stack (db + backend + frontend, internal-only backend network, Docker secret for the DB password)
+   CAVEAT: Docker Hub returned HTTP 429 for python:3.12-slim on every retry (20/40/80/160 s backoff). The backend image was therefore
+   built FROM the previously validated qyrix-backend image (same python:3.12-slim base layers), re-applying the real Dockerfile steps:
+   pip install --require-hashes -r requirements.lock, fresh app/ + migrations/. Installed versions verified inside the image
+   (fastapi 0.162.0, starlette 1.10.0, pydantic 2.14.2, psycopg 3.3.6, uvicorn 0.54.0). A clean-base rebuild is still to be repeated.
+   The frontend image was built from frontend/Dockerfile unchanged (only the sandbox CA injected at build time).
+   Health: backend=healthy (GET /api/v1/ready) db=healthy frontend=healthy.
+
+   Live E2E (/tmp script, tokens read from a local env file and never printed): 22/22 PASS
+     login exchanges credential for session · credential not stored in cookie · cookie httpOnly + SameSite=Strict ·
+     proxied status via session (tenant=default, persistence=postgres) · gate evaluate through proxy · proxy CSRF guard ·
+     logged-out session cannot be replayed · invalid credential refused · create tenants acme/globex · platform has no tenant data
+     access · tenant acme evaluates · globex cannot execute acme grant · globex chain holds no acme decision (only its own refused
+     attempt) · acme chain holds its own decision · tenant API-key console session · RLS hides acme rows from globex in the live DB ·
+     metrics with metrics token · metrics refuses tenant credentials · ready · backend logs contain security events ·
+     backend logs contain no tokens/keys/sessions.
+
+   Defects found ONLY by the live stack (fixed + regression-tested):
+     a) tenant workspace created under the read-only image filesystem => HTTP 500 on first tenant request.
+        Fix: QYRIX_TENANT_WORKSPACE_ROOT (Compose volume /workspaces); any context-build failure => 503 TENANT_CONTEXT_UNAVAILABLE.
+        Test: test_tenancy.py::test_unbuildable_tenant_context_fails_closed
+     b) duplicate tenant creation => HTTP 500 (AuthError raised inside the DB transaction runner was mapped to PersistenceError).
+        Fix: raise outside the runner. Test: test_tenancy.py::test_duplicate_and_unknown_tenants_are_clean_errors
+     c) status/export reported tenant "production" (internal context name) instead of "default". Fixed; same test.
+     d) frontend healthcheck failed: Next standalone binds to $HOSTNAME. Fix: HOSTNAME=0.0.0.0 in Compose.
+
+   Judging workflow through the new session login (backend/scripts/demo_judging.py): ALL CHECKS PASSED.
+   Route sweep: / /features /how-it-works /forensic-lab /security /pricing /docs /contact /privacy /terms /login => 200;
+   /dashboard, /forensic => 307 to /login without a session. Headers: CSP, X-Frame-Options DENY, Referrer-Policy no-referrer.
+
+4. Backup / restore drill on the Compose stack
+   scripts/backup.sh => backups/<ts>/{db.dump, chain.tar, manifest.json}, directory and files mode 700/600.
+   Disaster: DROP SCHEMA public CASCADE + wipe of the chain volume. Backend came back "healthy" as an EMPTY fresh install
+   (risk T29: total data loss is not alarmed). scripts/restore.sh <dir> --yes => backend healthy;
+   chain head before f01ac3803fcc… == after; proof_records rows before 3 == after 3 => RESTORE-MATCH.
+   Found: backups/ was not git-ignored => added to .gitignore.
+
+5. Secret scan of all tracked + new files for every generated token/password of this run and generic key patterns: 0 hits.

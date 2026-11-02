@@ -20,14 +20,11 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import unquote
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from app import adapter as adapters, anchor, netguard, persistence, proof, provenance as prov
-from app.auth import principal, require_admin
 
-router = APIRouter(prefix="/api/v1/sentinel", tags=["sentinel"], dependencies=[Depends(principal)])
-tools_router = APIRouter(prefix="/api/v1/tools", tags=["tools"], dependencies=[Depends(principal)])
 TOOLS = ("http", "file.read")            # `shell` is recognised but never executable in this MVP (R8)
 SECRET = re.compile(r"(sk-[a-z]+-\w{3,}|api[_-]?key|secret|token|password|aws_\w+|\.env)", re.I)
 # key=value redaction. Linear-time by construction (names are only tried at word starts); the previous single regex
@@ -330,6 +327,8 @@ def _load() -> None:
         PROD.state["persistence"] = "down"
         return
     if dsn:                              # durable mode: any problem => persistence 'down' => Gate blocks (R17)
+        from app import identity
+        identity.use_store(identity.PgStore(persistence.shared_connection(dsn)))   # keys/sessions fail closed if DB down
         try:
             attach_persistence(PROD, persistence.PgPersistence(dsn))
         except Exception:
@@ -738,120 +737,6 @@ class Step(BaseModel):
     parents: List[Union[int, str]] = Field(default_factory=list, max_length=50)
 
 
-@router.post("/inspect")
-def inspect_ep(b: Text):
-    return {**inspect_text(b.text), "classification": classify(b.text)}
-
-
-@router.post("/provenance/step")
-def step_ep(b: Step):
-    if _persistence_down(PROD):
-        raise HTTPException(503, "PERSISTENCE_UNAVAILABLE")
-    try:
-        return prov.add_step(b.source, b.label, _redact(b.text), [str(p) for p in b.parents])   # redact before storage
-    except Exception as e:
-        if PROD.db is not None:
-            PROD.state["persistence"] = "down"
-            raise HTTPException(503, "PERSISTENCE_UNAVAILABLE")
-        raise
-
-
-@router.get("/provenance")
-def prov_ep():
-    return {"limit": prov.MEMORY_LIMIT, "steps": prov.all_steps()}
-
-
-@router.post("/gate/evaluate")
-def gate_ep(a: Action):
-    if a.execute:
-        raise HTTPException(400, "EXECUTE_MOVED: evaluate first, then POST /api/v1/tools/execute with gate_evaluation_id and grant_id")
-    return evaluate(a)
-
-
-@tools_router.post("/execute")
-async def execute_ep(request: Request):
-    try:
-        body = json.loads(await request.body() or b"null")
-    except ValueError:
-        raise HTTPException(400, "INVALID_JSON")
-    try:
-        return execute_grant(body)
-    except ExecRefused as e:
-        raise HTTPException(e.status, e.code)
-
-
-@router.post("/grants/{gid}/revoke")
-def revoke_ep(gid: str, who: str = Depends(require_admin)):
-    """Human (admin) revocation of an unused grant. Recorded in the proof chain."""
-    try:
-        return revoke_grant(gid[:64], who)
-    except ExecRefused as e:
-        raise HTTPException(e.status, e.code)
-
-
-@router.get("/proofs")
-def proofs_ep():
-    with _lock:
-        return {"chain": list(_chain), "verify": verify_chain()}
-
-
-@router.get("/proofs/verify")
-def verify_ep():
-    return verify_chain()
-
-
-@router.get("/proofs/export")
-def export_ep():
-    """Offline-verifiable bundle. Contains only redacted proof records (no raw secrets are ever recorded)."""
-    with _lock:
-        chain, anchors = list(_chain), list(PROD.anchors)
-    v = verify_chain()
-    return {"format": "qyrix-proof-bundle/v2", "exported_at": datetime.now(timezone.utc).isoformat(),
-            "anchor_status": v.get("anchor_status"), "chain": chain, "anchors": anchors, "verify": v}
-
-
-@router.post("/proofs/anchor")
-def anchor_ep(_: str = Depends(require_admin)):
-    try:
-        return create_anchor()
-    except anchor.AnchorError as e:
-        code = {"ANCHOR_NOT_CONFIGURED": 409, "EMPTY_PROOF_BUNDLE": 422, "PROOF_DEGRADED": 409, "ANCHOR_STALE": 409}.get(e.code, 503)
-        raise HTTPException(code, "%s: %s" % (e.code, e.detail) if e.detail else e.code)
-
-
-@router.get("/proofs/anchors")
-def anchors_ep():
-    p = anchor.problem()
-    with _lock:
-        return {"configured": p is None, "problem": p, "can_verify": anchor.can_verify(),
-                "tsa_url": anchor.config()["url"], "anchors": [{k: v for k, v in a.items() if k != "token_b64"} for a in PROD.anchors]}
-
-
-@router.post("/proofs/verify-bundle")
-async def verify_bundle_ep(request: Request):
-    raw = await request.body()
-    if len(raw) > 20 * 1024 * 1024:
-        raise HTTPException(413, "bundle too large")
-    try:
-        bundle = json.loads(raw or b"null")
-    except ValueError:
-        raise HTTPException(400, "INVALID_JSON")
-    try:
-        return proof.verify_bundle_with_anchors(bundle, _cached_verify_token if anchor.can_verify() else None)
-    except proof.EmptyBundle:
-        raise HTTPException(422, "EMPTY_PROOF_BUNDLE")
-
-
-@router.post("/proofs/tamper")
-def tamper_ep():
-    """Tamper-evidence demo on a COPY: the real chain is never modified."""
-    with _lock:
-        c = copy.deepcopy(_chain)
-    if c:
-        c[0]["verdict"] = "ALLOW" if c[0]["verdict"] == "BLOCK" else "BLOCK"
-    return {**proof.verify_records(c), "simulated": True}
-
-
 class ApprovalReq(BaseModel):
     tool: str = Field("http", max_length=32)
     method: str = Field("GET", max_length=10)
@@ -912,28 +797,6 @@ def decide_approval(aid: str, decision: str, who: str, ctx: Optional[GateContext
         return _public_appr(x)
 
 
-@router.post("/approvals")
-def appr_create(b: ApprovalReq):
-    try:
-        return create_approval(b)
-    except ExecRefused as e:
-        raise HTTPException(e.status, e.code)
-
-
-@router.get("/approvals")
-def appr_list():
-    with _lock:
-        return {"approvals": [_public_appr(x) for x in list(_appr.values())[::-1]]}
-
-
-@router.post("/approvals/{aid}/{decision}")
-def appr_decide(aid: str, decision: str, who: str = Depends(require_admin)):
-    try:
-        return decide_approval(aid, decision, who)
-    except ExecRefused as e:
-        raise HTTPException(e.status, e.code)
-
-
 def _reset_state(ctx: Optional[GateContext] = None) -> None:
     ctx = ctx or PROD
     ctx.prov.reset(); ctx.appr.clear(); ctx.chain.clear(); ctx.lat.clear(); ctx.ext["calls"] = 0
@@ -946,15 +809,6 @@ def _reset_state(ctx: Optional[GateContext] = None) -> None:
     if ctx.db is not None:
         ctx.db.reset()                                # demo/eval mode only (endpoint is guarded)
         ctx.state["persistence"] = "postgres"
-
-
-@router.post("/reset")
-def reset_ep(_: str = Depends(require_admin)):
-    if not _demo_enabled():
-        raise HTTPException(403, "reset disabled (evidence is append-only); set QYRIX_ENABLE_DEMO_RESET=1 for demo/eval only")
-    with _lock:
-        _reset_state()
-    return {"reset": True}
 
 
 def _is_decision(r: Dict) -> bool:
@@ -978,11 +832,6 @@ def status_snapshot(ctx: GateContext, role: Optional[str]) -> Dict:
                 "chain_head": v.get("head"), "chain_status": v["status"], "anchor_status": v.get("anchor_status", "UNANCHORED"),
                 "persistence": ctx.state["persistence"], "anchors": len(ctx.anchors), "role": role,
                 "demo_mode": _demo_enabled(), "recent": ctx.chain[-6:][::-1]}
-
-
-@router.get("/status")
-def status_ep(who: str = Depends(principal)):
-    return status_snapshot(PROD, who)
 
 
 def _mk(label, text, parents=None, ctx: Optional[GateContext] = None):
@@ -1038,16 +887,6 @@ def run_benchmark(ctx: GateContext) -> Dict:
                            {"q": "Approval after action change -> block?", "holds": "R4_APPROVAL_SCOPE_MISMATCH" in g("L2")["rules"]},
                            {"q": "Transformed + delayed -> provenance retained?", "holds": all(g(k)["verdict"] == "BLOCK" for k in ("T1", "T2", "L1"))},
                            {"q": "SAFE tasks still complete when attacks blocked?", "holds": all(x["ok"] for x in rows)}]}
-
-
-@router.post("/benchmark")
-def benchmark_ep(_: str = Depends(require_admin)):
-    """Evaluation harness (10 cases from the plan). It resets state, so it is demo/eval-mode only."""
-    if not _demo_enabled():
-        raise HTTPException(403, "benchmark resets state; set QYRIX_ENABLE_DEMO_RESET=1 for demo/eval only")
-    with _lock:
-        _reset_state()
-    return run_benchmark(PROD)
 
 
 _load()

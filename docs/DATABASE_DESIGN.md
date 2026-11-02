@@ -1,8 +1,28 @@
 # QYRIX SENTINEL — Database Design
 
-> **Status: single-tenant PostgreSQL persistence is IMPLEMENTED** (`backend/migrations/001_core_persistence.sql`,
-> `backend/app/persistence.py`, tests in `backend/tests/test_persistence.py`). Section 0 describes it.
-> Section 2 is the **multi-tenant target** (NOT_IMPLEMENTED; see SAAS_PRODUCTION_REQUIREMENTS.md).
+> **Status: tenant-scoped PostgreSQL persistence is IMPLEMENTED** (`backend/migrations/001_core_persistence.sql`,
+> `002_tenancy_identity.sql`, `backend/app/persistence.py`, `backend/app/identity.py`; tests in `test_persistence.py`,
+> `test_tenancy.py`, `test_backup.py`). Sections 0 and 0a describe it. Section 2 is the earlier PLANNED design, kept for
+> reference; where it differs, sections 0/0a are authoritative.
+
+## 0a. Tenancy and identity (migration 002)
+| Table / object | Purpose and guarantees |
+|---|---|
+| `tenants` | `id` (`^[a-z0-9][a-z0-9-]{2,39}$`), name, `approved_domains text[]` (NULL/empty = deny all for non-default tenants), `disabled_at`. Seeds `default`. |
+| `api_keys` | `key_hash` (SHA-256, unique) — plaintext never stored; role CHECK over the 7 roles; `expires_at`, `revoked_at`, `last_used_at`. |
+| `sessions` | `id_hash` (SHA-256 of `qss_…`), tenant, role, `cred_id`, `cred_fp` (env-token fingerprint ⇒ rotation kills sessions), `expires_at`, `last_seen_at`, `revoked_at`. |
+| `tenant_id` columns | `NOT NULL DEFAULT 'default'` on provenance_steps, approvals, gate_evaluations, grants, proof_records (PK `(tenant_id, n)`), proof_anchors. |
+| role `qyrix_app` | `NOLOGIN NOSUPERUSER NOBYPASSRLS`. SELECT/INSERT on provenance, proofs, anchors; SELECT/INSERT/UPDATE on approvals, evaluations, grants. **No DELETE; no access to tenants/api_keys/sessions.** |
+| RLS policy `tenant_isolation` | `USING / WITH CHECK (tenant_id = current_setting('qyrix.tenant_id', true))`, `ENABLE` + `FORCE`. No tenant set ⇒ zero rows. |
+| `qyrix_append_only()` | DELETE allowed only for a non-`qyrix_app` user with `qyrix.allow_reset = 'on'` (demo reset); UPDATE of proof rows never. |
+
+Every data statement runs in a transaction that first does `SET LOCAL ROLE qyrix_app` and
+`set_config('qyrix.tenant_id', <tenant>, true)`, **and** filters `tenant_id = <tenant>` explicitly (defence in depth: either
+layer alone blocks cross-tenant rows — tested with raw SQL). Identity tables are accessed as the table owner by `PgStore`.
+
+**Operational notes.** The application connects as the database owner and *drops* to `qyrix_app` per transaction; a
+separate login role for migrations vs runtime is a recommended next step. Backups: `scripts/backup.sh` (pg_dump custom
+format, DB first, then chain files, SHA-256 manifest); restores re-verify the DB proof mirror against the chain on start.
 
 ## 0. Implemented schema (single tenant)
 | Table | Key fields | Lifecycle / guarantees |

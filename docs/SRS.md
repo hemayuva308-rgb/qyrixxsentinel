@@ -12,7 +12,7 @@ Tests: `backend/tests/` (`test_sentinel.py`=S, `test_hardening.py`=H, `test_v12_
 | FR-INS-2 | Normalise obfuscation (base64, hxxp, [.], %-encoding) | `gateway.norm` | benchmark T1/T2 | TESTED |
 | FR-INS-3 | Redact secrets before storage/logging/AI (9.1) | `_redact`, `step_ep`, `_prove`, `classify` | S `test_raw_secret_never_stored_in_proof`, H `test_only_redacted_text_is_sent_to_ai`, V `test_provenance_text_is_redacted_before_storage` | TESTED |
 | FR-INS-4 | Size limits | pydantic `max_length` | — | IMPLEMENTED |
-| FR-INS-5 | Reviewer-only inspection upload / Integrator 403 (11) | — | — | NOT IMPLEMENTED (no such roles) |
+| FR-INS-5 | Reviewer-only inspection upload / Integrator 403 (11) | `identity.PERMISSIONS["inspect"]`, `api.inspect_ep` | `test_identity.py::test_integrator_inspection_upload_is_forbidden`, `test_rbac_matrix` | TESTED |
 | FR-PRV-1 | TRUSTED/UNTRUSTED/UNVERIFIED, session starts UNVERIFIED (9.2) | `provenance.normalize_label` | V `test_step_ids_are_uuid4_and_labels_canonical`, S `test_unknown_label_never_becomes_trusted` | TESTED |
 | FR-PRV-2 | UUID v4 lineage | `ProvenanceStore.add_step` | V same | TESTED |
 | FR-PRV-3 | Child trust ≤ ancestor; never raised | `lowest()` | V `test_child_trust_never_exceeds_ancestor` | TESTED |
@@ -51,7 +51,7 @@ Tests: `backend/tests/` (`test_sentinel.py`=S, `test_hardening.py`=H, `test_v12_
 | FR-WEB-2 | Dashboard at `/dashboard`, forensic at `/forensic`, login preserved, dark theme preserved | `src/app/(app)` | Playwright authenticated run | IMPLEMENTED |
 | FR-WEB-3 | Original logo SVG + favicon | `public/brand`, `app/icon.svg` | — | IMPLEMENTED |
 | FR-WEB-4 | Reduced motion, responsive, keyboard focus | `globals.css`, components | sweep at 390/820/1440 px, no overflow | IMPLEMENTED (no automated a11y suite) |
-| FR-SAAS-1 | Organisations, users, invitations, RBAC roles, tenant isolation (8) | — | — | NOT IMPLEMENTED |
+| FR-SAAS-1 | Organisations, users, invitations, RBAC roles, tenant isolation (8) | `identity.py`, `tenancy.py`, `api.py`, `002_tenancy_identity.sql` | `test_identity.py`, `test_tenancy.py` (real PostgreSQL) | PARTIAL — tenants, 7 roles, API keys, sessions, isolation + RLS TESTED; human users, invitations, SSO/MFA NOT IMPLEMENTED |
 | FR-SAAS-2 | Usage metering, quotas, plans enforced server-side | — | — | NOT IMPLEMENTED |
 | FR-SAAS-3 | Payment integration | — | — | NOT IMPLEMENTED (pricing labelled proposed) |
 | FR-PDF-1 | Forensic report export (PDF) | JSON bundle export only | — | PARTIAL |

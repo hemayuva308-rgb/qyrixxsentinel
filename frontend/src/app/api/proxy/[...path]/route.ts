@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
+import { BACKEND, clientId } from "@/lib/backend";
 
-// Same-origin proxy: browser never sees the API token and the API needs no CORS.
+// Same-origin proxy: the browser holds only an httpOnly server-side session cookie, never the API credential, and the API needs no CORS.
 async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
   const rel = path.join("/");
@@ -11,11 +11,11 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] 
     if (req.headers.get("x-qs-csrf") !== "1" || (o && new URL(o).host !== req.headers.get("host")))
       return NextResponse.json({ detail: "csrf check failed" }, { status: 403 });
   }
-  const token = req.cookies.get("qs_token")?.value;
+  const token = req.cookies.get("qs_session")?.value;
   if (!token) return NextResponse.json({ detail: "not authenticated" }, { status: 401 });
   const r = await fetch(`${BACKEND}/api/v1/${rel}${req.nextUrl.search}`, {
     method: req.method,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(clientId(req) ? { "x-qyrix-client": clientId(req) } : {}) },
     body: req.method === "GET" ? undefined : await req.text(),
     cache: "no-store", signal: AbortSignal.timeout(30000),
   }).catch(() => null);

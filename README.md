@@ -1,4 +1,4 @@
-# QYRIX SENTINEL — Trust-to-Execution Guard (v1.2, controlled beta)
+# QYRIX SENTINEL — Trust-to-Execution Guard (v1.3, controlled beta — not production-ready for multi-customer use)
 
 **Secure every AI action. Before execution.**
 A deterministic, default-deny checkpoint between AI agents and their tools. It inspects what the agent read, tracks the
@@ -14,15 +14,15 @@ Inspect → Establish Trust → Evaluate → Authorize or Block → Execute Safe
 ## What is in this repository
 | Part | Path |
 |---|---|
-| Backend (FastAPI): Inspector, Provenance, Gate, controlled adapter, Proof, RFC 3161 anchoring, PostgreSQL persistence, public demo | `backend/app/`, `backend/migrations/` |
-| Tests (155 passing, 1 opt-in live test skipped; incl. real PostgreSQL and a real local TSA) | `backend/tests/` |
+| Backend (FastAPI): Inspector, Provenance, Gate, controlled adapter, Proof, RFC 3161 anchoring, PostgreSQL persistence, identity (roles, API keys, sessions), tenant isolation (RLS), metrics, public demo | `backend/app/`, `backend/migrations/` |
+| Tests (210 passing, 1 opt-in live test skipped; incl. real PostgreSQL, two-tenant isolation, backup/restore and a real local TSA) | `backend/tests/` |
 | Benchmark · offline proof verifier · judging workflow · Llama live check · local test TSA | `backend/scripts/run_benchmark.py`, `verify_proof.py`, `demo_judging.py`, `llama_live_check.py`, `local_tsa.py` |
 | Public light-theme website (`/`, features, how-it-works, pricing, security, forensic-lab, contact, docs) | `frontend/src/app/(site)/` |
 | Authenticated dark product (`/login`, `/dashboard`, `/forensic`) | `frontend/src/app/(app)/` |
 | Brand assets (SVG mark, lockups, favicon) | `frontend/public/brand/`, `frontend/src/app/icon.svg` |
 | Documentation · security gates · threat model · evidence | `docs/`, `security/`, `evidence/` |
 
-Start with `docs/FINAL_SUBMISSION_READINESS_REPORT.md` (current status of everything), `docs/QYRIX_SENTINEL_FINAL_MASTER_PLAN.md`
+Start with `docs/PRODUCTION_READINESS.md` (production-readiness classification), `docs/ORIGINAL_PLAN_ASSESSMENT.md` (hackathon plan completion), `docs/SECURITY_ACCEPTANCE_TESTS.md`, `docs/DEPENDENCY_AND_FAILURE_MODES.md`, `docs/FINAL_SUBMISSION_READINESS_REPORT.md` (v1.2 submission status), `docs/QYRIX_SENTINEL_FINAL_MASTER_PLAN.md`
 (authoritative spec), `docs/DEMO_SCRIPT.md` + `DEMO_NARRATION.md` + `DEMO_RECORDING_CHECKLIST.md` (3-minute demo) and `docs/SUBMISSION_CHECKLIST.md`.
 
 ## Results (from `evidence/`)
@@ -31,14 +31,14 @@ Start with `docs/FINAL_SUBMISSION_READINESS_REPORT.md` (current status of everyt
 | 10-case benchmark (3 safe / 3 direct / 2 transformed / 2 delayed) | 7/7 attacks blocked · 0/3 false positives · 3/3 safe tasks completed · 0 external calls · sub-ms average |
 | Proof chain | intact; `PARTIAL_UNANCHORED` in the default deployment (no TSA configured) — `PASS` only with a verified RFC 3161 anchor on the head |
 | Persistence | PostgreSQL: records survive a backend restart; grants single-use, revocable, expiring; DB outage fails closed (Docker-verified) |
-| Tests | 155 passed, 1 skipped · typecheck + production build pass · Docker Compose validated |
+| Tests | 210 passed, 1 skipped · typecheck + production build pass · Docker Compose validated (22/22 live E2E incl. two tenants) |
 | Meta Llama | integrated, advisory only, failure paths tested on real sockets — **NOT LIVE VERIFIED** (no credentials / provider blocked here) |
 
 ## Run with Docker Compose
 ```bash
 cp .env.example .env      # replace both CHANGE_ME tokens:  openssl rand -hex 32
 mkdir -p secrets && openssl rand -hex 32 > secrets/db_password && chmod 644 secrets/db_password   # PostgreSQL password (Docker secret, git-ignored)
-docker compose up --build # db + backend + frontend · http://127.0.0.1:3000 (sign in at /login with the admin or agent token)
+docker compose up --build # db + backend + frontend · http://127.0.0.1:3000 (sign in at /login with the admin token or an API key)
 ```
 Only the web container is published (on 127.0.0.1). The API sits on an **internal-only network with no internet egress**; the Gate
 can still ALLOW, but nothing can leave. For real outbound tools or Meta Llama calls, opt in:
@@ -46,6 +46,20 @@ can still ALLOW, but nothing can leave. For real outbound tools or Meta Llama ca
 docker compose -f docker-compose.yml -f docker-compose.egress.yml up -d --build
 ```
 Set `QYRIX_ENABLE_DEMO_RESET=1` only for demo/evaluation environments (it enables reset and the benchmark, which wipe evidence).
+
+## Operations (v1.3)
+* **Sign-in** — `/login` exchanges an operator token or a tenant API key for a server-side session (`qss_…`, 8 h absolute /
+  30 min idle). The browser holds only that session in an httpOnly cookie; logout revokes it on the server.
+* **API keys and roles** — `POST /api/v1/sentinel/keys {"role": "approver", "name": "alice"}` (owner/admin). Roles: owner, admin,
+  security_reviewer, approver, auditor, integrator, agent (matrix in `docs/API_SPECIFICATION.md`). Keys are shown once and stored hashed.
+* **Multi-tenancy (off by default)** — set `QYRIX_MULTI_TENANT=1` and `QYRIX_PLATFORM_TOKEN`; the platform operator creates tenants
+  (`POST /api/v1/platform/tenants`) and bootstrap keys but cannot read tenant data. Each tenant gets its own chain, workspace,
+  deny-all destination allowlist and PostgreSQL row-level-security view. Refused without PostgreSQL.
+* **Monitoring** — `GET /api/v1/ready` (used by the Compose health check), `GET /api/v1/metrics` with `QYRIX_METRICS_TOKEN`
+  (Prometheus text), JSON security events on the backend's stdout.
+* **Backup / restore** — `scripts/backup.sh` (database first, then the proof chain volume, hash manifest; store it encrypted and
+  off-host), `scripts/restore.sh backups/<timestamp> --yes`. The backend re-verifies the restored chain and fails closed on mismatch.
+* **Dependencies** — Python installs from the hash-pinned `backend/requirements.lock`; tests need `requirements-dev.txt`.
 
 ## Run without Docker
 ```bash
@@ -66,7 +80,7 @@ Then follow `docs/DEMO_SCRIPT.md` in the browser (homepage demo, `/forensic-lab`
 
 ## Test, benchmark, verify
 ```bash
-cd backend && pip install -r requirements.txt && python -m pytest -q
+cd backend && pip install -r requirements-dev.txt && python -m pytest -q
 cd backend && python scripts/run_benchmark.py --out ../evidence      # exact 10 cases, writes evidence + hashes
 cd backend && python scripts/verify_proof.py ../evidence/benchmark-proof-bundle.json
 cd frontend && npm ci && npx tsc --noEmit && npm run build
@@ -86,7 +100,9 @@ delayed). Each request runs the **real Gate** in a fresh isolated context with a
 adapter: no network, no files, no commands, nothing written to the production audit chain. It is labelled **SIMULATED DEMO**.
 
 ## Known limits (do not claim beyond this)
-- **Single tenant.** No organisations, tenant isolation, usage metering, quotas or billing. Pricing on the website is *proposed*.
+- **Not production-ready for paying multi-tenant customers** — see `docs/PRODUCTION_READINESS.md`. Tenant isolation, roles, API keys and
+  sessions are implemented and tested, but there is no SSO/MFA, no external penetration test, rate limits are per process, backups are not
+  encrypted by the tooling, and total data loss is not alarmed. No usage metering, quotas or billing. Pricing on the website is *proposed*.
 - One backend process per database. Without database settings (`QYRIX_DB_HOST` + password file, or `QYRIX_DATABASE_URL`; non-Docker default)
   state is in memory and lost on restart. The database password is only ever read from a file (Docker secret), never from configuration.
 - Anchoring is implemented and tested against a local TSA, but **not verified with a public TSA**; without a configured TSA the chain

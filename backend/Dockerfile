@@ -1,9 +1,10 @@
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN useradd --uid 10001 --create-home qyrix && mkdir -p /data /srv/workspace && chown qyrix /data /srv/workspace
+RUN useradd --uid 10001 --create-home qyrix && mkdir -p /data /srv/workspace /workspaces && chown qyrix /data /srv/workspace /workspaces
 WORKDIR /srv
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock .
+# fully pinned + hash-verified dependency set (supply-chain integrity); regenerate from requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY app ./app
 COPY migrations ./migrations
 COPY workspace ./workspace

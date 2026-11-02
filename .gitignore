@@ -37,3 +37,6 @@ Thumbs.db
 dist/
 build/
 *.zip
+
+# operational backups contain key hashes, sessions and audit data: never commit
+backups/

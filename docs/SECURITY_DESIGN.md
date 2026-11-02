@@ -1,4 +1,4 @@
-# QYRIX SENTINEL — Security Design (as implemented, v1.2)
+# QYRIX SENTINEL — Security Design (as implemented, v1.3)
 
 ## 1. Principles
 1. **Prevention before execution.** A tool action runs only after a deterministic ALLOW, a recorded proof, and a valid single-use grant.
@@ -82,6 +82,24 @@ The database password is never in configuration: Docker Compose mounts it as the
 for PostgreSQL, `/run/secrets/db_password` for the backend); missing, empty or `CHANGE_ME` secrets are refused (fail closed). Proof mirror and anchors are append-only (trigger). Tested on real PostgreSQL:
 restart (incl. SIGKILL of a real uvicorn process), replay across processes, expiry, revocation, forged rows, outage + recovery.
 
+## 7b. Identity, authorization and tenancy (v1.3)
+* **Authentication** — env operator tokens (≥ 24 chars, placeholders refused, constant-time compare), tenant API keys
+  (`qsk_` + 256-bit random, SHA-256 stored, optional expiry, revocable), console sessions (`qss_`, hash stored,
+  8 h absolute / 30 min idle, revoked on logout, on key revocation, on tenant disable and on operator-token rotation).
+* **Authorization** — permission checks in FastAPI dependencies on every route (`require(perm)`); 7 roles; the
+  platform operator manages tenants but holds no tenant permission. Accountability fields (`requested_by`,
+  `decided_by`, `revoked_by`) come from the principal. Key minting is capped at the creator's grant ceiling.
+* **Tenant isolation** — tenant derived only from the credential; per-tenant `GateContext`; tenant filter in every
+  SQL statement plus PostgreSQL RLS under a least-privilege role; non-default tenants start with a deny-all
+  destination allowlist and their own workspace. Multi-tenancy is OFF by default and refused without PostgreSQL.
+* **Abuse controls** — per-credential request rate limit, per-client and global authentication-failure throttles
+  (429). Client identity comes from `X-Qyrix-Client` only when `QYRIX_TRUST_CLIENT_HEADER=1` (set in Compose, where
+  only the frontend can reach the API). Limits are per process.
+* **Monitoring** — `/api/v1/ready` (orchestrator health), token-protected `/api/v1/metrics`, JSON security events
+  with secret-bearing fields removed by construction (tested for tokens, keys, sessions, secrets, destinations).
+* **Fail closed** — identity store errors ⇒ 503; tenant context build errors ⇒ 503 `TENANT_CONTEXT_UNAVAILABLE`;
+  persistence down ⇒ R17 for that tenant only.
+
 ## 8. AI minimisation
 Redacted and bounded (4,000 chars) input sent as JSON data under a fixed system prompt, temperature 0, no tools; reply must be
 exactly `{label, explanation}`; `-contributor` models and non-HTTPS endpoints refused; provider errors fall back to a labelled
@@ -111,6 +129,6 @@ redacted instruction text; per-client (from `x-qyrix-demo-client`, set by the fr
 kill switch `QYRIX_PUBLIC_DEMO=0`. Tested: production chain unchanged after all scenarios; no DNS or LLM call.
 
 ## 11. Known gaps (do not claim)
-Single tenant (one backend process per database); in-memory state when no database is configured; no per-destination network allowlist when the egress override is enabled; TLS SNI with
+One backend process per database (rate limits and contexts are in-process); in-memory state when no database is configured; no per-destination network allowlist when the egress override is enabled; TLS SNI with
 pinned IP not verified live; DNS has no explicit timeout; broad secret regex; CSP allows inline scripts; public-TSA anchoring not verified; Meta Llama not live-verified;
-no third-party audit or penetration test.
+no third-party audit or penetration test; no MFA/SSO for operators; backups not encrypted by the tooling; empty-state data loss not alarmed.

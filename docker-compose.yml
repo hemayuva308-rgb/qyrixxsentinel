@@ -28,6 +28,16 @@ services:
       QYRIX_TSA_CA_FILE: ${QYRIX_TSA_CA_FILE:-}
       QYRIX_ADMIN_TOKEN: ${QYRIX_ADMIN_TOKEN:?set in .env}
       QYRIX_AGENT_TOKEN: ${QYRIX_AGENT_TOKEN:?set in .env}
+      QYRIX_PLATFORM_TOKEN: ${QYRIX_PLATFORM_TOKEN:-}        # tenant lifecycle only; no tenant data access. Empty = disabled
+      QYRIX_METRICS_TOKEN: ${QYRIX_METRICS_TOKEN:-}          # GET /api/v1/metrics bearer. Empty = endpoint disabled
+      QYRIX_MULTI_TENANT: ${QYRIX_MULTI_TENANT:-0}           # 1 = allow non-default tenants (requires PostgreSQL)
+      QYRIX_SESSION_TTL_SECONDS: ${QYRIX_SESSION_TTL_SECONDS:-28800}
+      QYRIX_SESSION_IDLE_SECONDS: ${QYRIX_SESSION_IDLE_SECONDS:-1800}
+      QYRIX_RATE_LIMIT_PER_MIN: ${QYRIX_RATE_LIMIT_PER_MIN:-1200}
+      QYRIX_AUTH_FAIL_PER_MIN: ${QYRIX_AUTH_FAIL_PER_MIN:-20}
+      QYRIX_AUTH_FAIL_GLOBAL_PER_MIN: ${QYRIX_AUTH_FAIL_GLOBAL_PER_MIN:-300}
+      QYRIX_TENANT_WORKSPACE_ROOT: /workspaces               # writable; one subdirectory per tenant
+      QYRIX_TRUST_CLIENT_HEADER: "1"                         # the API is reachable only from our frontend (internal network)
       QYRIX_APPROVED_DOMAINS: ${QYRIX_APPROVED_DOMAINS:-}
       QYRIX_ENABLE_DEMO_RESET: ${QYRIX_ENABLE_DEMO_RESET:-0}
       QYRIX_APPROVAL_TTL_SECONDS: ${QYRIX_APPROVAL_TTL_SECONDS:-900}
@@ -39,12 +49,18 @@ services:
       META_MODEL: ${META_MODEL:-}
       BASETEN_API_KEY: ${BASETEN_API_KEY:-}
       BASETEN_MODEL: ${BASETEN_MODEL:-}
-    volumes: ["chain:/data"]
+    volumes: ["chain:/data", "workspaces:/workspaces"]
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     networks: [internal]
+    healthcheck:                         # readiness = proof chain valid, gate not degraded, database reachable
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
   frontend:
     build:
       context: ./frontend
@@ -52,9 +68,16 @@ services:
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
     environment:
       BACKEND_URL: http://backend:8000
+      HOSTNAME: 0.0.0.0                  # Next standalone binds to $$HOSTNAME; 0.0.0.0 lets the healthcheck use loopback
       QYRIX_COOKIE_SECURE: ${QYRIX_COOKIE_SECURE:-0}
     ports: ["127.0.0.1:3000:3000"]
-    depends_on: [backend]
+    depends_on: { backend: { condition: service_healthy } }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -65,4 +88,4 @@ secrets:
 networks:
   internal: { internal: true }          # no egress
   edge: {}
-volumes: { chain: {}, pgdata: {} }
+volumes: { chain: {}, pgdata: {}, workspaces: {} }

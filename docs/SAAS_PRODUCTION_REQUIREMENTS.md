@@ -1,6 +1,11 @@
 # QYRIX SENTINEL — Multi-tenancy, usage metering and billing: production requirements
 
-**Status: NOT_IMPLEMENTED (by decision).** This build is a single-tenant controlled beta. Nothing below exists in code;
+> **v1.3 status update (2026-11-02):** tenancy, the 7-role model, hashed API keys, server-side sessions, rate limiting,
+> per-tenant chains/workspaces/allowlists and PostgreSQL row-level security are now IMPLEMENTED and tested; see
+> `docs/PRODUCTION_READINESS.md` for the current classification. Usage metering, quotas and billing remain a separate,
+> NOT IMPLEMENTED phase. The "Hackathon build (now)" column below describes v1.2.
+
+**Status as written for v1.2 (superseded for tenancy and identity by the note above):** that build was a single-tenant controlled beta. Nothing below exists in code;
 this document defines what production SaaS needs so it can be built without destabilising the hackathon submission.
 
 ## 1. Hackathon readiness vs production SaaS readiness

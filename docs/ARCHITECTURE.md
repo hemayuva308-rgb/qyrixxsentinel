@@ -1,4 +1,4 @@
-# QYRIX SENTINEL — Architecture (as implemented, v1.2)
+# QYRIX SENTINEL — Architecture (as implemented, v1.3)
 
 Status legend: **IMPLEMENTED** (code exists) · **TESTED** (automated test executed in this repo) · **PARTIAL** · **NOT IMPLEMENTED** · **PLANNED**.
 
@@ -36,7 +36,12 @@ Multi-tenancy is **NOT_IMPLEMENTED** (see SAAS_PRODUCTION_REQUIREMENTS.md). Supp
 
 | Module | File | Responsibility | Status |
 |---|---|---|---|
-| Auth | `app/auth.py` | Bearer tokens, roles `admin` / `agent`, fail-closed when unset/short/placeholder | TESTED |
+| Identity | `app/identity.py` | Principals (tenant, role, credential); env tokens, hashed `qsk_` API keys, server-side `qss_` sessions (absolute + idle expiry); 7-role permission matrix; platform principal without data access; sliding-window rate limits and auth-failure throttling; Memory/PostgreSQL identity stores | TESTED (`test_identity.py`, live Compose) |
+| Auth dependencies | `app/auth.py` | FastAPI dependencies `principal`, `require(perm)`, `require_platform`; identity-store failure ⇒ 503 | TESTED |
+| API | `app/api.py` | All `/api/v1` routers (sentinel, tools, auth, platform, ops). Every handler resolves its `GateContext` from the principal | TESTED |
+| Tenancy | `app/tenancy.py` | Lazily builds one `GateContext` per tenant (own chain file, workspace, allowlist, adapters, tenant-scoped PostgreSQL view); refuses unless `QYRIX_MULTI_TENANT=1` and PostgreSQL; any build failure ⇒ 503 | TESTED (two tenants, real PostgreSQL) |
+| Observability | `app/observability.py` | Counters, Prometheus text rendering, JSON security events with secret-bearing fields dropped | TESTED |
+| Backup/restore | `scripts/backup.py`, `scripts/backup.sh`, `scripts/restore.sh` | DB-first-then-chain consistent backups with hash manifest; restore re-verified on start | TESTED (real clusters + Compose drill) |
 | Sole-path middleware | `app/core/gate.py` | Rejects any path outside `/api/v1` | TESTED |
 | Skill Inspector | `app/gateway.py` (`norm`, `extract_domains`, `inspect_text`, `_redact`) | Normalise obfuscation, extract domains/commands/secrets, redact | TESTED |
 | Advisory classifier | `app/gateway.py` (`classify`) | Meta Llama → Baseten → heuristic; strict schema; advisory only | TESTED (mocked); live NOT VERIFIED |
@@ -46,7 +51,7 @@ Multi-tenancy is **NOT_IMPLEMENTED** (see SAAS_PRODUCTION_REQUIREMENTS.md). Supp
 | Network guard | `app/netguard.py` | Destination parsing, SSRF classification, all-answer DNS validation, IP pinning, path confinement | TESTED |
 | Verifiable Proof | `app/proof.py` | Canonical JSON v2 records, SHA-256 chain, PASS/FAIL/PARTIAL_UNANCHORED, bundle verification | TESTED |
 | Public demo | `app/demo.py` | Fixed scenarios in a fresh isolated `GateContext` per request; sandbox adapter; rate limit | TESTED |
-| Persistence | `app/persistence.py`, `migrations/001_core_persistence.sql` | PostgreSQL: provenance, approvals, evaluations, grants (atomic consume/revoke), append-only proof mirror and anchors | TESTED (real PostgreSQL, restart + outage) |
+| Persistence | `app/persistence.py`, `migrations/001_core_persistence.sql`, `002_tenancy_identity.sql` | PostgreSQL: provenance, approvals, evaluations, grants (atomic consume/revoke), append-only proof mirror and anchors, tenants, API keys, sessions; every statement tenant-filtered and run under `SET LOCAL ROLE qyrix_app` with row-level security | TESTED (real PostgreSQL, restart, outage, RLS) |
 | External anchoring | `app/anchor.py` | RFC 3161 TSA client; tokens verified with `openssl ts -verify`; PASS only when a verified token covers the head | TESTED against a local TSA; public TSA NOT VERIFIED |
 
 ### GateContext
@@ -54,6 +59,9 @@ Multi-tenancy is **NOT_IMPLEMENTED** (see SAAS_PRODUCTION_REQUIREMENTS.md). Supp
 All mutable security state lives in a `GateContext`: provenance store, proof chain (+ optional file), approvals,
 evaluations, grants, adapters, egress counter, latency samples, degraded flag, lock.
 
+* Tenant contexts — `tenancy.ctx_for(principal)`: `default` ⇒ `PROD`; any other tenant ⇒ its own lazily built context
+  (`<chain dir>/tenants/<id>.jsonl`, `QYRIX_TENANT_WORKSPACE_ROOT/<id>`, the tenant's `approved_domains` — empty = deny all —,
+  `PgPersistence(tenant_id=<id>)`). A request can only ever reach the context of its own principal's tenant.
 * `PROD` — the production context (chain file `QYRIX_CHAIN_FILE`, real adapters, env allowlist). The v1.1 module
   names (`_chain`, `_appr`, `_state`, …) are aliases of `PROD`'s objects.
 * Demo — `demo.new_context()` per request: new `ProvenanceStore`, in-memory chain (no file), demo allowlist

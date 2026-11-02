@@ -1,0 +1,469 @@
+"""Identity and authorization: principals, roles, permission matrix, API keys, server-side sessions, rate limits.
+
+Every authorization decision is made here, server-side, from the authenticated principal - never from request data.
+
+Credentials
+- Operator env tokens (bootstrap, default tenant): QYRIX_ADMIN_TOKEN -> admin, QYRIX_AGENT_TOKEN -> agent.
+- Platform operator token: QYRIX_PLATFORM_TOKEN -> platform (may manage tenants; has NO data access in any tenant).
+- Per-tenant API keys "qsk_<random 256-bit>": only their SHA-256 is stored; shown once at creation; expiring, revocable.
+- Sessions "qss_<random 256-bit>": created from a credential by POST /api/v1/auth/session; SHA-256 stored server-side;
+  absolute + idle expiry; revoked on logout, on revocation of the underlying key, or when an env token is rotated.
+Env tokens shorter than 24 characters or starting with CHANGE_ME never authenticate (fail closed).
+
+Stores: PostgreSQL when persistence is configured (required for multi-tenancy), otherwise in-memory (single tenant;
+keys and sessions are lost on restart).
+"""
+import hashlib
+import hmac
+import os
+import re
+import secrets
+import threading
+import time
+from collections import defaultdict, deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Deque, Dict, List, Optional
+
+from app import observability as obs
+
+MIN_TOKEN_LEN = 24
+PLACEHOLDER_PREFIX = "CHANGE_ME"
+DEFAULT_TENANT = "default"
+TENANT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
+ROLES = ("owner", "admin", "security_reviewer", "approver", "auditor", "integrator", "agent")
+ALL = frozenset(ROLES)
+
+# Server-side permission matrix (master plan §8). Agents can never approve; approval is never execution.
+PERMISSIONS: Dict[str, frozenset] = {
+    "read":             ALL,                                                          # status, provenance, proofs, approvals list
+    "inspect":          frozenset({"owner", "admin", "security_reviewer"}),           # enableIntegratorInspectionUpload=false
+    "provenance.write": frozenset({"owner", "admin", "security_reviewer", "integrator", "agent"}),
+    "gate.evaluate":    frozenset({"owner", "admin", "integrator", "agent"}),
+    "tools.execute":    frozenset({"owner", "admin", "integrator", "agent"}),
+    "approval.request": frozenset({"owner", "admin", "integrator", "agent"}),
+    "approval.decide":  frozenset({"owner", "admin", "approver"}),
+    "grant.revoke":     frozenset({"owner", "admin", "approver"}),
+    "proof.anchor":     frozenset({"owner", "admin"}),
+    "keys.manage":      frozenset({"owner", "admin"}),
+    "demo.reset":       frozenset({"owner", "admin"}),
+}
+# Roles a key creator may grant: nobody can mint a key more powerful than themselves; owner keys only by owner/platform.
+GRANTABLE = {"owner": set(ROLES), "admin": set(ROLES) - {"owner"}}
+
+
+@dataclass(frozen=True)
+class Principal:
+    tenant: Optional[str]          # None only for the platform operator
+    role: str                      # one of ROLES, or "platform"
+    cred_id: str                   # "env:admin", "key:<id>", ...
+    via: str = "bearer"            # "bearer" | "session"
+
+    @property
+    def platform(self) -> bool:
+        return self.role == "platform"
+
+    def can(self, perm: str) -> bool:
+        return (not self.platform) and self.role in PERMISSIONS.get(perm, frozenset())
+
+    def label(self) -> str:
+        return "%s:%s" % (self.role, self.cred_id)
+
+
+class AuthError(Exception):
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+
+def _sha(s: str) -> str:
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+def _env(name: str) -> str:
+    v = os.getenv(name, "")
+    return v if len(v) >= MIN_TOKEN_LEN and not v.startswith(PLACEHOLDER_PREFIX) else ""
+
+
+def _env_match(tok: str) -> Optional[Principal]:
+    for name, role in (("QYRIX_ADMIN_TOKEN", "admin"), ("QYRIX_AGENT_TOKEN", "agent")):
+        exp = _env(name)
+        if exp and hmac.compare_digest(tok.encode(), exp.encode()):
+            return Principal(DEFAULT_TENANT, role, "env:" + role)
+    exp = _env("QYRIX_PLATFORM_TOKEN")
+    if exp and hmac.compare_digest(tok.encode(), exp.encode()):
+        return Principal(None, "platform", "env:platform")
+    return None
+
+
+def _env_fingerprint(cred_id: str) -> Optional[str]:
+    name = {"env:admin": "QYRIX_ADMIN_TOKEN", "env:agent": "QYRIX_AGENT_TOKEN"}.get(cred_id)
+    v = _env(name) if name else ""
+    return _sha("fp:" + v)[:16] if v else None
+
+
+def session_ttl() -> int:
+    return int(os.getenv("QYRIX_SESSION_TTL_SECONDS", "28800"))
+
+
+def session_idle() -> int:
+    return int(os.getenv("QYRIX_SESSION_IDLE_SECONDS", "1800"))
+
+
+# ---------------- stores ----------------
+class MemoryStore:
+    durable = False
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.tenants: Dict[str, Dict] = {DEFAULT_TENANT: {"id": DEFAULT_TENANT, "name": "Default tenant", "approved_domains": None, "disabled": False}}
+        self.keys: Dict[str, Dict] = {}          # key_hash -> record
+        self.sessions: Dict[str, Dict] = {}      # id_hash -> record
+
+    def get_tenant(self, tid):
+        with self.lock:
+            t = self.tenants.get(tid)
+            return dict(t) if t and not t["disabled"] else None
+
+    def list_tenants(self):
+        with self.lock:
+            return [dict(t) for t in self.tenants.values()]
+
+    def create_tenant(self, tid, name, approved):
+        with self.lock:
+            if tid in self.tenants:
+                raise AuthError(409, "TENANT_EXISTS")
+            self.tenants[tid] = {"id": tid, "name": name, "approved_domains": approved, "disabled": False}
+
+    def disable_tenant(self, tid):
+        with self.lock:
+            if tid not in self.tenants or tid == DEFAULT_TENANT:
+                raise AuthError(404, "unknown tenant")
+            self.tenants[tid]["disabled"] = True
+
+    def insert_key(self, rec):
+        with self.lock:
+            self.keys[rec["key_hash"]] = rec
+
+    def key_by_hash(self, h):
+        with self.lock:
+            r = self.keys.get(h)
+            return dict(r) if r else None
+
+    def list_keys(self, tid):
+        with self.lock:
+            return [dict(r) for r in self.keys.values() if r["tenant_id"] == tid]
+
+    def revoke_key(self, tid, kid):
+        with self.lock:
+            for r in self.keys.values():
+                if r["id"] == kid and r["tenant_id"] == tid and not r["revoked_at"]:
+                    r["revoked_at"] = time.time()
+                    for s in self.sessions.values():
+                        if s["cred_id"] == "key:" + kid:
+                            s["revoked_at"] = time.time()
+                    return True
+            return False
+
+    def touch_key(self, h):
+        pass
+
+    def insert_session(self, rec):
+        with self.lock:
+            self.sessions[rec["id_hash"]] = rec
+
+    def session_by_hash(self, h):
+        with self.lock:
+            r = self.sessions.get(h)
+            return dict(r) if r else None
+
+    def touch_session(self, h):
+        with self.lock:
+            if h in self.sessions:
+                self.sessions[h]["last_seen"] = time.time()
+
+    def revoke_session(self, h):
+        with self.lock:
+            if h in self.sessions:
+                self.sessions[h]["revoked_at"] = time.time()
+
+
+class PgStore:
+    """Identity tables are not tenant-RLS-protected (authentication happens before a tenant is known);
+    every lookup is by SHA-256 hash or by (tenant, id)."""
+    durable = True
+
+    def __init__(self, conn):
+        self.db = conn
+
+    def _q(self, fn):
+        return self.db.run(fn)
+
+    def get_tenant(self, tid):
+        def go(cur):
+            cur.execute("SELECT id, name, approved_domains FROM tenants WHERE id=%s AND disabled_at IS NULL", (tid,))
+            r = cur.fetchone()
+            return {"id": r[0], "name": r[1], "approved_domains": list(r[2]) if r[2] is not None else None, "disabled": False} if r else None
+        return self._q(go)
+
+    def list_tenants(self):
+        def go(cur):
+            cur.execute("SELECT id, name, approved_domains, disabled_at FROM tenants ORDER BY created_at")
+            return [{"id": r[0], "name": r[1], "approved_domains": list(r[2]) if r[2] is not None else None, "disabled": r[3] is not None} for r in cur.fetchall()]
+        return self._q(go)
+
+    def create_tenant(self, tid, name, approved):
+        def go(cur):
+            cur.execute("INSERT INTO tenants (id, name, approved_domains) VALUES (%s,%s,%s) ON CONFLICT (id) DO NOTHING RETURNING id", (tid, name, approved))
+            return cur.fetchone() is not None
+        if not self._q(go):                    # raised OUTSIDE the transaction runner (it maps errors to PersistenceError)
+            raise AuthError(409, "TENANT_EXISTS")
+
+    def disable_tenant(self, tid):
+        def go(cur):
+            cur.execute("UPDATE tenants SET disabled_at=now() WHERE id=%s AND id<>'default' AND disabled_at IS NULL RETURNING id", (tid,))
+            if cur.fetchone() is None:
+                return False
+            cur.execute("UPDATE sessions SET revoked_at=now() WHERE tenant_id=%s AND revoked_at IS NULL", (tid,))
+            return True
+        if not self._q(go):
+            raise AuthError(404, "unknown tenant")
+
+    def insert_key(self, r):
+        self._q(lambda cur: cur.execute(
+            "INSERT INTO api_keys (id, tenant_id, role, name, key_hash, created_by, expires_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (r["id"], r["tenant_id"], r["role"], r["name"], r["key_hash"], r["created_by"],
+             datetime.fromtimestamp(r["expires_at"], timezone.utc) if r["expires_at"] else None)))
+
+    def key_by_hash(self, h):
+        def go(cur):
+            cur.execute("SELECT k.id, k.tenant_id, k.role, k.name, k.expires_at, k.revoked_at, t.disabled_at FROM api_keys k"
+                        " JOIN tenants t ON t.id = k.tenant_id WHERE k.key_hash=%s", (h,))
+            r = cur.fetchone()
+            if not r:
+                return None
+            return {"id": r[0], "tenant_id": r[1], "role": r[2], "name": r[3], "expires_at": r[4].timestamp() if r[4] else None,
+                    "revoked_at": r[5].timestamp() if r[5] else None, "tenant_disabled": r[6] is not None}
+        return self._q(go)
+
+    def list_keys(self, tid):
+        def go(cur):
+            cur.execute("SELECT id, role, name, created_by, created_at, expires_at, revoked_at, last_used_at FROM api_keys WHERE tenant_id=%s ORDER BY created_at", (tid,))
+            return [{"id": r[0], "tenant_id": tid, "role": r[1], "name": r[2], "created_by": r[3], "created_at": r[4].isoformat(),
+                     "expires_at": r[5].timestamp() if r[5] else None, "revoked_at": r[6].timestamp() if r[6] else None,
+                     "last_used_at": r[7].isoformat() if r[7] else None} for r in cur.fetchall()]
+        return self._q(go)
+
+    def revoke_key(self, tid, kid):
+        def go(cur):
+            cur.execute("UPDATE api_keys SET revoked_at=now() WHERE tenant_id=%s AND id=%s AND revoked_at IS NULL RETURNING id", (tid, kid))
+            ok = cur.fetchone() is not None
+            if ok:
+                cur.execute("UPDATE sessions SET revoked_at=now() WHERE cred_id=%s AND revoked_at IS NULL", ("key:" + kid,))
+            return ok
+        return self._q(go)
+
+    def touch_key(self, h):
+        self._q(lambda cur: cur.execute("UPDATE api_keys SET last_used_at=now() WHERE key_hash=%s AND (last_used_at IS NULL OR last_used_at < now() - interval '60 seconds')", (h,)))
+
+    def insert_session(self, r):
+        self._q(lambda cur: cur.execute(
+            "INSERT INTO sessions (id_hash, tenant_id, role, cred_id, cred_fp, expires_at) VALUES (%s,%s,%s,%s,%s,%s)",
+            (r["id_hash"], r["tenant"], r["role"], r["cred_id"], r["cred_fp"], datetime.fromtimestamp(r["expires_at"], timezone.utc))))
+
+    def session_by_hash(self, h):
+        def go(cur):
+            cur.execute("SELECT s.tenant_id, s.role, s.cred_id, s.cred_fp, s.expires_at, s.last_seen_at, s.revoked_at, t.disabled_at,"
+                        " (SELECT revoked_at FROM api_keys k WHERE 'key:' || k.id = s.cred_id) FROM sessions s JOIN tenants t ON t.id = s.tenant_id"
+                        " WHERE s.id_hash=%s", (h,))
+            r = cur.fetchone()
+            if not r:
+                return None
+            return {"tenant": r[0], "role": r[1], "cred_id": r[2], "cred_fp": r[3], "expires_at": r[4].timestamp(), "last_seen": r[5].timestamp(),
+                    "revoked_at": (r[6] or r[8]) and 1.0, "tenant_disabled": r[7] is not None}
+        return self._q(go)
+
+    def touch_session(self, h):
+        self._q(lambda cur: cur.execute("UPDATE sessions SET last_seen_at=now() WHERE id_hash=%s", (h,)))
+
+    def revoke_session(self, h):
+        self._q(lambda cur: cur.execute("UPDATE sessions SET revoked_at=now() WHERE id_hash=%s AND revoked_at IS NULL", (h,)))
+
+
+_store = MemoryStore()
+
+
+def store():
+    return _store
+
+
+def use_store(s) -> None:
+    global _store
+    _store = s
+
+
+def multi_tenant_enabled() -> bool:
+    return os.getenv("QYRIX_MULTI_TENANT", "0") == "1"
+
+
+# ---------------- rate limiting (sliding window, in-process) ----------------
+class Limiter:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.win: Dict[str, Deque[float]] = defaultdict(deque)
+
+    def hit(self, key: str, limit: int, window: float = 60.0, count: bool = True) -> bool:
+        """True if allowed. `count=False` only checks."""
+        now = time.monotonic()
+        with self.lock:
+            q = self.win[key]
+            while q and now - q[0] > window:
+                q.popleft()
+            if len(q) >= limit:
+                return False
+            if count:
+                q.append(now)
+            if len(self.win) > 50000:
+                for k in [k for k, v in self.win.items() if not v][:25000]:
+                    self.win.pop(k, None)
+            return True
+
+    def clear(self):
+        with self.lock:
+            self.win.clear()
+
+
+limiter = Limiter()
+
+
+def _lim(name: str, default: str) -> int:
+    return int(os.getenv(name, default))
+
+
+def check_auth_failures_allowed(client: str) -> None:
+    if not limiter.hit("authfail:" + client, _lim("QYRIX_AUTH_FAIL_PER_MIN", "20"), count=False) or \
+       not limiter.hit("authfail:*", _lim("QYRIX_AUTH_FAIL_GLOBAL_PER_MIN", "300"), count=False):
+        obs.inc("qyrix_rate_limited_total", scope="auth")
+        raise AuthError(429, "too many failed authentication attempts")
+
+
+def record_auth_failure(client: str, reason: str) -> None:
+    limiter.hit("authfail:" + client, 10 ** 9)
+    limiter.hit("authfail:*", 10 ** 9)
+    obs.inc("qyrix_auth_failures_total", reason=reason)
+    obs.event("auth_failure", reason=reason, client=client[:64])
+
+
+def check_rate(p: Principal) -> None:
+    if not limiter.hit("req:" + p.cred_id, _lim("QYRIX_RATE_LIMIT_PER_MIN", "1200")):
+        obs.inc("qyrix_rate_limited_total", scope="principal")
+        obs.event("rate_limited", cred=p.cred_id, tenant=p.tenant)
+        raise AuthError(429, "rate limit exceeded")
+
+
+# ---------------- authentication ----------------
+def authenticate(token: str, allow_session: bool = True) -> Principal:
+    """Resolve a bearer token to a principal or raise AuthError(401). Constant-time for env tokens; hashed lookups otherwise."""
+    if not token or len(token) > 512:
+        raise AuthError(401, "invalid credentials")
+    p = _env_match(token)
+    if p:
+        return p
+    if token.startswith("qsk_"):
+        r = _store.key_by_hash(_sha(token))
+        if not r or r.get("revoked_at") or r.get("tenant_disabled") or (r.get("expires_at") and time.time() > r["expires_at"]):
+            raise AuthError(401, "invalid credentials")
+        try:
+            _store.touch_key(_sha(token))
+        except Exception:
+            pass
+        return Principal(r["tenant_id"], r["role"], "key:" + r["id"])
+    if token.startswith("qss_") and allow_session:
+        h = _sha(token)
+        r = _store.session_by_hash(h)
+        now = time.time()
+        if (not r or r.get("revoked_at") or r.get("tenant_disabled") or now > r["expires_at"]
+                or now - r["last_seen"] > session_idle()):
+            raise AuthError(401, "session expired")
+        if r["cred_id"].startswith("env:") and r.get("cred_fp") != _env_fingerprint(r["cred_id"]):
+            raise AuthError(401, "session expired")          # operator token rotated => old sessions die
+        if now - r["last_seen"] > 30:
+            _store.touch_session(h)
+        return Principal(r["tenant"], r["role"], r["cred_id"], via="session")
+    raise AuthError(401, "invalid credentials")
+
+
+def create_session(credential: str) -> Dict:
+    p = authenticate(credential, allow_session=False)
+    if p.platform:
+        raise AuthError(403, "platform credentials cannot open a product session")
+    token = "qss_" + secrets.token_urlsafe(32)
+    exp = time.time() + session_ttl()
+    _store.insert_session({"id_hash": _sha(token), "tenant": p.tenant, "role": p.role, "cred_id": p.cred_id,
+                           "cred_fp": _env_fingerprint(p.cred_id), "expires_at": exp, "last_seen": time.time(), "revoked_at": None})
+    obs.inc("qyrix_sessions_total", action="created")
+    obs.event("session_created", tenant=p.tenant, role=p.role, cred=p.cred_id)
+    return {"session_token": token, "expires_at": datetime.fromtimestamp(exp, timezone.utc).isoformat(), "tenant": p.tenant, "role": p.role}
+
+
+def end_session(token: str) -> None:
+    if token.startswith("qss_"):
+        _store.revoke_session(_sha(token))
+        obs.inc("qyrix_sessions_total", action="revoked")
+
+
+# ---------------- key & tenant management ----------------
+def create_key(actor: Principal, tenant: str, role: str, name: str, ttl_days: Optional[int]) -> Dict:
+    if role not in ROLES:
+        raise AuthError(422, "unknown role")
+    if not actor.platform:
+        if actor.tenant != tenant or not actor.can("keys.manage"):
+            raise AuthError(403, "not allowed")
+        if role not in GRANTABLE.get(actor.role, set()):
+            raise AuthError(403, "cannot grant a role above your own")
+    if tenant != DEFAULT_TENANT and not _store.get_tenant(tenant):
+        raise AuthError(404, "unknown tenant")
+    if ttl_days is not None and not 1 <= ttl_days <= 3650:
+        raise AuthError(422, "ttl_days out of range")
+    token = "qsk_" + secrets.token_urlsafe(32)
+    kid = "key_" + secrets.token_hex(6)
+    rec = {"id": kid, "tenant_id": tenant, "role": role, "name": name[:80], "key_hash": _sha(token), "created_by": actor.label(),
+           "created_at": datetime.now(timezone.utc).isoformat(), "expires_at": time.time() + ttl_days * 86400 if ttl_days else None,
+           "revoked_at": None, "last_used_at": None}
+    _store.insert_key(rec)
+    obs.event("api_key_created", tenant=tenant, role=role, key_id=kid, by=actor.label())
+    return {"id": kid, "tenant": tenant, "role": role, "name": rec["name"], "api_key": token, "durable": _store.durable,
+            "expires_at": datetime.fromtimestamp(rec["expires_at"], timezone.utc).isoformat() if rec["expires_at"] else None,
+            "notice": "Store this key now; only its hash is kept and it cannot be shown again."}
+
+
+def list_keys(actor: Principal, tenant: str) -> List[Dict]:
+    if not actor.platform and (actor.tenant != tenant or not actor.can("keys.manage")):
+        raise AuthError(403, "not allowed")
+    return [{k: v for k, v in r.items() if k != "key_hash"} for r in _store.list_keys(tenant)]
+
+
+def revoke_key(actor: Principal, tenant: str, kid: str) -> Dict:
+    if not actor.platform and (actor.tenant != tenant or not actor.can("keys.manage")):
+        raise AuthError(403, "not allowed")
+    if not _store.revoke_key(tenant, kid):
+        raise AuthError(404, "unknown or already revoked key")
+    obs.event("api_key_revoked", tenant=tenant, key_id=kid, by=actor.label())
+    return {"id": kid, "revoked": True}
+
+
+def create_tenant(actor: Principal, tid: str, name: str, approved: Optional[List[str]]) -> Dict:
+    if not actor.platform:
+        raise AuthError(403, "platform operator only")
+    if not multi_tenant_enabled():
+        raise AuthError(409, "MULTI_TENANCY_DISABLED")
+    if not _store.durable:
+        raise AuthError(409, "PERSISTENCE_REQUIRED")
+    if not TENANT_RE.match(tid or ""):
+        raise AuthError(422, "tenant id must match ^[a-z0-9][a-z0-9-]{2,39}$")
+    doms = None
+    if approved is not None:
+        doms = sorted({d.strip().lower() for d in approved if re.match(r"^[a-z0-9.-]{3,253}$", d.strip().lower())})
+    _store.create_tenant(tid, name[:120], doms)
+    obs.event("tenant_created", tenant=tid, by=actor.label())
+    return {"id": tid, "name": name[:120], "approved_domains": doms}

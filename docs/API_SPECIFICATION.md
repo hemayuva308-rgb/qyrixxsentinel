@@ -1,24 +1,42 @@
-# QYRIX SENTINEL — API Specification (as implemented, v1.2)
+# QYRIX SENTINEL — API Specification (as implemented, v1.3)
 
 Base path: `/api/v1`. Any other path → `400 {"error":"SOLE_PATH_VIOLATION"}`.
-Authentication: `Authorization: Bearer <token>`; roles `admin` (human operator/approver) and `agent`.
-Unauthenticated: only `GET /api/v1/health`, `GET /`, and `/api/v1/demo/*`.
+Authentication: `Authorization: Bearer <credential>` where the credential is one of
+* an operator env token (`QYRIX_ADMIN_TOKEN` → `admin@default`, `QYRIX_AGENT_TOKEN` → `agent@default`, `QYRIX_PLATFORM_TOKEN` → platform operator),
+* a tenant API key `qsk_…` (stored as SHA-256 only; shown once at creation), or
+* a console session `qss_…` (from `POST /auth/session`).
+
+The tenant is ALWAYS derived from the credential; no request body or header can select a tenant.
+Unauthenticated: only `GET /api/v1/health`, `GET /api/v1/ready`, `GET /`, and `/api/v1/demo/*`. `GET /api/v1/metrics` uses its own token.
+`401` invalid/expired credential · `403` authenticated but not permitted · `429` rate limit or auth-failure throttle · `503` identity store,
+persistence or tenant context unavailable (fail closed).
+
+### Roles and permissions (server-side, `app/identity.py`)
+| Permission | owner | admin | security_reviewer | approver | auditor | integrator | agent |
+|---|---|---|---|---|---|---|---|
+| `read` (status, provenance, proofs, approvals, verify, export) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `inspect` | ✓ | ✓ | ✓ | | | | |
+| `provenance.write` | ✓ | ✓ | ✓ | | | ✓ | ✓ |
+| `gate.evaluate`, `tools.execute`, `approval.request` | ✓ | ✓ | | | | ✓ | ✓ |
+| `approval.decide`, `grant.revoke` | ✓ | ✓ | | ✓ | | | |
+| `proof.anchor`, `keys.manage`, `demo.reset` | ✓ | ✓ | | | | | |
+The platform operator has **none** of these permissions. Env `admin` = role admin, env `agent` = role agent (v1.2 compatible).
 Errors use FastAPI's `{"detail": "<CODE or message>"}`. All responses carry `Cache-Control: no-store`.
 
 ## Inspector
-### `POST /sentinel/inspect` — any role
+### `POST /sentinel/inspect` — `inspect` (owner, admin, security_reviewer)
 Request `{"text": string ≤100000}` → `{domains[], commands[], secrets[], unapproved[], classification{label, explanation, source, provider, model, latency_ms, attempts[]}}`.
 `classification` is advisory; the Gate never reads it.
 
 ## Provenance
-### `POST /sentinel/provenance/step` — any role
+### `POST /sentinel/provenance/step` — `provenance.write`
 Request `{"source": ≤64, "label": "TRUSTED"|"UNTRUSTED"|"UNVERIFIED" (aliases: trusted, approved, untrusted, unverified; anything else ⇒ UNVERIFIED), "text": ≤5000, "parents": [uuid] ≤50}`
 Response: `{id (uuid4), source, label (EFFECTIVE), declared_label, text (redacted, ≤500), parents[], unknown_parents[], tainted, ts}`.
 Effective label = lowest of declared label and every parent's effective label; unknown parent ⇒ at most UNVERIFIED.
 ### `GET /sentinel/provenance` — `{limit: 50, steps: [...]}` (most recent 50).
 
 ## Execution Gate
-### `POST /sentinel/gate/evaluate` — any role
+### `POST /sentinel/gate/evaluate` — `gate.evaluate`
 Request:
 ```json
 {"tool":"http|file.read|…","method":"GET","dest":"…","cmd":"","data":"","lineage":["<uuid>"],
@@ -39,11 +57,11 @@ Rules: `R0_FAIL_CLOSED`, `R1_DEST_NOT_APPROVED`, `R2_SECRET_EXFIL`, `R3_UNTRUSTE
 `R10_PATH_NOT_ALLOWED`, `R11_PROOF_DEGRADED`, `R12_SECRET_TO_EXTERNAL`, `R13_LINEAGE_MISSING`, `R14_APPROVAL_EXPIRED`,
 `R15_REDIRECT_LIMIT`, `R16_REDIRECT_INVALID`, `R17_PERSISTENCE_UNAVAILABLE`, `LINEAGE_CYCLE_DETECTED`.
 
-### `POST /sentinel/grants/{grant_id}/revoke` — **admin only**
+### `POST /sentinel/grants/{grant_id}/revoke` — `grant.revoke` (owner, admin, approver)
 Revokes an unused grant (DB + memory) and appends a `GRANT_REVOKED` proof record. Already used/revoked/unknown ⇒ `409 GRANT_NOT_REVOCABLE`.
 
 ## Controlled execution
-### `POST /tools/execute` — any role
+### `POST /tools/execute` — `tools.execute`
 Body must be **exactly** `{"gate_evaluation_id": string ≤64, "grant_id": string ≤64}`.
 
 | Condition | Status | detail |
@@ -72,9 +90,9 @@ A 3xx is returned, not followed. To follow, evaluate again with `dest = redirect
 No credentials are ever sent by the adapter, so there is nothing to strip cross-host.
 
 ## Approvals
-* `POST /sentinel/approvals` — any role. `{tool, method, dest, cmd, data, requested_by}` → `{id, status:"pending", used:false, digest, scope{…, data_sha256}, expires_at, …}`.
+* `POST /sentinel/approvals` — `approval.request`. `{tool, method, dest, cmd, data}` (`requested_by` is set from the principal; a body value is overwritten) → `{id, status:"pending", used:false, digest, scope{…, data_sha256}, expires_at, …}`.
 * `GET /sentinel/approvals`.
-* `POST /sentinel/approvals/{id}/{approve|deny}` — **admin only** (agent ⇒ 403). Already decided ⇒ 409.
+* `POST /sentinel/approvals/{id}/{approve|deny}` — `approval.decide` (owner, admin, approver; agent ⇒ 403). `decided_by` = principal. Already decided ⇒ 409.
 Approval ≠ execution. The agent resubmits to `gate/evaluate` with `approval_id`; consumption happens atomically with
 grant creation. There is **no** public consume endpoint and no public `CONSUMED` status (the `used` flag is internal state shown read-only).
 
@@ -85,7 +103,7 @@ grant creation. There is **no** public consume endpoint and no public `CONSUMED`
 * `POST /sentinel/proofs/verify-bundle` (body = bundle or bare list, ≤20 MB): empty ⇒ `422 EMPTY_PROOF_BUNDLE`;
   malformed/tampered/reordered/missing ⇒ `status: FAIL`; consistent ⇒ `PARTIAL_UNANCHORED` (client-supplied anchors are ignored).
 * `POST /sentinel/proofs/tamper` → simulation on a copy; real chain untouched.
-* `POST /sentinel/proofs/anchor` — **admin only**. Anchors the current head at `QYRIX_TSA_URL` (RFC 3161). Stored only after the token
+* `POST /sentinel/proofs/anchor` — `proof.anchor` (owner, admin). Anchors the current head at `QYRIX_TSA_URL` (RFC 3161). Stored only after the token
   verified (imprint, nonce, signature, chain to `QYRIX_TSA_CA_FILE`). Errors: `409 ANCHOR_NOT_CONFIGURED`, `422 EMPTY_PROOF_BUNDLE`,
   `409 PROOF_DEGRADED|ANCHOR_STALE`, `503 ANCHOR_UNAVAILABLE|ANCHOR_REJECTED|ANCHOR_INVALID`. Never changes Gate decisions.
 * `GET /sentinel/proofs/anchors` → `{configured, problem, can_verify, tsa_url, anchors[{id, n, head_hash, method, tsa_url, gen_time, serial, created_at}]}`.
@@ -102,6 +120,27 @@ blocked_dest (redacted), lineage, data ("[REDACTED len=N]"), ext_calls, params_d
   `persistence` (`memory|postgres|down`), recent records.
 * `POST /sentinel/reset`, `POST /sentinel/benchmark` — admin **and** `QYRIX_ENABLE_DEMO_RESET=1`, else 403.
   Benchmark response: `{cases[{name,type,expected,verdict,rules,ms,ok,lineage,external_calls_delta,proof_n}], counts, metrics, verify, hypotheses}`.
+
+## Identity and sessions
+* `POST /auth/session` `{credential}` → `{session_token: "qss_…", expires_at, tenant, role}`. Platform credentials → 403; a session
+  cannot mint a session; throttled like any authentication. TTL `QYRIX_SESSION_TTL_SECONDS` (8 h), idle `QYRIX_SESSION_IDLE_SECONDS` (30 min).
+* `DELETE /auth/session` (bearer = the session) → revoked server-side.
+* `POST /sentinel/keys` `{role, name, ttl_days?}` (`keys.manage`; role ≤ caller's grant ceiling) → key shown once.
+* `GET /sentinel/keys` → metadata only (never hashes). `POST /sentinel/keys/{id}/revoke` → revokes the key and all its sessions.
+
+## Platform (platform operator only; no tenant data access)
+* `POST /platform/tenants` `{id, name, approved_domains?}` — needs `QYRIX_MULTI_TENANT=1` **and** PostgreSQL (else 409
+  `MULTI_TENANCY_DISABLED` / `PERSISTENCE_REQUIRED`). New tenants have an EMPTY destination allowlist (deny all) unless given.
+* `GET /platform/tenants` · `POST /platform/tenants/{id}/keys` `{role, name, ttl_days}` (bootstrap key) ·
+  `POST /platform/tenants/{id}/disable` (kills its keys and sessions immediately).
+
+## Operations (monitoring)
+* `GET /ready` → 200 `{ready: true, checks}` or 503: proof chain valid, Gate not degraded, persistence not down, database reachable.
+* `GET /metrics` (bearer `QYRIX_METRICS_TOKEN`, ≥ 24 chars; 404 when unset) → Prometheus text: gate decisions, auth failures,
+  rate limiting, sessions, persistence/tenant-context failures, per-tenant chain length / degraded / persistence / external calls.
+* Security events are JSON lines on stdout (logger `qyrix.security`): `gate_decision`, `auth_failure`, `rate_limited`,
+  `session_created`, `api_key_created/revoked`, `tenant_created/disabled`, `grant_revoked`, … Field names that could carry
+  secrets (token, credential, data, dest, text, …) are dropped by construction.
 
 ## Public demo
 * `GET /demo/scenarios`.

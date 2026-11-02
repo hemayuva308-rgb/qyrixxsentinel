@@ -24,8 +24,8 @@ export default function Login() {
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4">
       <div className="mb-6 flex items-center gap-3 text-lg font-semibold tracking-[.2em]"><BrandMark size={34} title={null} />QYRIX <span className="text-neon">SENTINEL</span></div>
       <form onSubmit={submit} className="space-y-3 rounded-2xl border border-white/10 bg-card/80 p-5 shadow-glow">
-        <p className="text-sm text-mute">Operator sign-in. Paste the admin (human approver) or agent token configured on the server. It is stored only in an httpOnly cookie.</p>
-        <div><label htmlFor="t">API token</label><input id="t" type="password" autoComplete="off" required minLength={24} value={token} onChange={(e) => setToken(e.target.value)} /></div>
+        <p className="text-sm text-mute">Operator sign-in. Paste an operator token or a tenant API key (qsk_…). It is exchanged for an expiring server-side session; the key itself is never stored in the browser.</p>
+        <div><label htmlFor="t">API key or operator token</label><input id="t" type="password" autoComplete="off" required minLength={24} value={token} onChange={(e) => setToken(e.target.value)} /></div>
         {err && <ErrorBox msg={err} />}
         <Btn type="submit" loading={busy}><KeyRound className="h-3.5 w-3.5" />SIGN IN</Btn>
       </form>
