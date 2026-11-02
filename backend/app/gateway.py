@@ -23,7 +23,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import adapter as adapters, anchor, netguard, persistence, proof, provenance as prov
+from app import observability as obs, adapter as adapters, anchor, netguard, persistence, proof, provenance as prov
 
 TOOLS = ("http", "file.read")            # `shell` is recognised but never executable in this MVP (R8)
 SECRET = re.compile(r"(sk-[a-z]+-\w{3,}|api[_-]?key|secret|token|password|aws_\w+|\.env)", re.I)
@@ -257,7 +257,7 @@ def verify_chain(ctx: Optional[GateContext] = None) -> Dict:
     v = proof.evaluate_anchors(chain, anchors, _cached_verify_token if anchor.can_verify() else None)
     if v.get("anchor_status") == "ANCHOR_MISMATCH":
         with ctx.lock:
-            ctx.state["degraded"] = True              # stored evidence contradicts its external anchor: fail closed
+            _degrade(ctx, "ANCHOR_MISMATCH")              # stored evidence contradicts its external anchor: fail closed
         degraded = True
     return {**v, "degraded": degraded}
 
@@ -273,9 +273,9 @@ def _load_anchors(ctx: "GateContext") -> None:
             with open(f) as fh:
                 ctx.anchors.extend(json.loads(l) for l in fh if l.strip())
         except ValueError:
-            ctx.state["degraded"] = True
+            _degrade(ctx, "ANCHOR_FILE_UNREADABLE")
     if ctx.anchors and proof.evaluate_anchors(ctx.chain, ctx.anchors).get("anchor_status") == "ANCHOR_MISMATCH":
-        ctx.state["degraded"] = True
+        _degrade(ctx, "ANCHOR_MISMATCH")
 
 
 def create_anchor(ctx: Optional[GateContext] = None) -> Dict:
@@ -302,7 +302,7 @@ def create_anchor(ctx: Optional[GateContext] = None) -> Dict:
             try:
                 ctx.db.save_anchor(a)
             except Exception:
-                ctx.state["persistence"] = "down"
+                _db_down(ctx, "ANCHOR_WRITE_FAILED")
         ctx.anchors.append(a)
         return {k: v for k, v in a.items() if k != "token_b64"}
 
@@ -313,9 +313,9 @@ def _load_chain(ctx: "GateContext") -> None:
             try:
                 ctx.chain.extend(json.loads(l) for l in f if l.strip())
             except ValueError:
-                ctx.state["degraded"] = True
+                _degrade(ctx, "CHAIN_FILE_UNREADABLE")
     if not proof.verify_records(ctx.chain)["valid"]:
-        ctx.state["degraded"] = True     # FR-135: broken evidence => fail closed until an admin investigates
+        _degrade(ctx, "CHAIN_VERIFICATION_FAILED")     # FR-135: broken evidence => fail closed until an admin investigates
 
 
 def _load() -> None:
@@ -324,7 +324,7 @@ def _load() -> None:
     try:
         dsn = persistence.dsn_from_env()
     except Exception:                    # configured but secret missing/placeholder => fail closed
-        PROD.state["persistence"] = "down"
+        _db_down(PROD, "DATABASE_SETTINGS_INVALID")
         return
     if dsn:                              # durable mode: any problem => persistence 'down' => Gate blocks (R17)
         from app import identity
@@ -332,7 +332,22 @@ def _load() -> None:
         try:
             attach_persistence(PROD, persistence.PgPersistence(dsn))
         except Exception:
-            PROD.state["persistence"] = "down"
+            _db_down(PROD, "STARTUP_ATTACH_FAILED")
+
+
+def _degrade(ctx: "GateContext", reason: str) -> None:
+    """Evidence can no longer be trusted: block everything (R11) and raise a critical alert once per transition."""
+    if not ctx.state.get("degraded"):
+        obs.inc("qyrix_proof_integrity_failures_total", reason=reason)
+        obs.event("proof_integrity_failure", severity="critical", tenant=getattr(ctx.db, "t", None) or ctx.name, reason=reason)
+    ctx.state["degraded"] = True
+
+
+def _db_down(ctx: "GateContext", reason: str) -> None:
+    if ctx.state.get("persistence") != "down":
+        obs.inc("qyrix_persistence_down_total", tenant=getattr(ctx.db, "t", None) or ctx.name)
+        obs.event("persistence_unavailable", severity="high", tenant=getattr(ctx.db, "t", None) or ctx.name, reason=reason)
+    ctx.state["persistence"] = "down"
 
 
 def _record(ctx: GateContext, fields: Dict) -> Dict:
@@ -349,7 +364,7 @@ def _record(ctx: GateContext, fields: Dict) -> Dict:
         try:
             ctx.db.save_proof(r)
         except Exception:
-            ctx.state["persistence"] = "down"   # fail closed from now on (R17) until the mirror is caught up
+            _db_down(ctx, "PROOF_MIRROR_WRITE_FAILED")   # fail closed from now on (R17) until the mirror is caught up
             return r
         from app import integrity
         integrity.seal(ctx)                     # witness high-water mark only after chain file AND DB mirror hold it
@@ -384,7 +399,7 @@ def _sync_proof_mirror(ctx: "GateContext") -> None:
     """The DB mirror must be a prefix of the verified file chain; missing rows are back-filled. Anything else is tampering."""
     idx = ctx.db.load_proof_index()
     if len(idx) > len(ctx.chain) or any(idx[i]["hash"] != ctx.chain[i]["hash"] for i in range(len(idx))):
-        ctx.state["degraded"] = True
+        _degrade(ctx, "PROOF_MIRROR_MISMATCH")
         raise RuntimeError("proof mirror does not match the chain file")
     for r in ctx.chain[len(idx):]:
         ctx.db.save_proof(r)
@@ -541,7 +556,7 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
                     else:
                         if ap is not None:
                             ap["used"] = False
-                        ctx.state["persistence"] = "down"
+                        _db_down(ctx, "EVALUATION_WRITE_FAILED")
                         verdict, rules = "BLOCK", ["R17_PERSISTENCE_UNAVAILABLE"]
         ev["verdict"], ev["rules"] = verdict, rules
         rec = None
@@ -569,7 +584,7 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
             try:                                              # audit history of blocked evaluations (never authorises)
                 ctx.db.save_evaluation(ev)
             except Exception:
-                ctx.state["persistence"] = "down"
+                _db_down(ctx, "EVALUATION_WRITE_FAILED")
         _store_eval(ctx, ev)
         ms = (time.perf_counter() - t0) * 1000
         ctx.lat.append(ms)
@@ -622,7 +637,7 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
                     if not ctx.db.consume_grant(gid, eid, g["digest"]):
                         code = "GRANT_REPLAY"
                 except Exception:
-                    ctx.state["persistence"] = "down"
+                    _db_down(ctx, "GRANT_CONSUME_FAILED")
                     code = "PERSISTENCE_UNAVAILABLE"
         if code:
             try:
@@ -654,7 +669,7 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
                 try:
                     ctx.db.set_redirect(eid, ev["redirect_location"])
                 except Exception:
-                    ctx.state["persistence"] = "down"
+                    _db_down(ctx, "REDIRECT_WRITE_FAILED")
             result["redirect"]["hop"] = ev["hop"] + 1
             result["redirect"]["max_hops"] = MAX_REDIRECTS
         try:
@@ -694,7 +709,7 @@ def revoke_grant(gid: str, who: str, ctx: Optional[GateContext] = None) -> Dict:
             except ExecRefused:
                 raise
             except Exception:
-                ctx.state["persistence"] = "down"
+                _db_down(ctx, "GRANT_REVOKE_FAILED")
                 raise ExecRefused("PERSISTENCE_UNAVAILABLE", 503)
         g["revoked"] = True
         _record(ctx, {"kind": "grant", "verdict": "GRANT_REVOKED", "gate_evaluation_id": g["gate_evaluation_id"],
@@ -742,7 +757,7 @@ def attach_persistence(ctx: GateContext, db) -> None:
         if a_["id"] not in known:
             ctx.anchors.append(a_)
     if ctx.anchors and proof.evaluate_anchors(ctx.chain, ctx.anchors).get("anchor_status") == "ANCHOR_MISMATCH":
-        ctx.state["degraded"] = True
+        _degrade(ctx, "ANCHOR_MISMATCH")
     ctx.prov.persist = db.save_step
     ctx.state["attached"] = True
     ctx.state["persistence"] = "postgres"

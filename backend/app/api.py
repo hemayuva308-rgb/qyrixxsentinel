@@ -58,7 +58,7 @@ def step_ep(b: g.Step, p: Principal = Depends(require("provenance.write"))):
     except Exception:
         if ctx.db is not None:
             ctx.state["persistence"] = "down"
-            obs.inc("qyrix_persistence_down_total", tenant=ctx.name)
+            obs.inc("qyrix_persistence_down_total", tenant=p.tenant)
             raise HTTPException(503, "PERSISTENCE_UNAVAILABLE")
         raise
 
@@ -75,10 +75,10 @@ def gate_ep(a: g.Action, p: Principal = Depends(require("gate.evaluate"))):
         raise HTTPException(400, "EXECUTE_MOVED: evaluate first, then POST /api/v1/tools/execute with gate_evaluation_id and grant_id")
     ctx = tenancy.ctx_for(p)
     r = g.evaluate(a, ctx)
-    obs.inc("qyrix_gate_decisions_total", tenant=ctx.name, verdict=r["verdict"])
+    obs.inc("qyrix_gate_decisions_total", tenant=p.tenant, verdict=r["verdict"])
     for rule in r["rules"]:
         obs.inc("qyrix_gate_rule_hits_total", rule=rule)
-    obs.event("gate_decision", tenant=ctx.name, cred=p.cred_id, verdict=r["verdict"], rules=r["rules"], tool=a.tool[:32],
+    obs.event("gate_decision", tenant=p.tenant, cred=p.cred_id, verdict=r["verdict"], rules=r["rules"], tool=a.tool[:32],
               evaluation=r["gate_evaluation_id"], grant_issued=bool(r["grant_id"]))
     return r
 
@@ -93,11 +93,11 @@ async def execute_ep(request: Request, p: Principal = Depends(require("tools.exe
     try:
         x = g.execute_grant(body, ctx)
     except g.ExecRefused as e:
-        obs.inc("qyrix_executions_total", tenant=ctx.name, outcome=e.code)
-        obs.event("execution_refused", tenant=ctx.name, cred=p.cred_id, code=e.code)
+        obs.inc("qyrix_executions_total", tenant=p.tenant, outcome=e.code)
+        obs.event("execution_refused", tenant=p.tenant, cred=p.cred_id, refusal=e.code)
         raise HTTPException(e.status, e.code)
-    obs.inc("qyrix_executions_total", tenant=ctx.name, outcome="EXECUTED" if x["executed"] else "FAILED")
-    obs.event("execution", tenant=ctx.name, cred=p.cred_id, evaluation=x["gate_evaluation_id"], executed=x["executed"], adapter=x["adapter"])
+    obs.inc("qyrix_executions_total", tenant=p.tenant, outcome="EXECUTED" if x["executed"] else "FAILED")
+    obs.event("execution", tenant=p.tenant, cred=p.cred_id, evaluation=x["gate_evaluation_id"], executed=x["executed"], adapter=x["adapter"])
     return x
 
 
@@ -145,7 +145,7 @@ def anchor_ep(p: Principal = Depends(require("proof.anchor"))):
         code = {"ANCHOR_NOT_CONFIGURED": 409, "EMPTY_PROOF_BUNDLE": 422, "PROOF_DEGRADED": 409, "ANCHOR_STALE": 409}.get(e.code, 503)
         raise HTTPException(code, "%s: %s" % (e.code, e.detail) if e.detail else e.code)
     obs.inc("qyrix_anchor_attempts_total", outcome="ANCHORED")
-    obs.event("anchored", tenant=ctx.name, n=a["n"], tsa=a["tsa_url"])
+    obs.event("anchored", tenant=p.tenant, n=a["n"], tsa=a["tsa_url"])
     return a
 
 
@@ -218,7 +218,7 @@ def reset_ep(p: Principal = Depends(require("demo.reset"))):
     ctx = tenancy.ctx_for(p)
     with ctx.lock:
         g._reset_state(ctx)
-    obs.event("tenant_reset", tenant=ctx.name, cred=p.cred_id)
+    obs.event("tenant_reset", tenant=p.tenant, cred=p.cred_id)
     return {"reset": True}
 
 
@@ -563,4 +563,6 @@ def metrics(authorization: str = Header(default="")):
         gauges['qyrix_gate_degraded{tenant="%s"}' % tid] = 1 if ctx.state["degraded"] else 0
         gauges['qyrix_persistence_up{tenant="%s"}' % tid] = {"postgres": 1, "memory": 0, "down": -1}[ctx.state["persistence"]]
         gauges['qyrix_external_calls{tenant="%s"}' % tid] = ctx.ext["calls"]
+        ist = ctx.state.get("integrity", {}).get("status", "NOT_APPLICABLE")
+        gauges['qyrix_integrity_ok{tenant="%s"}' % tid] = 0 if ist == "RECOVERY_REQUIRED" else (-1 if ist == "DISABLED" else 1)
     return PlainTextResponse(obs.render(gauges), media_type="text/plain; version=0.0.4")

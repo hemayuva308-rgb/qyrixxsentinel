@@ -199,7 +199,7 @@ def _throttle_login(client: str, tenant: str, email: str) -> str:
     if not identity.hit_ip("login", client, _int("QYRIX_LOGIN_PER_IP_PER_MIN", 30)) or \
        not identity.limiter.hit(acct, _int("QYRIX_LOGIN_MAX_FAILURES", 5), window=_int("QYRIX_LOGIN_LOCK_SECONDS", 900), count=False):
         obs.inc("qyrix_rate_limited_total", scope="login")
-        obs.event("login_throttled", severity="warning", tenant=tenant, email=email_tag(email), client=client[:64])
+        obs.event("login_throttled", severity="warning", tenant=tenant, account=email_tag(email), client=client[:64])
         raise AuthError(429, "too many login attempts; try again later")
     return acct
 
@@ -207,7 +207,7 @@ def _throttle_login(client: str, tenant: str, email: str) -> str:
 def _fail_login(acct: str, tenant: str, email: str, reason: str, client: str) -> None:
     identity.limiter.hit(acct, 10 ** 9, window=_int("QYRIX_LOGIN_LOCK_SECONDS", 900))
     obs.inc("qyrix_login_failures_total", reason=reason)
-    obs.event("login_failed", severity="warning", tenant=tenant, email=email_tag(email), reason=reason, client=client[:64])
+    obs.event("login_failed", severity="warning", tenant=tenant, account=email_tag(email), reason=reason, client=client[:64])
 
 
 # ---------------- login ----------------
@@ -456,7 +456,7 @@ def forgot_password(email: str, client: str) -> Dict:
         return generic
     db = _db()
     u = db.run(lambda cur: (cur.execute("SELECT id FROM users WHERE email=%s AND disabled_at IS NULL", (email,)), cur.fetchone())[1])
-    obs.event("password_reset_requested", email=email_tag(email), known=bool(u), mailer=mailer.configured())
+    obs.event("password_reset_requested", account=email_tag(email), known=bool(u), mailer=mailer.configured())
     if u and mailer.configured():
         tok = _issue_reset(db, u[0], "self-service")
         mailer.send("password_reset", email, {"token": tok})
@@ -520,7 +520,7 @@ def invite(p: Optional[Principal], tenant: str, email: str, role: str) -> Dict:
     delivered = False
     if mailer.configured():
         delivered = mailer.send("invitation", email, {"token": tok, "tenant": tenant, "role": role})
-    obs.event("invitation_created", severity="warning", tenant=tenant, invitation=iid, role=role, email=email_tag(email), by=by,
+    obs.event("invitation_created", severity="warning", tenant=tenant, invitation=iid, role=role, account=email_tag(email), by=by,
               delivered=delivered)
     return {"id": iid, "tenant": tenant, "email": email, "role": role, "expires_at": exp.isoformat(), "delivered_by_email": delivered,
             "invitation_token": tok,

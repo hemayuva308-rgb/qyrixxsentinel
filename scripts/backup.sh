@@ -24,5 +24,7 @@ python3 backend/scripts/backup.py seal --out "$out" --install-id "$iid" --starte
 if [ -n "${QYRIX_BACKUP_UPLOAD_CMD:-}" ]; then
   eval "${QYRIX_BACKUP_UPLOAD_CMD//\{dir\}/$out}"
 fi
-date -u +%s > backups/.last_success      # monitored: backup age alert (docs/OPERATIONS.md)
+# monitored (ops/prometheus/qyrix-alerts.yml QyrixBackupTooOld) via node_exporter --collector.textfile.directory=backups
+printf '# TYPE qyrix_backup_last_success_timestamp_seconds gauge\nqyrix_backup_last_success_timestamp_seconds %s\n' "$(date -u +%s)" > backups/qyrix_backup.prom.tmp
+mv backups/qyrix_backup.prom.tmp backups/qyrix_backup.prom
 echo "encrypted backup written to $out"

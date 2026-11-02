@@ -46,8 +46,7 @@ def _build(tid: str) -> "g.GateContext":
     try:
         g.attach_persistence(ctx, persistence.PgPersistence(dsn, tenant_id=tid))
     except Exception:
-        ctx.state["persistence"] = "down"                  # context exists but blocks everything (R17)
-        obs.inc("qyrix_persistence_down_total", tenant=tid)
+        g._db_down(ctx, "TENANT_ATTACH_FAILED")            # context exists but blocks everything (R17)
     return ctx
 
 

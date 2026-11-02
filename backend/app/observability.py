@@ -6,6 +6,7 @@ supported deployment; a multi-replica deployment must scrape every replica).
 """
 import json
 import logging
+import re
 import sys
 import threading
 import time
@@ -23,8 +24,30 @@ _HELP = {
     "qyrix_sessions_total": "Session lifecycle events",
     "qyrix_persistence_down_total": "Transitions of a tenant context to persistence=down",
     "qyrix_anchor_attempts_total": "RFC 3161 anchoring attempts by outcome",
+    "qyrix_alerts_total": "Alerts raised by name and severity",
+    "qyrix_integrity_failures_total": "Data-loss / integrity detections by reason",
+    "qyrix_tenant_isolation_violations_total": "Row-level-security violations observed (never expected)",
+    "qyrix_db_privilege_violations_total": "Startup refusals because the runtime DB account was over-privileged",
+    "qyrix_login_failures_total": "Human login failures by reason",
+    "qyrix_mfa_failures_total": "MFA failures by reason",
+    "qyrix_rate_limit_denials_total": "Requests denied by the shared limiter by scope",
+    "qyrix_rate_limit_backend_errors_total": "Shared rate-limit store errors by scope",
 }
-_FORBIDDEN = {"token", "credential", "password", "secret", "data", "dest", "text", "authorization", "session_token", "key"}
+_FORBIDDEN = {"token", "credential", "password", "secret", "data", "dest", "text", "authorization", "session_token", "key",
+              "code", "recovery_code", "otp", "totp", "email", "challenge", "cookie"}
+# defence in depth: even an allowed field never carries something that LOOKS like a credential
+_SCRUB = re.compile(r"(q(sk|ss|si|pr|ch)_[A-Za-z0-9_\-]{8,}|AGE-SECRET-KEY-[A-Z0-9]+|(?i:bearer)\s+[A-Za-z0-9._\-]{8,}|"
+                    r"sk-[A-Za-z0-9_\-]{8,}|(?i:password|passwd|secret|api[_-]?key)\s*[=:]\s*\S+)")
+
+
+def _clean(v):
+    if isinstance(v, str):
+        return _SCRUB.sub("[REDACTED]", v)[:500]
+    if isinstance(v, (list, tuple)):
+        return [_clean(x) for x in v][:50]
+    if isinstance(v, dict):
+        return {k: _clean(x) for k, x in v.items() if str(k).lower() not in _FORBIDDEN}
+    return v
 
 _log = logging.getLogger("qyrix.security")
 if not _log.handlers:
@@ -43,8 +66,14 @@ def inc(name: str, value: float = 1.0, **labels: str) -> None:
 
 def event(kind: str, **fields) -> None:
     """Structured security event. Fields that could carry secrets are dropped by name, never logged."""
-    safe = {k: v for k, v in fields.items() if k.lower() not in _FORBIDDEN}
+    safe = {k: _clean(v) for k, v in fields.items() if k.lower() not in _FORBIDDEN}
     _log.info(json.dumps({"ts": round(time.time(), 3), "event": kind, **safe}, default=str, separators=(",", ":")))
+    if kind != "alert":
+        try:
+            from app import alerts
+            alerts.observe(kind, safe)
+        except Exception:                         # alerting must never break the request path (the event is logged above)
+            inc("qyrix_alert_engine_errors_total")    # ... but a broken alert engine must be visible, not silent
 
 
 def snapshot() -> Dict[str, float]:
