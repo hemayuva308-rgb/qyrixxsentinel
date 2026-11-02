@@ -1,11 +1,11 @@
-# QYRIX SENTINEL — Security Acceptance Tests (v1.3)
+# QYRIX SENTINEL — Security Acceptance Tests (v1.4)
 
 A release is acceptable only if **every automated test below passes** and every **manual/environment** item is either
 re-run for that release or explicitly listed as not run. Run: `cd backend && pip install -r requirements-dev.txt && python -m pytest -q`
 (PostgreSQL binaries must be installed for the database tests; without them those tests SKIP and the release is NOT acceptable).
 
-Status at commit time (2026-11-02): **210 passed, 1 skipped** (the skipped test is the opt-in live Meta Llama call).
-Live Compose E2E: 22/22. Evidence: `evidence/pytest-junit.xml`, `evidence/production-hardening-v1.3.txt`.
+Status at commit time (2026-11-02, v1.4): **302 passed, 1 skipped** (the skipped test is the opt-in live Meta Llama call).
+Live Compose E2E: 30/30 (v1.4). Evidence: `evidence/pytest-junit.xml`, `evidence/production-hardening-v1.4.txt`.
 
 ## SAT-1 Authentication
 | ID | Acceptance criterion | Test |
@@ -70,6 +70,19 @@ Live Compose E2E: 22/22. Evidence: `evidence/pytest-junit.xml`, `evidence/produc
 | SAT-7.4 | Per-credential rate limit | `test_per_credential_rate_limit` |
 | SAT-7.5 | No secrets in the repository | secret scan (`evidence/secret-scan.txt`, re-run per release) |
 | SAT-7.6 | Dependencies: `npm audit` 0 and `pip-audit` clean on `requirements-lock.txt` | manual, per release |
+
+## SAT-8 v1.4 additions
+| ID | Acceptance criterion | Test |
+|---|---|---|
+| SAT-8.1 | Runtime DB login is least-privilege; over-privileged account refused (also after auto-recovery) | `test_db_privileges.py` (14) |
+| SAT-8.2 | Missing tenant context sees/writes nothing; forged cross-tenant writes rejected; no evidence rewriting; no OS/DDL escape; no pooled context leak | `test_db_privileges.py` |
+| SAT-8.3 | Data loss / replacement / rollback => RECOVERY_REQUIRED; acceptance audited in the chain | `test_integrity.py` (15) |
+| SAT-8.4 | Human accounts: invitations, scrypt, TOTP (RFC vectors, replay), recovery codes, resets, lock-out, enumeration resistance, session revocation, no secrets in logs | `test_accounts.py` (22) |
+| SAT-8.5 | Shared rate limits: exact admission under concurrency, restart, multiple instances, outage behaviour | `test_ratelimit.py` (7) |
+| SAT-8.6 | Signed client identity; forged/stale/unsigned headers not trusted | `test_identity.py` |
+| SAT-8.7 | Encrypted backups; wrong key / corruption / forged manifest / missing / swapped refused; interrupted restores safe | `test_backup.py` (13) |
+| SAT-8.8 | Alerts fire, de-duplicate, never block, carry no secrets | `test_alerts.py` (14) |
+| SAT-8.9 | Every protected route refuses bad credentials; platform/tenant separation | `test_route_auth.py` (9) |
 
 ## Not covered (must not be claimed)
 External penetration test · load / soak testing · multi-replica behaviour · public TSA anchoring · live Meta Llama ·

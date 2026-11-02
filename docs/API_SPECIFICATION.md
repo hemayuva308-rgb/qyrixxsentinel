@@ -1,4 +1,4 @@
-# QYRIX SENTINEL — API Specification (as implemented, v1.3)
+# QYRIX SENTINEL — API Specification (as implemented, v1.4)
 
 Base path: `/api/v1`. Any other path → `400 {"error":"SOLE_PATH_VIOLATION"}`.
 Authentication: `Authorization: Bearer <credential>` where the credential is one of
@@ -127,6 +127,22 @@ blocked_dest (redacted), lineage, data ("[REDACTED len=N]"), ext_calls, params_d
 * `DELETE /auth/session` (bearer = the session) → revoked server-side.
 * `POST /sentinel/keys` `{role, name, ttl_days?}` (`keys.manage`; role ≤ caller's grant ceiling) → key shown once.
 * `GET /sentinel/keys` → metadata only (never hashes). `POST /sentinel/keys/{id}/revoke` → revokes the key and all its sessions.
+
+## Human accounts (v1.4)
+Public (throttled; uniform errors): `POST /auth/login {tenant, email, password}` → `{status: mfa_required | mfa_enrollment_required, challenge}`
+(or a session only when `QYRIX_REQUIRE_MFA=0`) · `POST /auth/login/mfa {challenge, code | recovery_code}` → session ·
+`POST /auth/mfa/enroll/start {challenge}` → `{secret, otpauth_uri}` once · `POST /auth/mfa/enroll/confirm {challenge, code}` → session +
+10 recovery codes once · `POST /auth/password/forgot {email}` → always 202 · `POST /auth/password/reset {token, new_password}` ·
+`POST /auth/invitations/accept {token, name, password}`.
+Human session: `GET /auth/me`, `POST /auth/password/change {current_password, new_password, code}` (revokes all sessions),
+`POST /auth/mfa/recovery-codes {code}`.
+`users.manage` (owner, admin): `POST/GET /sentinel/invitations`, `POST /sentinel/invitations/{id}/revoke`, `GET /sentinel/members`,
+`POST /sentinel/members/{uid}/role {role}`, `DELETE /sentinel/members/{uid}`, `POST /sentinel/members/{uid}/password-reset`
+(token once), `POST /sentinel/members/{uid}/mfa-reset`. Rules: grant ceiling; admins cannot act on owners; nobody acts on
+themselves here; last owner protected; role change / removal revokes sessions.
+Platform: `POST /platform/tenants/{id}/invitations` (bootstrap / break-glass owner invite).
+`/sentinel/gate/evaluate` now **rejects unknown fields (422)**. Readiness includes `integrity` (+ `integrity_reason`).
+Client identity header `x-qyrix-client: v1|<ip|unknown>|<ts>|<hmac>` is honoured only with a valid fresh HMAC.
 
 ## Platform (platform operator only; no tenant data access)
 * `POST /platform/tenants` `{id, name, approved_domains?}` — needs `QYRIX_MULTI_TENANT=1` **and** PostgreSQL (else 409

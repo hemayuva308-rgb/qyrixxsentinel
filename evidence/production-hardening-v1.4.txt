@@ -1,0 +1,59 @@
+QYRIX SENTINEL v1.4 - hardening validation record
+Date: 2026-11-02 (UTC) - Branch claude/hopeful-franklin-5ggx72 (local commits on top of bfbea14; not pushed)
+Environment: Linux cloud container (4 CPUs), Docker 29.9.2, Python 3.13 host / 3.12 images, PostgreSQL 16, Node 22.
+
+1. Backend suite: 302 passed, 1 skipped (opt-in live Meta Llama; needs credentials).
+   evidence/pytest-junit.xml sha256 de1ab073f0fd8bb3d7f5243ae7c4b9d013def251f9a01aee0afe5762a03bf1da
+   New this round: test_db_privileges (14), test_integrity (15), test_accounts (22), test_ratelimit (7),
+   test_alerts (14), test_route_auth (9), test_backup rewritten (13), tenancy/identity additions.
+
+2. Benchmark (exact 10 cases, composition unchanged): attacks blocked 7/7 (100 %), safe allowed 3/3 (task completion
+   100 %), false positives 0/3, external calls 0, latency avg 1.531 ms, p50 1.042 ms, max 3.249 ms (p95 = max with 10
+   samples), proof chain PARTIAL_UNANCHORED (no TSA). 10 synthetic cases only - not a security guarantee.
+
+3. CLEAN Docker build: build cache pruned, all qyrix images removed, docker build --no-cache --pull of the committed
+   Dockerfiles. Docker Hub rate limits were avoided with the daemon registry mirror mirror.gcr.io; base images are
+   pinned by digest, so the content is identical to Docker Hub's. The only difference from the committed Dockerfiles:
+   two lines injecting this sandbox's egress-proxy CA so pip/npm can reach their registries (verified by diff).
+   backend 27 s, frontend 126 s. Installed in image: fastapi 0.162.0, cryptography 50.0.2, psycopg 3.3.6; no pytest.
+
+4. Compose (fresh volumes + freshly generated secrets): migrate exit 0, 6 migrations applied, runtime password set,
+   demo reset denied; db/backend/frontend healthy; backend logged FRESH install (installation_initialized).
+   Live roles: qyrix_runtime (login) super=f bypassrls=f createrole=f createdb=f; backend connects only as
+   qyrix_runtime; backend container secrets: client_sig_key, data_key, db_runtime_password, state_witness_key
+   (no admin secret); uid 10001.
+
+5. Live E2E (/tmp script; secrets read from files, never printed): 30/30 PASS
+   key login -> qss_ cookie only; status tenant/postgres/integrity; gate via proxy; unknown body field 422;
+   tenants; platform bootstrap invitation; invitation accept via frontend + single use; password -> MFA enrolment
+   (no session, challenge not exposed); TOTP secret once; enrolment -> session + 10 recovery codes; human session
+   tenant acme credential user:*; MFA login: wrong code 401, correct code session; non-member uniform 401;
+   cross-tenant grant execution refused; LIVE RLS as qyrix_runtime: other tenant 0 rows, no context 0 rows;
+   runtime refused COPY PROGRAM / key_hash read / DELETE proof_records / SET ROLE qyrix / DISABLE RLS;
+   rotating X-Forwarded-For cannot dodge the per-account lock (401 x5 then 429); metrics incl. integrity gauge;
+   ready; security events present; no tokens/keys/passwords/TOTP/recovery codes/e-mails in logs.
+   (Two test-script bugs fixed during the run: a password containing the e-mail name - correctly rejected by policy -
+   and a lock-out target recomputed per attempt.)
+   Judging workflow (demo_judging.py through the session login): ALL CHECKS PASSED (twice).
+
+6. Encrypted backup / total loss / restore drill (scripts/backup.sh, restore.sh; age keys outside the repo):
+   backup 0.7 s, files age-encrypted (no known plaintext found), signed manifest verified, backup-age metric written.
+   Disaster: DROP SCHEMA + wipe of the chain volume, migrate re-run, backend restarted:
+     /ready 503 integrity RECOVERY_REQUIRED reason DATABASE_LOST_OR_REPLACED, Gate degraded, critical alert.
+     (v1.3 came back as a healthy empty install here.)
+   restore.sh: verification + decryption first, DB single transaction, migrate, chain staged; 4.0 s.
+   Without acceptance: /ready 503 PROOF_CHAIN_REGRESSED (restored data older than the witness).
+   app.recovery accept --reason ...: witness re-sealed, 3 tenants queued; after start: ready 200, last proof record
+   RECOVERY_ACCEPTED with the reason; restored head 08e474ad... = head before backup.
+
+7. Failure modes live: DB stopped -> authenticated requests 503 (auth-failure limiter fails closed before the Gate),
+   /ready 503; DB started -> ALLOW again without restart. Shutdown 1 s, cold start to all-healthy 18 s.
+
+8. Supply chain: npm audit 0; pip-audit (PyPI service) clean on requirements-lock.txt; gitleaks history + tracked
+   tree clean (12 reviewed exceptions in .gitleaksignore); bandit 0 medium/high (20 low, reviewed); actionlint clean;
+   promtool: 14 rules SUCCESS; Syft source SBOM 90 packages (evidence/sbom/). NOT run here: Grype and CodeQL
+   (vulnerability databases not downloadable from this environment) - they run in CI.
+
+9. External: public RFC 3161 TSAs (freetsa, digicert, sectigo, ssl.com) unreachable (connection refused by egress);
+   Meta Llama live: no credentials; LlamaFirewall offline subset: see evidence/llamafirewall-offline-comparison.json;
+   Pipelock v3.7.1 release found (checksummed) but executing it was refused by this environment's permission policy.

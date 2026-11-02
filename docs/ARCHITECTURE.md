@@ -1,4 +1,4 @@
-# QYRIX SENTINEL — Architecture (as implemented, v1.3)
+# QYRIX SENTINEL — Architecture (as implemented, v1.4)
 
 Status legend: **IMPLEMENTED** (code exists) · **TESTED** (automated test executed in this repo) · **PARTIAL** · **NOT IMPLEMENTED** · **PLANNED**.
 
@@ -67,6 +67,21 @@ evaluations, grants, adapters, egress counter, latency samples, degraded flag, l
 * Demo — `demo.new_context()` per request: new `ProvenanceStore`, in-memory chain (no file), demo allowlist
   (`api.example.com`, `docs.example.com`), `SandboxAdapter` for every tool, no workspace.
 * Benchmark CLI — `scripts/run_benchmark.py`: isolated context, its own chain file, **no adapters**.
+
+### v1.4 additions (modular monolith preserved: same FastAPI process, same PostgreSQL, same Compose topology + one one-shot job)
+| Module | File | Responsibility | Status |
+|---|---|---|---|
+| Migrator | `app/migrate.py` | one-shot admin job: migrations 001–006, runtime role password (SCRAM verifier), demo-reset grant | TESTED |
+| Integrity | `app/integrity.py`, `app/recovery.py` | installation identity, signed state witness, RECOVERY_REQUIRED, operator acceptance | TESTED (+ live drill) |
+| Accounts | `app/accounts.py`, `app/mailer.py` | human users, memberships, invitations, scrypt, TOTP, recovery codes, resets; e-mail boundary | TESTED |
+| Shared limiter | `app/identity.py` (`SharedLimiter`) | PostgreSQL-backed counters for all instances | TESTED (2 real processes) |
+| Client identity | `app/auth.py` + `frontend/src/lib/backend.ts` | trusted-hop visitor IP, HMAC-signed hand-off | TESTED |
+| Alerts | `app/alerts.py` | immediate + threshold security alerts, signed webhook | TESTED |
+| Backups | `backend/scripts/backup.py`, `scripts/backup.sh`, `scripts/restore.sh`, `scripts/dr_drill.py` | age-encrypted, signed, staged restore | TESTED (+ live drill) |
+
+Why the database layer changed: the runtime account previously had owner/superuser power (see SECURITY_DESIGN §7c). The
+architecture is unchanged in shape; only the privileges the long-running process holds were reduced, and a migration
+job was split out of it.
 
 ## 3. Enforcement flow
 

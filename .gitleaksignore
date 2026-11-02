@@ -12,3 +12,6 @@ backend/app/accounts.py:generic-api-key:43
 backend/app/gateway.py:generic-api-key:886
 backend/tests/test_sentinel.py:generic-api-key:42
 backend/tests/test_sentinel.py:generic-api-key:75
+# v1.4: benchmark fixture in exported case texts; deliberate fake secret asserted to be REDACTED by test_alerts
+a86b0dcd1a7c3f8a5c4375b2bf78e72f02bac82d:evidence/benchmark-case-texts.json:generic-api-key:49
+882f40ae81efdad2f2b50dc350c442c0e150359f:backend/tests/test_alerts.py:generic-api-key:104

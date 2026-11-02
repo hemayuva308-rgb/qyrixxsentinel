@@ -1,4 +1,4 @@
-# QYRIX SENTINEL — Security Design (as implemented, v1.3)
+# QYRIX SENTINEL — Security Design (as implemented, v1.4)
 
 ## 1. Principles
 1. **Prevention before execution.** A tool action runs only after a deterministic ALLOW, a recorded proof, and a valid single-use grant.
@@ -100,6 +100,20 @@ restart (incl. SIGKILL of a real uvicorn process), replay across processes, expi
 * **Fail closed** — identity store errors ⇒ 503; tenant context build errors ⇒ 503 `TENANT_CONTEXT_UNAVAILABLE`;
   persistence down ⇒ R17 for that tenant only.
 
+## 7c. v1.4 hardening (what changed, why, threat, evidence)
+| Change | Why / threat | Evidence |
+|---|---|---|
+| Backend logs in as `qyrix_runtime` (NOSUPERUSER, NOBYPASSRLS, owns nothing, member of `qyrix_app` only), verified at startup; migrations by a one-shot admin job; column-scoped grants; RLS on every tenant table incl. credentials; credential lookups via hash-only SECURITY DEFINER functions owned by NOLOGIN roles | v1.3 ran as the Docker superuser with BYPASSRLS and relied on `SET LOCAL ROLE`: SQL injection / RCE ⇒ every tenant, evidence rewrite, OS commands (T18, T30) | `test_db_privileges.py`, live DB check |
+| Persistence auto-recovery re-runs the full verified attach when the first attach never completed | pre-existing **fail-open**: a context whose first attach failed was flipped to postgres by the 2 s recovery without privilege/schema checks | regression test |
+| Installation identity + HMAC state witness on separate storage (+ optional expected install id); RECOVERY_REQUIRED + audited acceptance recorded in the chain | silent total loss / rollback looked like a fresh install (T29) | `test_integrity.py`, live drill |
+| Human accounts: scrypt, mandatory TOTP (RFC 6238, replay-protected, secrets AES-GCM encrypted), one-time recovery codes, single-use invitations / resets / challenges, uniform errors, lock-out, session revocation on every privilege change | operator access was bearer keys only (T31) | `test_accounts.py`, live E2E |
+| Shared PostgreSQL rate limiter; signed visitor identity from trusted proxy hops | limits were per process; X-Forwarded-For / demo header were trusted (T22, T28, T32) | `test_ratelimit.py`, identity tests, live E2E |
+| Encrypted (age) + signed backups, staged restore | backups were plaintext; tampering detectable only by an unsigned manifest (T26) | `test_backup.py`, live drill |
+| Alert engine, value scrubbing in events, Prometheus rules, runbooks | detection depended on humans reading logs (T33) | `test_alerts.py`, promtool |
+| Gate request schema rejects unknown fields | silently ignored fields (e.g. "tenant") could mislead clients | `test_tenancy.py` |
+
+Residual risks are listed in `docs/PRODUCTION_READINESS.md` §3 and `security/threat-model.md`.
+
 ## 8. AI minimisation
 Redacted and bounded (4,000 chars) input sent as JSON data under a fixed system prompt, temperature 0, no tools; reply must be
 exactly `{label, explanation}`; `-contributor` models and non-HTTPS endpoints refused; provider errors fall back to a labelled
@@ -131,4 +145,4 @@ kill switch `QYRIX_PUBLIC_DEMO=0`. Tested: production chain unchanged after all 
 ## 11. Known gaps (do not claim)
 One backend process per database (rate limits and contexts are in-process); in-memory state when no database is configured; no per-destination network allowlist when the egress override is enabled; TLS SNI with
 pinned IP not verified live; DNS has no explicit timeout; broad secret regex; CSP allows inline scripts; public-TSA anchoring not verified; Meta Llama not live-verified;
-no third-party audit or penetration test; no MFA/SSO for operators; backups not encrypted by the tooling; empty-state data loss not alarmed.
+no third-party audit or penetration test; no SSO/WebAuthn; code execution inside the backend can select any tenant context; multi-replica load untested.

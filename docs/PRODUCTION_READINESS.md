@@ -1,167 +1,99 @@
-# QYRIX SENTINEL — Production-Readiness Assessment (Assessment B, v1.3)
+# QYRIX SENTINEL — Production-Readiness Assessment (v1.4)
 
-Date: 2026-11-02 · Branch `claude/hopeful-franklin-5ggx72` · Backend 1.3.0
+Date 2026-11-02 · branch `claude/hopeful-franklin-5ggx72` (local commits after `bfbea14`) · backend 1.4.0.
+Supersedes the v1.3 assessment (history in git).
 
-**Verdict: NOT production-ready for paying, multi-tenant customers.** This build is a hardened **controlled beta**: a
-single-replica deployment for design partners, under an operator who reads the "Blocked" and "Not implemented" rows below.
-A successful hackathon demo is *not* evidence of production readiness, and this assessment does not treat it as such.
-No external security audit or penetration test has been performed.
+## Verdict: **CONTROLLED BETA READY**
 
-Classification legend
-* **IT** Implemented and tested: automated tests or a recorded drill in this repository exercise it; evidence named.
-* **IU** Implemented but not sufficiently tested: code exists; the test depth is not enough to rely on it in production.
-* **NI** Not implemented.
-* **BX** Blocked by external dependency: needs an account, credential, network access or third party that was not available.
+Fit for a small number of design-partner tenants on a single-replica deployment, operated with the runbooks,
+monitoring and backups described in `docs/OPERATIONS.md` and `docs/DISASTER_RECOVERY.md`. **Not** a production
+candidate: no independent penetration test has been performed, the CI pipeline has not yet run on GitHub,
+multi-replica operation and load are untested, and the items under "Not implemented" remain. Passing tests (302) and a
+passing 10-case benchmark are author-written evidence, not proof of security.
 
-## 1. Requirements and classification
+Categories: **IV** implemented and verified (automated tests and/or a recorded live drill in this repository — by the
+authors) · **IN** implemented but not independently/fully verified · **P** partially implemented · **NI** not
+implemented · **BX** blocked by an external dependency. Nothing has been independently verified by a third party yet.
 
-### 1.1 Core security function (must never regress)
-| # | Requirement | Class | Evidence / note |
-|---|---|---|---|
-| C1 | Deterministic default-deny Execution Gate (R0–R17), fail closed | IT | `test_sentinel.py`, `test_v12_controls.py`, `test_hardening.py` |
-| C2 | Grant-only execution bound to stored parameters; single use; replay refused | IT | same + `test_persistence.py` (cross-process) |
-| C3 | Monotone trust provenance (UUID v4, cycle detection, trust index) | IT | `test_sentinel.py`, `test_persistence.py` |
-| C4 | SSRF / DNS rebinding / redirect / path-traversal defences | IT | `test_hardening.py`; live TLS-SNI pinning not verified (IU part) |
-| C5 | Tamper-evident proof chain; PASS only with a verified anchor | IT | `test_anchor.py`, `test_sentinel.py` |
-| C6 | Meta Llama advisory only (never authorises) | IT | `test_classifier.py` (mocked providers) |
-| C7 | Live Meta Llama classification | BX | no `META_API_KEY`; provider hosts blocked from this environment |
-| C8 | Day-1 LlamaFirewall / Pipelock baseline comparison | BX | LlamaFirewall install/run needs the owner's permission (refused by the environment's permission policy); Pipelock unreachable |
+## 1. Security foundation
 
-### 1.2 Tenant isolation
-| # | Requirement | Class | Evidence / note |
-|---|---|---|---|
-| T1 | Tenant derived only from the credential | IT | `test_identity.py`, `test_tenancy.py` |
-| T2 | Per-tenant provenance, approvals, evaluations, grants, chain, anchors, workspace, allowlist | IT | `test_tenancy.py` (real PostgreSQL), live E2E |
-| T3 | Tenant filter in every SQL statement + PostgreSQL RLS (`FORCE`) under least-privilege role | IT | `test_row_level_security_…`, live DB check |
-| T4 | Cross-tenant IDOR refused (grants, approvals, revocation, provenance, keys, proofs) | IT | `test_tenancy.py` |
-| T5 | Multi-tenancy off by default; refused without PostgreSQL | IT | `test_tenancy.py` part 1 |
-| T6 | Tenant disable cuts keys and sessions immediately | IT | `test_disabling_a_tenant_cuts_keys_and_sessions` |
-| T7 | OS-level isolation between tenants (separate processes / containers / encryption keys) | NI | one process and one DB cluster for all tenants |
-| T8 | Isolation verified by an external penetration test | NI | — |
+| Requirement | Class | Evidence / gap |
+|---|---|---|
+| Deterministic default-deny Gate is the sole execution authority; grant-only execution | IV | core suites; benchmark 7/7 blocked, 3/3 allowed, 0 FP, 0 external calls |
+| Meta Llama advisory only (never authorises); timeout / malformed / failure / hostile-output paths | IV | `test_classifier.py` |
+| Meta Llama live provider verification | BX | no credentials; provider hosts unreachable |
+| Least-privilege runtime DB account; admin-only migrations; startup self-check | IV | `test_db_privileges.py`, live DB roles |
+| RLS on all tenant data incl. credentials; missing context fails closed; no pooled context leak | IV | adversarial SQL + concurrency tests, live RLS |
+| Tenant isolation at API level (IDOR, client hints ignored, unknown fields refused) | IV | `test_tenancy.py`, `test_route_auth.py` |
+| Isolation against code execution inside the backend | NI | one runtime role serves all tenants; needs per-tenant roles/processes |
+| Silent data-loss detection + audited recovery | IV | `test_integrity.py`, live total-loss drill |
+| Human accounts, invitations, RBAC, TOTP MFA, recovery codes, resets, lock-out, audit | IV | `test_accounts.py`, live E2E |
+| SSO (OIDC/SAML), WebAuthn, breached-password screening | NI | — |
+| E-mail delivery | P | signed webhook boundary; no relay shipped or configured |
+| Sessions: server-side, expiry, revocation on every privilege change | IV | identity + accounts tests |
+| Distributed rate limiting (atomic, restart-proof, multi-instance) | IV | `test_ratelimit.py` incl. two real processes |
+| Spoof-resistant client identity | IV | signed-header tests, live X-Forwarded-For test |
+| Multi-replica operation under load | IN | design supports it; not load-tested |
+| Encrypted, signed backups; verified staged restore | IV | `test_backup.py`, live drill |
+| PITR / WAL archiving; RTO measured at production scale | NI | RTO measured only on small synthetic data |
+| Secret-safe structured security events; alert rules; runbooks | IV | `test_alerts.py`, promtool, `docs/OPERATIONS.md` |
+| Alert delivery to an on-call system | P | signed webhook + Prometheus rules; no receiver configured |
+| CI: tests, typecheck, build, audits, hash + lockfile checks, gitleaks, bandit, CodeQL, compose validation, SBOM, Grype | IN | workflow written, actionlint-clean, every step run locally except CodeQL/Grype; **not yet run on GitHub** |
+| Digest-pinned base images; clean no-cache build | IV | clean build recorded (registry mirror; CA injection the only difference) |
+| Signed images / SBOMs, provenance attestations | NI | — |
+| Proof anchoring with a public TSA | BX | public TSAs unreachable here; local TSA verified |
+| Independent penetration test | NI | plan ready: `docs/SECURITY_TEST_PLAN.md` |
+| LlamaFirewall comparison | P | offline scanners only (0/7 attacks flagged); model/LLM scanners not run |
+| Pipelock comparison | BX | release located; execution refused by this environment's permission policy |
 
-### 1.3 Authentication, authorization, sessions
-| # | Requirement | Class | Evidence / note |
-|---|---|---|---|
-| A1 | Strong operator tokens (≥ 24 chars, placeholders refused, constant-time) | IT | `test_hardening.py`, `test_placeholder_token.py` |
-| A2 | Tenant API keys: random 256-bit, hashed, shown once, expiring, revocable | IT | `test_identity.py` |
-| A3 | 7-role permission matrix enforced server-side on every route | IT | `test_rbac_matrix` |
-| A4 | No privilege escalation through key minting | IT | `test_privilege_escalation_…` |
-| A5 | Platform operator without tenant data access | IT | unit + live E2E |
-| A6 | Server-side sessions: hashed, absolute + idle expiry, server-side logout | IT | `test_identity.py`, live E2E |
-| A7 | Sessions die on key revocation, token rotation, tenant disable | IT | `test_identity.py`, `test_tenancy.py` |
-| A8 | Browser never holds the credential (httpOnly SameSite=Strict session cookie) | IT | live E2E |
-| A9 | CSRF protection on state-changing console calls | IT | proxy CSRF guard (live E2E), earlier `evidence/authenticated-flow.txt` |
-| A10 | Human user accounts, invitations, SSO (OIDC/SAML), MFA | NI | credentials are role API keys |
-| A11 | Per-object ownership inside a tenant | NI | — |
-| A12 | Browser E2E of every console screen for every role | IU | API-level matrix is tested; UI per role is not |
+## 2. Product requirements (separate phase; not security-blocking)
 
-### 1.4 API security and abuse controls
-| # | Requirement | Class | Evidence / note |
-|---|---|---|---|
-| P1 | Strict request schemas (extra fields refused), size limits | IT | `test_v12_controls.py`, `test_identity.py` (422 cases) |
-| P2 | Per-credential rate limit | IT | `test_per_credential_rate_limit` |
-| P3 | Per-client + global auth-failure throttling; spoof-resistant client id | IT | `test_identity.py` (3 tests) |
-| P4 | Rate limiting shared across replicas / restarts | NI | in-process limiter (risk T28) |
-| P5 | Security headers / CSP | IT | `evidence/csp-check.txt`, route sweep; CSP still allows inline scripts (IU part) |
-| P6 | TLS termination / HSTS | NI | deployment responsibility; Compose publishes HTTP on 127.0.0.1 only |
-| P7 | Load and soak testing | NI | — |
+| Requirement | Class |
+|---|---|
+| Organisation onboarding | P — platform API creates tenant + invites owner; no self-service UI |
+| Human accounts and invitations | IV — API + login / invite / reset UI; no member-management page |
+| Workspace management | P — per-tenant workspaces created automatically; no management UI |
+| API-key lifecycle | IV (API) / P (no UI) |
+| Usage metering, quotas | NI |
+| Billing integration | NI |
+| Customer documentation | P — operator documentation only |
+| Support workflow | NI |
+| Customer data retention and deletion | NI — evidence is append-only by design; policy undefined |
+| Tenant-level audit export | P — per-tenant proof bundle; no export of security events / membership history |
+| Service-level monitoring (SLOs) | P — metrics + readiness; no SLO definitions |
 
-### 1.5 Persistent data, proof anchoring, backup / recovery
-| # | Requirement | Class | Evidence / note |
-|---|---|---|---|
-| D1 | Durable state in PostgreSQL; restart-safe; outage fails closed | IT | `test_persistence.py` (15, real clusters), Docker restart evidence |
-| D2 | Append-only proof mirror and anchors (DB triggers) | IT | `test_proof_mirror_and_anchors_are_append_only` |
-| D3 | DB password only via Docker secret / password file | IT | `test_persistence.py`, `evidence/docker-secret-validation.txt` |
-| D4 | RFC 3161 anchoring with independent verification (`openssl ts -verify`) | IT | `test_anchor.py` against a local TSA |
-| D5 | Anchoring against a public / commercial TSA | BX | outbound access to a public TSA not available here |
-| D6 | Scheduled (automatic) anchoring | NI | anchoring is on demand |
-| D7 | Consistent online backup (DB first, chain second, hash manifest) | IT | `test_backup.py`, Compose drill |
-| D8 | Restore into a fresh cluster; wrong-order restore fails closed; replay-safe | IT | `test_backup.py` |
-| D9 | Backup encryption, off-site custody, retention | NI | operator responsibility; not in tooling |
-| D10 | Point-in-time recovery, HA / replication, measured RTO/RPO | NI | — |
-| D11 | Alarm on silent total data loss (empty DB + chain) | NI | risk T29, reproduced in the drill |
-| D12 | Encryption at rest | NI | depends on host / managed DB |
-| D13 | Data retention / deletion policy per tenant | NI | evidence is append-only by design; policy undefined |
+## 3. Remaining risks
 
-### 1.6 Monitoring and operational security
-| # | Requirement | Class | Evidence / note |
-|---|---|---|---|
-| O1 | Readiness endpoint reflecting fail-closed state; container health checks | IT | `test_readiness_…`, Compose (backend/db/frontend healthy) |
-| O2 | Token-protected Prometheus metrics, per-tenant gauges | IT | `test_metrics_…`, live E2E |
-| O3 | Structured security events without secrets | IT | `test_security_events_never_contain_secrets`, live log scan |
-| O4 | Alerting rules, dashboards, on-call runbooks | NI | metrics exist; nothing consumes them yet |
-| O5 | Central log shipping / retention / tamper protection of logs | NI | stdout only |
-| O6 | Least-privilege containers (read-only FS, no caps, no-new-privileges, non-root) | IT | `docker-compose.yml`; validated running |
-| O7 | Network egress isolation of the backend (internal network) | IT | `evidence/docker-compose-validation.txt`; opt-in egress mode only application-level (IU) |
-| O8 | Secrets out of code, history, logs, bundles | IT | secret scans; GitGuardian incidents 39389421/39389422 (false positives, removed) still need manual resolution in the GitGuardian dashboard |
-| O9 | Separate DB login roles for migration vs runtime | NI | runtime connects as owner and drops to `qyrix_app` per transaction |
-| O10 | Secrets manager integration / automated rotation | NI | env + Docker secret files |
+**Critical:** none known and unmitigated in the reviewed code — a statement limited by the absence of an independent test.
 
-### 1.7 Supply chain and dependencies
-| # | Requirement | Class | Evidence / note |
-|---|---|---|---|
-| S1 | Python dependencies pinned with hashes, installed with `--require-hashes` | IT | `requirements-lock.txt`; suite green on the locked set (Python 3.12) |
-| S2 | Known-vulnerability scan clean | IT | `npm audit` 0; `pip-audit` (PyPI service) clean — at commit time only |
-| S3 | Continuous dependency scanning in CI | NI | no CI pipeline in this repository |
-| S4 | Base images pinned by digest; SBOM; signed images | NI | tags only |
-| S5 | Clean-base reproducible image build | IU | blocked during this run by Docker Hub 429; validated on the cached base layers (see evidence) |
-| S6 | Failure modes of every external dependency documented | IT (docs) | `docs/DEPENDENCY_AND_FAILURE_MODES.md` |
+**High:**
+1. No independent penetration test.
+2. Code execution inside the backend process can select any tenant's RLS context (shared runtime role).
+3. CI pipeline not yet executed on GitHub; OS-package vulnerability scanning of images runs only there.
+4. Multi-replica behaviour and load / DoS resilience untested (scrypt cost, DB connection exhaustion).
+5. No SSO / WebAuthn; MFA is TOTP only.
 
-### 1.8 Commercial SaaS features (separate phase, by decision)
-| # | Requirement | Class | Note |
-|---|---|---|---|
-| B1 | Usage metering, quotas in the Gate path | NI | not required for security; deferred |
-| B2 | Subscriptions, billing, invoices, payment provider | NI | deferred; pricing pages say "proposed" |
-| B3 | Self-service signup / organisation management UI | NI | platform API only |
+**Medium:** no PITR; the witness is defeated by an attacker holding DB + chain + witness + witness key when
+`QYRIX_EXPECTED_INSTALL_ID` is not set; CSP allows inline scripts; public TSA anchoring unverified; artifacts unsigned;
+e-mail and alert receivers are operator-provided; DNS has no explicit timeout.
 
-## 2. Security risks (open or partial)
-| Risk | Severity | Why | Mitigation path |
-|---|---|---|---|
-| No external pen test of the tenancy boundary (T18 residual) | High | isolation is tested by its authors only | independent test before onboarding a second customer |
-| No MFA / SSO; role API keys are bearer secrets | High | a leaked owner key = full tenant control until revoked | OIDC + MFA for humans; keep keys for machines with short TTLs |
-| Silent total data loss (T29) | High | empty state boots as a fresh install | persist a deployment fingerprint / expected chain head outside the data volume; `/ready` fails if it regresses |
-| Rate limits per process (T28) | Medium | restarts or replicas reset counters | shared limiter (PostgreSQL or Redis) before scaling out |
-| Backups unencrypted by tooling (T26) | Medium | contain audit data and key hashes | age/GPG encryption + off-site custody in the backup script |
-| Public TSA anchoring not verified (T11) | Medium | external non-repudiation unproven in the field | run against a commercial TSA with egress; schedule anchoring |
-| Base images not digest-pinned, no SBOM (T27) | Medium | supply-chain drift | digest pins, SBOM, image signing in CI |
-| CSP allows inline scripts (T12) | Medium | XSS impact larger if an injection exists | nonce-based CSP |
-| Runtime connects as DB owner | Medium | an RCE in the app could bypass RLS by not dropping role | separate `qyrix_runtime` LOGIN role that is a member of `qyrix_app` only |
-| Live Meta Llama unverified | Low (advisory) | cannot affect Gate decisions | run `llama_live_check.py` with real credentials |
+## 4. Security issues found and fixed in this round
+1. **The runtime DB account was a superuser with BYPASSRLS** (Docker `POSTGRES_USER`); RLS relied on `SET LOCAL ROLE`.
+2. **Fail-open recovery:** auto-recovery flipped a never-attached context to `postgres` without privilege/schema checks.
+3. Silent total data loss was undetectable.
+4. **Per-IP limits bypassable** through a client-supplied `X-Forwarded-For`; the demo trusted an unsigned header.
+5. The Gate silently ignored unknown request fields (now 422).
+6. The old RLS test passed on a column error rather than on RLS (rewritten; adversarial suite added).
+7. The alert metric call crashed (label collision) and a defensive wrapper hid it (fixed; engine errors now alert).
+8. Events logged the internal context name instead of the tenant id; secrets were filtered only by field name.
+9. The SBOM omitted every Python package (lock-file name).
 
-## 3. Test evidence summary
-* Backend: **210 passed, 1 skipped** (`evidence/pytest-junit.xml`, sha256 `cd749baf…fcfa5`); the skip is the opt-in live Llama test.
-* Same suite on Python 3.12 with the hash-locked dependencies (before the final two regression tests): 208 passed, 1 skipped.
-* Live Docker Compose: 3 services healthy; **22/22** live E2E checks; judging workflow ALL CHECKS PASSED; backup → loss → restore identical.
-* Four defects were found **only** by the live stack and fixed with regression tests (read-only tenant workspace ⇒ 500,
-  duplicate tenant ⇒ 500, wrong tenant name, frontend healthcheck binding) — evidence that unit tests alone are insufficient.
-* Frontend: `tsc --noEmit` clean; production build succeeded inside the image; `npm audit` 0.
-* Detailed record: `evidence/production-hardening-v1.3.txt`. Acceptance catalogue: `docs/SECURITY_ACCEPTANCE_TESTS.md`.
-
-## 4. Architecture changes in this phase
-1. **Identity layer** (`app/identity.py`): principals (tenant, role, credential), env tokens, hashed API keys, server-side sessions,
-   permission matrix, platform principal, limiter, Memory/PostgreSQL stores.
-2. **API layer** (`app/api.py`): all routes moved out of `gateway.py`, which is now domain logic only; every handler resolves
-   its `GateContext` from the authenticated principal.
-3. **Tenancy** (`app/tenancy.py`): lazily built per-tenant contexts; fail-closed construction.
-4. **Database** (`migrations/002_tenancy_identity.sql`): tenants, api_keys, sessions; `tenant_id` on every data table;
-   `qyrix_app` role; RLS `FORCE`; tenant-scoped primary keys for proofs.
-5. **Persistence** (`app/persistence.py`): shared connection per DSN, per-transaction `SET LOCAL ROLE` + tenant setting.
-6. **Observability** (`app/observability.py`): metrics, readiness, JSON security events.
-7. **Frontend**: credential → session exchange; the cookie holds only `qss_`; logout revokes server-side; client id forwarded.
-8. **Operations**: Compose health checks, workspace volume, identity/monitoring settings, `backup.sh` / `restore.sh` /
-   `backup.py`, hash-locked Python dependencies, npm override.
-
-Behaviour changes to note: `inspect` now requires owner/admin/security_reviewer (agent tokens get 403, per the plan's
-"integrator inspection upload disabled"); `requested_by` in approval requests is set from the credential.
-
-## 5. Next implementation priorities (in order)
-1. **Data-loss alarm (T29)** — expected-state fingerprint outside the data volume; `/ready` fails on regression.
-2. **Separate runtime DB login role** that cannot bypass RLS; migrations under a different role.
-3. **Human identity**: OIDC SSO + MFA for console users; keep API keys for agents with short TTLs and rotation.
-4. **Shared rate limiter + multi-replica readiness** (state in PostgreSQL, sticky-free), then load/soak tests.
-5. **CI pipeline**: tests with PostgreSQL, `npm audit`/`pip-audit`, secret scan, SBOM, digest-pinned images, signed builds.
-6. **Encrypted, scheduled, off-site backups** with a timed restore drill (measure RTO/RPO).
-7. **Scheduled RFC 3161 anchoring** against a commercial TSA; anchor-age metric + alert.
-8. **Alerting and runbooks** on the existing metrics (degraded Gate, persistence down, auth-failure spikes).
-9. **External penetration test** focused on the tenant boundary and the execution adapters.
-10. Then the separate commercial phase: metering, quotas, billing.
+## 5. Next priorities
+1. Independent penetration test (scenarios A and B in the test plan); fix and re-test findings.
+2. Run the CI workflow on GitHub; resolve any Grype / CodeQL findings; sign images and SBOMs.
+3. Per-tenant database roles (or processes) to contain code execution in the backend.
+4. Load and multi-replica testing; pool and scrypt cost tuning; edge DoS controls.
+5. PITR (WAL archiving) and a timed production-scale restore from off-site storage.
+6. SSO (OIDC) + WebAuthn; breached-password check; a real mail relay.
+7. Scheduled public-TSA anchoring with an anchor-age alert.
+8. Product phase: member / key management UI, retention and deletion policy, tenant audit export, metering, billing.

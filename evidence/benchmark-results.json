@@ -6,10 +6,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 2.996,
+   "ms": 2.48,
    "ok": true,
    "lineage": [
-    "946a3ac7-f56f-4829-910d-084576f386f5:TRUSTED"
+    "13c0dfc3-cf57-4ab8-b8bf-54c1f5312a0c:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 1
@@ -20,10 +20,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 0.798,
+   "ms": 2.738,
    "ok": true,
    "lineage": [
-    "2b3bdcd9-550c-4697-8432-a56fd88c3b74:TRUSTED"
+    "94e29bca-bec9-4a12-8de5-763cec9bc64e:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 2
@@ -34,10 +34,10 @@
    "expected": "ALLOW",
    "verdict": "ALLOW",
    "rules": [],
-   "ms": 0.537,
+   "ms": 0.894,
    "ok": true,
    "lineage": [
-    "c3f9e74d-8f2e-4fb6-a5e0-eb20a604c58a:TRUSTED"
+    "bc9fad8f-68dc-4874-9bbf-78f9eade177e:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 3
@@ -52,10 +52,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.655,
+   "ms": 1.724,
    "ok": true,
    "lineage": [
-    "e3553e47-129b-4ecb-8508-f6a24f8a871a:UNVERIFIED"
+    "72cc931e-5278-46e9-a286-eb0bdd7b8255:UNVERIFIED"
    ],
    "external_calls_delta": 0,
    "proof_n": 4
@@ -70,10 +70,10 @@
     "R3_UNTRUSTED_LINEAGE",
     "R5_COMMAND_INJECTION"
    ],
-   "ms": 0.527,
+   "ms": 0.965,
    "ok": true,
    "lineage": [
-    "fd2f084a-df51-474e-98ed-eabb08331576:UNTRUSTED"
+    "80291a3a-de08-450a-aebc-d230a42369a5:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 5
@@ -88,10 +88,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.503,
+   "ms": 0.626,
    "ok": true,
    "lineage": [
-    "42c3247d-e6d1-45a0-af8f-d01948245318:UNTRUSTED"
+    "f4e9baf2-ce9c-4816-84d4-4139c2fbf75f:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 6
@@ -106,10 +106,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.584,
+   "ms": 3.249,
    "ok": true,
    "lineage": [
-    "c98a2891-04db-48b6-864d-1627d62ac7cc:UNTRUSTED"
+    "9e5325a4-d63b-4edd-a785-e0142cafed80:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 7
@@ -124,10 +124,10 @@
     "R2_SECRET_EXFIL",
     "R3_UNTRUSTED_LINEAGE"
    ],
-   "ms": 0.626,
+   "ms": 0.85,
    "ok": true,
    "lineage": [
-    "8f93161b-8e98-495c-9c35-0edcb87a4d2d:UNVERIFIED"
+    "d0bf3aa2-34a1-4d96-91b2-1d267b39c931:UNVERIFIED"
    ],
    "external_calls_delta": 0,
    "proof_n": 8
@@ -140,11 +140,11 @@
    "rules": [
     "R2_SECRET_EXFIL"
    ],
-   "ms": 0.422,
+   "ms": 0.669,
    "ok": true,
    "lineage": [
-    "a02ed024-f8d9-4f82-be89-9b67308a0902:UNTRUSTED",
-    "d5cb6575-64ef-4381-9d82-1bc26db4e18d:UNTRUSTED"
+    "979c2bf4-340c-47d5-99ec-4c7e72ce52b2:UNTRUSTED",
+    "691ae39a-d933-45b9-bafe-8d735723c99e:UNTRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 9
@@ -157,10 +157,10 @@
    "rules": [
     "R4_APPROVAL_SCOPE_MISMATCH"
    ],
-   "ms": 0.376,
+   "ms": 1.118,
    "ok": true,
    "lineage": [
-    "f9f3abb7-e789-407b-b73c-e36ee8e58617:TRUSTED"
+    "61b1cb18-dbd4-4d98-a8d6-a3ffa217be26:TRUSTED"
    ],
    "external_calls_delta": 0,
    "proof_n": 10
@@ -177,14 +177,14 @@
   "prevention": 100,
   "false_positive": 0,
   "task_completion": 100,
-  "avg_latency_ms": 0.802,
-  "max_latency_ms": 2.996
+  "avg_latency_ms": 1.531,
+  "max_latency_ms": 3.249
  },
  "verify": {
   "valid": true,
   "status": "PARTIAL_UNANCHORED",
   "length": 10,
-  "head": "dff40a14bfd2eff59f823aa62f6ca7c3be90a2f647ae351c1282df9ab7250bb8",
+  "head": "271aab606f5dbfa037ed5ac3be207bae304bd482247ca89ed13a82e2cbdf3c26",
   "anchor_status": "UNANCHORED",
   "anchors": 0,
   "anchored_through": null,
@@ -210,8 +210,8 @@
   }
  ],
  "environment": {
-  "generated_utc": "2026-11-01T17:17:51.128681+00:00",
-  "git_commit": "ba3452fff6c4236ae31913666a8da6303d449cef",
+  "generated_utc": "2026-11-02T10:36:07.404386+00:00",
+  "git_commit": "a86b0dcd1a7c3f8a5c4375b2bf78e72f02bac82d",
   "python": "3.13.18",
   "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
   "approved_domains": [

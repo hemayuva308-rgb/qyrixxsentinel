@@ -1,4 +1,4 @@
-# QYRIX SENTINEL — Trust-to-Execution Guard (v1.3, controlled beta — not production-ready for multi-customer use)
+# QYRIX SENTINEL — Trust-to-Execution Guard (v1.4, controlled beta — see docs/PRODUCTION_READINESS.md)
 
 **Secure every AI action. Before execution.**
 A deterministic, default-deny checkpoint between AI agents and their tools. It inspects what the agent read, tracks the
@@ -15,14 +15,14 @@ Inspect → Establish Trust → Evaluate → Authorize or Block → Execute Safe
 | Part | Path |
 |---|---|
 | Backend (FastAPI): Inspector, Provenance, Gate, controlled adapter, Proof, RFC 3161 anchoring, PostgreSQL persistence, identity (roles, API keys, sessions), tenant isolation (RLS), metrics, public demo | `backend/app/`, `backend/migrations/` |
-| Tests (210 passing, 1 opt-in live test skipped; incl. real PostgreSQL, two-tenant isolation, backup/restore and a real local TSA) | `backend/tests/` |
+| Tests (302 passing, 1 opt-in live test skipped; incl. adversarial PostgreSQL privilege tests, data-loss detection, MFA, shared rate limits, encrypted backups, route sweep) | `backend/tests/` |
 | Benchmark · offline proof verifier · judging workflow · Llama live check · local test TSA | `backend/scripts/run_benchmark.py`, `verify_proof.py`, `demo_judging.py`, `llama_live_check.py`, `local_tsa.py` |
 | Public light-theme website (`/`, features, how-it-works, pricing, security, forensic-lab, contact, docs) | `frontend/src/app/(site)/` |
 | Authenticated dark product (`/login`, `/dashboard`, `/forensic`) | `frontend/src/app/(app)/` |
 | Brand assets (SVG mark, lockups, favicon) | `frontend/public/brand/`, `frontend/src/app/icon.svg` |
 | Documentation · security gates · threat model · evidence | `docs/`, `security/`, `evidence/` |
 
-Start with `docs/PRODUCTION_READINESS.md` (production-readiness classification), `docs/ORIGINAL_PLAN_ASSESSMENT.md` (hackathon plan completion), `docs/SECURITY_ACCEPTANCE_TESTS.md`, `docs/DEPENDENCY_AND_FAILURE_MODES.md`, `docs/FINAL_SUBMISSION_READINESS_REPORT.md` (v1.2 submission status), `docs/QYRIX_SENTINEL_FINAL_MASTER_PLAN.md`
+Start with `docs/PRODUCTION_READINESS.md` (production-readiness classification), `docs/OPERATIONS.md`, `docs/DISASTER_RECOVERY.md`, `docs/SECURITY_TEST_PLAN.md`, `docs/ORIGINAL_PLAN_ASSESSMENT.md` (hackathon plan completion), `docs/SECURITY_ACCEPTANCE_TESTS.md`, `docs/DEPENDENCY_AUDIT.md`, `docs/FINAL_SUBMISSION_READINESS_REPORT.md` (v1.2 submission status), `docs/QYRIX_SENTINEL_FINAL_MASTER_PLAN.md`
 (authoritative spec), `docs/DEMO_SCRIPT.md` + `DEMO_NARRATION.md` + `DEMO_RECORDING_CHECKLIST.md` (3-minute demo) and `docs/SUBMISSION_CHECKLIST.md`.
 
 ## Results (from `evidence/`)
@@ -31,7 +31,7 @@ Start with `docs/PRODUCTION_READINESS.md` (production-readiness classification),
 | 10-case benchmark (3 safe / 3 direct / 2 transformed / 2 delayed) | 7/7 attacks blocked · 0/3 false positives · 3/3 safe tasks completed · 0 external calls · sub-ms average |
 | Proof chain | intact; `PARTIAL_UNANCHORED` in the default deployment (no TSA configured) — `PASS` only with a verified RFC 3161 anchor on the head |
 | Persistence | PostgreSQL: records survive a backend restart; grants single-use, revocable, expiring; DB outage fails closed (Docker-verified) |
-| Tests | 210 passed, 1 skipped · typecheck + production build pass · Docker Compose validated (22/22 live E2E incl. two tenants) |
+| Tests | 302 passed, 1 skipped · typecheck + clean no-cache production builds · Docker Compose validated (30/30 live E2E, total-loss + encrypted restore drill) |
 | Meta Llama | integrated, advisory only, failure paths tested on real sockets — **NOT LIVE VERIFIED** (no credentials / provider blocked here) |
 
 ## Run with Docker Compose

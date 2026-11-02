@@ -6,7 +6,7 @@ from app.core.gate import QyrixGateMiddleware
 from app import api
 from app.demo import router as demo_router
 
-app = FastAPI(title="Qyrix Sentinel", version="1.3.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="Qyrix Sentinel", version="1.4.0", docs_url=None, redoc_url=None)
 origins = [o.strip() for o in os.getenv("QYRIX_CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
 if origins:  # default: no CORS at all; the frontend reaches this API server-side through its own proxy
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"],
