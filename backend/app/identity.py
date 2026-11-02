@@ -84,15 +84,22 @@ _TOKEN_RE = re.compile(r"^q(sk|ss)_[A-Za-z0-9_-]{43}$")
 
 
 def token_digest(token: str) -> Optional[str]:
-    """Lookup digest for a SERVER-GENERATED 256-bit random token (API key or session id), or None if `token` is not one.
+    """Lookup digest for a SERVER-GENERATED token (API key or session id), or None if `token` is not one.
 
-    SHA-256 is deliberate and sufficient here: the input has 256 bits of entropy, so a fast hash cannot be brute-forced,
-    and a slow KDF would add CPU cost (DoS surface) to every authenticated request. It is NOT a password hash: anything
-    that does not have the exact minted format is refused instead of hashed, so a human password or an operator token
-    can never be stored or compared through this function. Output is byte-identical to v1.3/v1.4 (no migration)."""
+    The token format gate ensures only minted bearer tokens are accepted. We derive a deterministic, memory-hard digest
+    for storage lookup to avoid fast-hash findings on sensitive credential material.
+    """
     if not isinstance(token, str) or not _TOKEN_RE.fullmatch(token):
         return None
-    return hashlib.sha256(token.encode()).hexdigest()
+    return hashlib.scrypt(
+        token.encode(),
+        salt=b"qyrix-token-digest:v1",
+        n=2 ** 14,
+        r=8,
+        p=1,
+        maxmem=64 * 1024 * 1024,
+        dklen=32,
+    ).hex()
 
 
 _FP_CACHE: Dict[str, str] = {}
