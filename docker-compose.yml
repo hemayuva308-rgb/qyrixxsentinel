@@ -36,7 +36,7 @@ services:
     depends_on:
       db: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
-    secrets: [db_runtime_password, state_witness_key]   # NEVER the admin secret
+    secrets: [db_runtime_password, state_witness_key, data_key]   # NEVER the admin secret
     environment:
       QYRIX_DB_HOST: db
       QYRIX_DB_NAME: qyrix
@@ -45,6 +45,11 @@ services:
       QYRIX_STATE_WITNESS_DIR: /witness
       QYRIX_STATE_WITNESS_KEY_FILE: /run/secrets/state_witness_key
       QYRIX_EXPECTED_INSTALL_ID: ${QYRIX_EXPECTED_INSTALL_ID:-}   # set after first start (see docs/DISASTER_RECOVERY.md)
+      # human accounts: TOTP secrets are AES-256-GCM encrypted with this key; MFA is mandatory unless set to 0
+      QYRIX_DATA_KEY_FILE: /run/secrets/data_key
+      QYRIX_REQUIRE_MFA: ${QYRIX_REQUIRE_MFA:-1}
+      QYRIX_MAIL_WEBHOOK_URL: ${QYRIX_MAIL_WEBHOOK_URL:-}           # e-mail boundary (docs/OPERATIONS.md); empty = not configured
+      QYRIX_PUBLIC_URL: ${QYRIX_PUBLIC_URL:-}
       QYRIX_TSA_URL: ${QYRIX_TSA_URL:-}
       QYRIX_TSA_CA_FILE: ${QYRIX_TSA_CA_FILE:-}
       QYRIX_ADMIN_TOKEN: ${QYRIX_ADMIN_TOKEN:?set in .env}
@@ -110,6 +115,8 @@ secrets:                                 # generated locally, git-ignored - see 
     file: ./secrets/db_runtime_password
   state_witness_key:
     file: ./secrets/state_witness_key
+  data_key:
+    file: ./secrets/data_key
 networks:
   internal: { internal: true }          # no egress
   edge: {}

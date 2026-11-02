@@ -155,7 +155,11 @@ class _Pool:
                     return fn(cur)
         except PersistenceError:
             raise
-        except self._psycopg.OperationalError:
+        except Exception as e:
+            if getattr(e, "qyrix_passthrough", False):
+                raise                                  # a policy refusal (e.g. AuthError), not an outage; already rolled back
+            if not isinstance(e, self._psycopg.OperationalError):
+                return self._fail(e, tenant)
             if not started and _retry:
                 try:
                     conn.close()
@@ -165,16 +169,17 @@ class _Pool:
                 conn = None
                 return self.run(fn, tenant, _retry=False)
             raise PersistenceError("database unavailable") from None
-        except Exception as e:
-            msg = str(getattr(e, "diag", None) and e.diag.message_primary or "")
-            if "row-level security" in msg:
-                from app import observability as obs   # an RLS violation is never expected from correct code
-                obs.inc("qyrix_tenant_isolation_violations_total")
-                obs.event("tenant_isolation_violation", severity="critical", tenant=tenant or "", error=type(e).__name__)
-            raise PersistenceError("database error: " + type(e).__name__) from None
         finally:
             if conn is not None:
                 self._checkin(conn)
+
+    def _fail(self, e, tenant):
+        msg = str(getattr(e, "diag", None) and e.diag.message_primary or "")
+        if "row-level security" in msg:
+            from app import observability as obs       # an RLS violation is never expected from correct code
+            obs.inc("qyrix_tenant_isolation_violations_total")
+            obs.event("tenant_isolation_violation", severity="critical", tenant=tenant or "", error=type(e).__name__)
+        raise PersistenceError("database error: " + type(e).__name__) from None
 
     def close_all(self):
         while True:

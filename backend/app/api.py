@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import anchor, gateway as g, identity, observability as obs, proof, tenancy
+from app import accounts, anchor, gateway as g, identity, observability as obs, persistence, proof, tenancy
 from app.auth import client_key, principal, require, require_platform
 from app.identity import AuthError, Principal
 
@@ -27,7 +27,18 @@ def _err(e: Exception):
         raise HTTPException(e.status, e.detail)
     if isinstance(e, g.ExecRefused):
         raise HTTPException(e.status, e.code)
+    if isinstance(e, persistence.PersistenceError):
+        raise HTTPException(503, "persistence unavailable")        # fail closed, no internals leaked
     raise e
+
+
+def _call(fn, *a):
+    try:
+        return fn(*a)
+    except HTTPException:
+        raise
+    except Exception as e:
+        _err(e)
 
 
 # ---------------- core ----------------
@@ -294,6 +305,173 @@ def session_delete(authorization: str = Header(default="")):
     except Exception:
         raise HTTPException(503, "authentication unavailable")
     return {"ok": True}
+
+
+# ---------------- human accounts (v1.4): login + TOTP MFA, enrolment, recovery, invitations, members ----------------
+class LoginReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant: str = Field(min_length=3, max_length=40)          # which organisation to sign in to (verified by membership)
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class MfaReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    challenge: str = Field(min_length=10, max_length=128)
+    code: Optional[str] = Field(None, max_length=10)
+    recovery_code: Optional[str] = Field(None, max_length=40)
+
+
+class ChallengeReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    challenge: str = Field(min_length=10, max_length=128)
+
+
+class EnrollConfirmReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    challenge: str = Field(min_length=10, max_length=128)
+    code: str = Field(min_length=6, max_length=10)
+
+
+class CodeReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(min_length=6, max_length=10)
+
+
+class PasswordChangeReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+    code: Optional[str] = Field(None, max_length=10)
+
+
+class ForgotReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254)
+
+
+class ResetReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=10, max_length=128)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class AcceptReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=10, max_length=128)
+    name: str = Field("", max_length=120)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class InviteReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254)
+    role: str = Field(max_length=32)
+
+
+class RoleReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: str = Field(max_length=32)
+
+
+@auth.post("/login")
+def user_login(b: LoginReq, request: Request):
+    return _call(accounts.login, b.tenant, b.email, b.password, client_key(request))
+
+
+@auth.post("/login/mfa")
+def user_login_mfa(b: MfaReq, request: Request):
+    if bool(b.code) == bool(b.recovery_code):
+        raise HTTPException(422, "provide exactly one of code or recovery_code")
+    return _call(accounts.login_mfa, b.challenge, b.code, b.recovery_code, client_key(request))
+
+
+@auth.post("/mfa/enroll/start")
+def mfa_enroll_start(b: ChallengeReq):
+    return _call(accounts.enroll_start, b.challenge)
+
+
+@auth.post("/mfa/enroll/confirm")
+def mfa_enroll_confirm(b: EnrollConfirmReq):
+    return _call(accounts.enroll_confirm, b.challenge, b.code)
+
+
+@auth.post("/mfa/recovery-codes")
+def mfa_recovery_codes(b: CodeReq, p: Principal = Depends(principal)):
+    return _call(accounts.regenerate_recovery_codes, p, b.code)
+
+
+@auth.get("/me")
+def auth_me(p: Principal = Depends(principal)):
+    return _call(accounts.me, p)
+
+
+@auth.post("/password/change")
+def password_change(b: PasswordChangeReq, p: Principal = Depends(principal)):
+    return _call(accounts.change_password, p, b.current_password, b.new_password, b.code)
+
+
+@auth.post("/password/forgot", status_code=202)
+def password_forgot(b: ForgotReq, request: Request):
+    return _call(accounts.forgot_password, b.email, client_key(request))
+
+
+@auth.post("/password/reset")
+def password_reset(b: ResetReq):
+    return _call(accounts.reset_password, b.token, b.new_password)
+
+
+@auth.post("/invitations/accept")
+def invitation_accept(b: AcceptReq, request: Request):
+    return _call(accounts.accept_invitation, b.token, b.name, b.password, client_key(request))
+
+
+@sentinel.post("/invitations")
+def invitation_create(b: InviteReq, p: Principal = Depends(require("users.manage"))):
+    return _call(accounts.invite, p, p.tenant, b.email, b.role)
+
+
+@sentinel.get("/invitations")
+def invitation_list(p: Principal = Depends(require("users.manage"))):
+    return {"invitations": _call(accounts.list_invitations, p)}
+
+
+@sentinel.post("/invitations/{iid}/revoke")
+def invitation_revoke(iid: str, p: Principal = Depends(require("users.manage"))):
+    return _call(accounts.revoke_invitation, p, iid[:40])
+
+
+@sentinel.get("/members")
+def member_list(p: Principal = Depends(require("users.manage"))):
+    return {"members": _call(accounts.list_members, p)}
+
+
+@sentinel.post("/members/{uid}/role")
+def member_role(uid: str, b: RoleReq, p: Principal = Depends(require("users.manage"))):
+    return _call(accounts.set_role, p, uid[:40], b.role)
+
+
+@sentinel.delete("/members/{uid}")
+def member_remove(uid: str, p: Principal = Depends(require("users.manage"))):
+    return _call(accounts.remove_member, p, uid[:40])
+
+
+@sentinel.post("/members/{uid}/password-reset")
+def member_password_reset(uid: str, p: Principal = Depends(require("users.manage"))):
+    return _call(accounts.admin_reset_password, p, uid[:40])
+
+
+@sentinel.post("/members/{uid}/mfa-reset")
+def member_mfa_reset(uid: str, p: Principal = Depends(require("users.manage"))):
+    return _call(accounts.admin_reset_mfa, p, uid[:40])
+
+
+@platform.post("/tenants/{tid}/invitations")
+def tenant_bootstrap_invite(tid: str, b: InviteReq, p: Principal = Depends(require_platform)):
+    """Bootstrap / break-glass: invite an owner into an organisation. The platform never sees tenant data."""
+    if not identity.multi_tenant_enabled() and tid != identity.DEFAULT_TENANT:
+        raise HTTPException(409, "MULTI_TENANCY_DISABLED")
+    return _call(accounts.invite, p, tid[:40], b.email, b.role)
 
 
 # ---------------- platform (tenant lifecycle) ----------------

@@ -6,7 +6,8 @@ Everything in this folder except this README is git-ignored. Create the files on
 openssl rand -hex 32 > secrets/db_admin_password      # PostgreSQL superuser: mounted ONLY into `db` and the one-shot `migrate`
 openssl rand -hex 32 > secrets/db_runtime_password    # least-privilege `qyrix_runtime` login: mounted into `backend` (+ `migrate`)
 openssl rand -hex 32 > secrets/state_witness_key      # HMAC key sealing the data-loss witness (see docs/DISASTER_RECOVERY.md)
-chmod 644 secrets/db_admin_password secrets/db_runtime_password secrets/state_witness_key
+openssl rand -hex 32 > secrets/data_key               # AES-256-GCM key for TOTP secrets at rest (back it up: losing it = MFA re-enrolment)
+chmod 644 secrets/db_admin_password secrets/db_runtime_password secrets/state_witness_key secrets/data_key
 # file-based Compose secrets keep host permissions; the non-root containers must be able to read them
 ```
 

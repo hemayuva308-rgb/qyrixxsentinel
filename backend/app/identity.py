@@ -47,6 +47,7 @@ PERMISSIONS: Dict[str, frozenset] = {
     "proof.anchor":     frozenset({"owner", "admin"}),
     "keys.manage":      frozenset({"owner", "admin"}),
     "demo.reset":       frozenset({"owner", "admin"}),
+    "users.manage":     frozenset({"owner", "admin"}),
 }
 # Roles a key creator may grant: nobody can mint a key more powerful than themselves; owner keys only by owner/platform.
 GRANTABLE = {"owner": set(ROLES), "admin": set(ROLES) - {"owner"}}
@@ -71,6 +72,8 @@ class Principal:
 
 
 class AuthError(Exception):
+    qyrix_passthrough = True              # a policy refusal: the DB pool re-raises it unchanged (after rollback)
+
     def __init__(self, status: int, detail: str):
         super().__init__(detail)
         self.status, self.detail = status, detail
@@ -269,9 +272,9 @@ class PgStore:
 
     def insert_session(self, r):
         self._q(lambda cur: cur.execute(
-            "INSERT INTO sessions (id_hash, tenant_id, role, cred_id, cred_fp, expires_at) VALUES (%s,%s,%s,%s,%s,%s)",
-            (r["id_hash"], r["tenant"], r["role"], r["cred_id"], r["cred_fp"], datetime.fromtimestamp(r["expires_at"], timezone.utc))),
-            tenant=r["tenant"])
+            "INSERT INTO sessions (id_hash, tenant_id, role, cred_id, cred_fp, expires_at, user_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (r["id_hash"], r["tenant"], r["role"], r["cred_id"], r["cred_fp"], datetime.fromtimestamp(r["expires_at"], timezone.utc),
+             r.get("user_id"))), tenant=r["tenant"])
 
     def session_by_hash(self, h):
         def go(cur):
@@ -405,6 +408,17 @@ def create_session(credential: str) -> Dict:
     obs.inc("qyrix_sessions_total", action="created")
     obs.event("session_created", tenant=p.tenant, role=p.role, cred=p.cred_id)
     return {"session_token": token, "expires_at": datetime.fromtimestamp(exp, timezone.utc).isoformat(), "tenant": p.tenant, "role": p.role}
+
+
+def create_user_session(user_id: str, tenant: str, role: str) -> Dict:
+    """Human session (after password + MFA). Same opaque qss_ format and lifetime rules as key sessions, bound to a user."""
+    token = "qss_" + secrets.token_urlsafe(32)
+    exp = time.time() + session_ttl()
+    _store.insert_session({"id_hash": _sha(token), "tenant": tenant, "role": role, "cred_id": "user:" + user_id, "cred_fp": None,
+                           "expires_at": exp, "last_seen": time.time(), "revoked_at": None, "user_id": user_id})
+    obs.inc("qyrix_sessions_total", action="created")
+    obs.event("session_created", tenant=tenant, role=role, cred="user:" + user_id)
+    return {"session_token": token, "expires_at": datetime.fromtimestamp(exp, timezone.utc).isoformat(), "tenant": tenant, "role": role}
 
 
 def end_session(token: str) -> None:
