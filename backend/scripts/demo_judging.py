@@ -76,7 +76,7 @@ rec("attack", {"text": ATTACK_TEMPLATE.format(key="[synthetic secret]")})
 step(2, "INSPECT - Skill Inspector + advisory Llama classification")
 s, ins = call("POST", "sentinel/inspect", {"text": ATTACK_TEXT})
 cl = ins["classification"]
-print("   domains=%s  unapproved=%s  secret refs=%s" % (ins["domains"], ins["unapproved"], ins["secrets"]))
+print("   domains=%s  unapproved=%s  secret refs count=%s" % (ins["domains"], ins["unapproved"], len(ins.get("secrets", []))))
 live = cl["provider"] in ("meta", "baseten")
 print("   advisory label: %s  (%s) - %s" % (C(YEL, cl["label"]), ("LIVE " + cl["source"]) if live else "NO LIVE LLM: labelled heuristic fallback", cl["explanation"]))
 check(any(d == EXFIL_HOST for d in ins["unapproved"]), "unapproved destination detected")   # exact host match
