@@ -9,6 +9,7 @@ from tests.test_persistence import Cluster, HAVE_PG, A
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 import backup as bk  # noqa: E402
+from tests.test_backup import keys  # noqa: E402,F401  (autouse: age identity + signing key for backups)
 
 pytestmark = pytest.mark.skipif(not HAVE_PG, reason="PostgreSQL not available")
 

@@ -1,25 +1,41 @@
 #!/usr/bin/env bash
-# Restore a backup made by scripts/backup.sh into a Docker Compose deployment. DESTRUCTIVE: replaces the database and
-# the proof chain volume. The backend is stopped during restore; on start it re-verifies the chain and the DB proof
-# mirror and fails closed (Gate degraded, R17) if they are inconsistent.
+# Restore an encrypted backup into a Docker Compose deployment. DESTRUCTIVE for the database and the proof chain volume.
+# Needs QYRIX_BACKUP_IDENTITY_FILE (age PRIVATE identity - bring it from offline storage) + QYRIX_BACKUP_SIGNING_KEY_FILE.
+# Stages: verify signature + hashes + full trial decryption (nothing touched) -> stop app -> roles -> pg_restore in ONE
+# transaction -> migrate -> chain extracted to a staging dir in the volume, then swapped (previous chain kept in
+# /data/.pre-restore-<ts>) -> backend left STOPPED: run `app.recovery status/accept` (restoring old data is never silent).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 src="${1:?usage: scripts/restore.sh backups/<timestamp> --yes}"
-[ "${2:-}" = "--yes" ] || { echo "refusing without --yes (this replaces all durable state)"; exit 2; }
-python3 - "$src" <<'PY'
-import hashlib, json, os, sys
-d = sys.argv[1]; m = json.load(open(os.path.join(d, "manifest.json")))
-assert m.get("format") == "qyrix-backup/1", "unknown backup format"
-for f, h in m["files"].items():
-    if hashlib.sha256(open(os.path.join(d, f), "rb").read()).hexdigest() != h:
-        sys.exit("backup file %s does not match its manifest hash" % f)
-print("manifest verified")
-PY
+[ "${2:-}" = "--yes" ] || { echo "refusing without --yes (this replaces the database and the proof chain)"; exit 2; }
+: "${QYRIX_BACKUP_IDENTITY_FILE:?set QYRIX_BACKUP_IDENTITY_FILE (age private identity)}"
+: "${QYRIX_BACKUP_SIGNING_KEY_FILE:?set QYRIX_BACKUP_SIGNING_KEY_FILE}"
+python3 backend/scripts/backup.py verify --from "$src" --decrypt > /dev/null && echo "manifest signature, hashes and decryption verified"
 docker compose stop frontend backend
-docker compose exec -T db psql -U qyrix -d qyrix -v ON_ERROR_STOP=1 -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='qyrix_app') THEN CREATE ROLE qyrix_app NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END \$\$;"
-docker compose exec -T db pg_restore -U qyrix -d qyrix --clean --if-exists --no-owner --single-transaction --exit-on-error < "$src/db.dump"
+docker compose exec -T db psql -U qyrix -d qyrix -v ON_ERROR_STOP=1 -q -c "DO \$\$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='qyrix_app') THEN CREATE ROLE qyrix_app NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='qyrix_runtime') THEN CREATE ROLE qyrix_runtime LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='qyrix_auth') THEN CREATE ROLE qyrix_auth NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='qyrix_maint') THEN CREATE ROLE qyrix_maint NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF;
+END \$\$;"
+age -d -i "$QYRIX_BACKUP_IDENTITY_FILE" "$src/db.dump.age" | \
+  docker compose exec -T db pg_restore -U qyrix -d qyrix --clean --if-exists --single-transaction --exit-on-error
+echo "database restored (single transaction)"
+docker compose run --rm migrate
 bid=$(docker compose ps -aq backend)
-docker run --rm --volumes-from "$bid" -v "$(cd "$src" && pwd):/restore:ro" --user 0 --network none --entrypoint sh postgres:16-alpine \
-  -c 'find /data -name "*.jsonl" -delete && tar -xf /restore/chain.tar -C /data --no-same-owner && chown -R 10001 /data'
-docker compose start backend frontend
-echo "restored from $src; check: docker compose ps (backend health = /api/v1/ready)"
+img=$(docker compose config --images | grep '^postgres' | head -1)
+ts=$(date -u +%Y%m%dT%H%M%SZ)
+age -d -i "$QYRIX_BACKUP_IDENTITY_FILE" "$src/chain.tar.age" | \
+  docker run --rm -i --volumes-from "$bid" --user 0 --network none --entrypoint sh "$img" -c "set -e
+    rm -rf /data/.staging && mkdir /data/.staging && tar -xf - -C /data/.staging -o
+    mkdir /data/.pre-restore-$ts
+    for e in /data/* ; do [ -e \"\$e\" ] && mv \"\$e\" /data/.pre-restore-$ts/ ; done
+    for e in /data/.staging/* ; do [ -e \"\$e\" ] && mv \"\$e\" /data/ ; done
+    rmdir /data/.staging && chown -R 10001 /data"
+echo "proof chain restored (previous chain kept in volume at /data/.pre-restore-$ts)"
+cat <<MSG
+NEXT (backend is intentionally still stopped):
+  docker compose run --rm backend python -m app.recovery status
+  docker compose run --rm backend python -m app.recovery accept --reason "restored $src after <incident id>"
+  docker compose start backend frontend
+MSG
