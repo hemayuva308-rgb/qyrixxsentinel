@@ -29,3 +29,73 @@ Compatibility: API-key / session / invitation / reset / challenge / recovery-cod
 | 39422165 | cccbfd0 | evidence/pytest-junit.xml:1 | Base64 Basic Auth | the same test value echoed into test ids |
 
 Current tree: all of these literals are now built at runtime or removed (bandit report regenerated as a summary without code/quotes; parametrized tests use ids so values never enter the test report). Git history was NOT rewritten (no force push), so GitGuardian will keep showing the historical occurrences until they are marked as false positive / test credential in the GitGuardian dashboard by the owner.
+
+---
+
+# Follow-up investigation after 98e5694 (CodeQL: 4 HIGH; GitGuardian: same 7)
+
+## SARIF availability (requirement 1) — NOT obtained
+The latest run (41434513485) has one artifact (`sbom-and-scans`); the CodeQL action uploads SARIF directly to code
+scanning and keeps no artifact. The GitHub tools available to this agent have no code-scanning endpoint, the `gh` CLI
+is restricted to search in this session, and running CodeQL locally was refused by the environment's permission
+policy. **The full SARIF (rule ids, locations, data-flow paths) for all 4 alerts was therefore not retrieved.**
+Ways to obtain it (owner's choice): (a) Security → Code scanning → filter `pr:1` → each alert's "Show paths", or
+download via `GET /repos/{owner}/{repo}/code-scanning/analyses/{id}` with `Accept: application/sarif+json`;
+(b) approve a CI change that keeps the SARIF as a workflow artifact; (c) allow the CodeQL bundle locally.
+
+Visible from PR threads: **#8** `py/weak-sensitive-data-hashing` at `backend/app/identity.py:95`
+(`return hashlib.sha256(token.encode()).hexdigest()` in `token_digest`) with **4 "password" sources = 4 paths into ONE
+sink, i.e. one alert**; **#3** `py/clear-text-logging-sensitive-data` at `backend/scripts/demo_judging.py:79`.
+The other 2 HIGH alerts have no thread and are **unidentified**.
+
+## Call-site and data-source trace (requirements 3-4)
+`identity.token_digest(token)` — hashes only if `token` matches `^q(sk|ss)_[A-Za-z0-9_-]{43}$`, else returns None:
+| Caller | Input origin | Kind |
+|---|---|---|
+| `authenticate()` (key branch, session branch) | `Authorization` header (via `auth.principal`) or `create_session(credential)` | presented value; hashed only if it has the minted format; env/operator tokens are matched earlier by constant-time compare and never reach it |
+| `create_session()`, `create_user_session()` | `"qss_" + secrets.token_urlsafe(32)` | minted, 256-bit |
+| `end_session()` | `Authorization` header | presented value, format-gated |
+| `create_key()` | `"qsk_" + secrets.token_urlsafe(32)` | minted, 256-bit |
+
+`accounts._token_digest` (qsi_/qpr_/qch_, minted by `_tok` = `token_urlsafe(32)`), `accounts._rc_digest`
+(16 base32 chars = 80 random bits minted by `_new_recovery_codes`), `accounts._bucket` (tenant/e-mail limiter keys —
+not secrets). Every password-named value in `app/` (AST scan) flows only into `verify_password`, `hash_password`,
+`_dummy_verify` (scrypt) or `password_problem`. Operator env token fingerprint: scrypt. `migrate.scram_verifier`:
+PBKDF2-HMAC-SHA256 + SHA-256 per RFC 5802/7677 (the format PostgreSQL requires) over a 256-bit random secret.
+
+Runtime confirmation (full suite, temporary probe plugin, values never recorded): 672 digest calls —
+`identity.token_digest` 328 hashed / 22 refused, `accounts._token_digest` 150 / 8, `accounts._rc_digest` 164 / 0;
+**hashed inputs without the minted format: 0; test passwords ever hashed: 0.**
+
+**Conclusion:** SHA-256 receives only server-minted high-entropy tokens (or attacker-presented strings of that exact
+format, which are not anyone's secret). No password or operator-chosen value can reach it. **#8 is a false positive.**
+Most plausible cause (unconfirmed without SARIF): CodeQL over-approximates flow through the generic dispatcher
+`api._call(fn, *a)`, merging password arguments of different call sites.
+**#3**: the printed `ins["secrets"]` are the Inspector's redacted references (`["api_key", "sk-***"]`, verified at
+runtime); no secret is logged — false positive (the source is the key name `secrets`).
+
+## SHA-256 → HMAC / scrypt assessment (requirement 5) — NOT changed; decision for the owner
+| Aspect | Impact of switching |
+|---|---|
+| Stored digests | `api_keys.key_hash`, `sessions.id_hash`, `invitations/password_resets/login_challenges.token_hash`, `recovery_codes.code_hash` are SHA-256 hex. Plaintexts are never stored, so existing rows cannot be re-hashed. |
+| Lookup | Done by digest equality in SECURITY DEFINER functions (`qyrix_lookup_key/_session/_invitation`). A new scheme needs dual lookup (new + legacy) until every legacy row is gone. |
+| Lifetimes of legacy rows | sessions ≤ 8 h, challenges 5 min, resets 30 min, invitations 72 h — expire naturally; **API keys and recovery codes do not expire by default** → need rotation / regeneration campaign or permanent dual lookup. |
+| Revocation | `qyrix_end_session`, key revocation and session revocation match by hash — every path must revoke both forms during migration. |
+| HMAC | Needs a new server-side pepper (secret management, rotation, backup); protects nothing extra for 256-bit tokens (a leaked SHA-256 of a 256-bit token is already infeasible to invert). |
+| scrypt | Adds ~50-100 ms CPU per authenticated request → DoS amplification; same migration problems. |
+**Recommendation:** keep SHA-256 for minted tokens; record #8 as a false positive with this evidence. Dismissing it in
+GitHub is the owner's decision (not done by the agent).
+
+## GitGuardian classification guide (requirement 7) — no history rewrite, nothing dismissed
+| Incident | Occurrence (commit · file:line) | Detector | Evidence-based classification | Suggested dashboard status |
+|---|---|---|---|---|
+| 39422167 | 2c0e0cb · evidence/sbom/bandit-report.json:750 | Generic Password | bandit's text quoting the synthetic demo key `sk-synth-…` (also in the repo's benchmark/demo fixtures) | False positive (test data) |
+| 39389421 | 3f6c6dd · docker-compose.yml:11 | Generic Password | `${POSTGRES_PASSWORD:?…}` variable reference — contains no value | False positive |
+| 39389422 | 3f6c6dd · backend/tests/test_classifier.py:359 | Generic High Entropy | synthetic `api_key=…` test fixture | Test credential |
+| 39422168 | 882f40a · backend/tests/test_alerts.py:104 | Bearer Token | fake bearer used to prove log redaction | Test credential |
+| 39422166 | 0bdb8d0 · backend/tests/test_accounts.py:40 | Generic Password | weak-password denylist examples | Test credential |
+| 39422165 | 477da07 · backend/tests/test_route_auth.py:54 and cccbfd0 · evidence/pytest-junit.xml:1 | Base64 Basic Auth | `admin:admin` default pair, deliberately invalid in the auth-bypass sweep, echoed into test ids | Test credential |
+How to verify any of them yourself without exposing values: open the commit in GitHub, confirm the value is a
+fixture/reference used only by tests or docs, and that no deployment config, CI secret or `.env` uses it. If a finding
+ever matches a value used by a real system, treat it as real: rotate it in that system first, then resolve.
+None of the 7 needs rotation. The check stays red until the owner resolves them in the dashboard (98e5694 added none).
