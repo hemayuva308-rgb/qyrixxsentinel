@@ -189,15 +189,17 @@ class MemoryStore:
 
 
 class PgStore:
-    """Identity tables are not tenant-RLS-protected (authentication happens before a tenant is known);
-    every lookup is by SHA-256 hash or by (tenant, id)."""
+    """PostgreSQL identity store, used through the least-privilege runtime account.
+    Tenant-scoped rows (api_keys, sessions) are read/written inside that tenant's RLS context. Authentication lookups,
+    which happen before the tenant is known, go through SECURITY DEFINER functions (owner: NOLOGIN qyrix_auth) that
+    accept only a 64-hex SHA-256 hash - the runtime can verify a presented credential but cannot list credentials."""
     durable = True
 
     def __init__(self, conn):
         self.db = conn
 
-    def _q(self, fn):
-        return self.db.run(fn)
+    def _q(self, fn, tenant=None):
+        return self.db.run(fn, tenant=tenant)
 
     def get_tenant(self, tid):
         def go(cur):
@@ -226,24 +228,23 @@ class PgStore:
                 return False
             cur.execute("UPDATE sessions SET revoked_at=now() WHERE tenant_id=%s AND revoked_at IS NULL", (tid,))
             return True
-        if not self._q(go):
+        if not self._q(go, tenant=tid):
             raise AuthError(404, "unknown tenant")
 
     def insert_key(self, r):
         self._q(lambda cur: cur.execute(
             "INSERT INTO api_keys (id, tenant_id, role, name, key_hash, created_by, expires_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
             (r["id"], r["tenant_id"], r["role"], r["name"], r["key_hash"], r["created_by"],
-             datetime.fromtimestamp(r["expires_at"], timezone.utc) if r["expires_at"] else None)))
+             datetime.fromtimestamp(r["expires_at"], timezone.utc) if r["expires_at"] else None)), tenant=r["tenant_id"])
 
     def key_by_hash(self, h):
         def go(cur):
-            cur.execute("SELECT k.id, k.tenant_id, k.role, k.name, k.expires_at, k.revoked_at, t.disabled_at FROM api_keys k"
-                        " JOIN tenants t ON t.id = k.tenant_id WHERE k.key_hash=%s", (h,))
+            cur.execute("SELECT id, tenant_id, role, expires_at, revoked_at, tenant_disabled FROM qyrix_lookup_key(%s)", (h,))
             r = cur.fetchone()
             if not r:
                 return None
-            return {"id": r[0], "tenant_id": r[1], "role": r[2], "name": r[3], "expires_at": r[4].timestamp() if r[4] else None,
-                    "revoked_at": r[5].timestamp() if r[5] else None, "tenant_disabled": r[6] is not None}
+            return {"id": r[0], "tenant_id": r[1], "role": r[2], "expires_at": r[3].timestamp() if r[3] else None,
+                    "revoked_at": r[4].timestamp() if r[4] else None, "tenant_disabled": bool(r[5])}
         return self._q(go)
 
     def list_keys(self, tid):
@@ -252,42 +253,42 @@ class PgStore:
             return [{"id": r[0], "tenant_id": tid, "role": r[1], "name": r[2], "created_by": r[3], "created_at": r[4].isoformat(),
                      "expires_at": r[5].timestamp() if r[5] else None, "revoked_at": r[6].timestamp() if r[6] else None,
                      "last_used_at": r[7].isoformat() if r[7] else None} for r in cur.fetchall()]
-        return self._q(go)
+        return self._q(go, tenant=tid)
 
     def revoke_key(self, tid, kid):
         def go(cur):
             cur.execute("UPDATE api_keys SET revoked_at=now() WHERE tenant_id=%s AND id=%s AND revoked_at IS NULL RETURNING id", (tid, kid))
             ok = cur.fetchone() is not None
             if ok:
-                cur.execute("UPDATE sessions SET revoked_at=now() WHERE cred_id=%s AND revoked_at IS NULL", ("key:" + kid,))
+                cur.execute("UPDATE sessions SET revoked_at=now() WHERE tenant_id=%s AND cred_id=%s AND revoked_at IS NULL", (tid, "key:" + kid))
             return ok
-        return self._q(go)
+        return self._q(go, tenant=tid)
 
     def touch_key(self, h):
-        self._q(lambda cur: cur.execute("UPDATE api_keys SET last_used_at=now() WHERE key_hash=%s AND (last_used_at IS NULL OR last_used_at < now() - interval '60 seconds')", (h,)))
+        self._q(lambda cur: cur.execute("SELECT qyrix_touch_key(%s)", (h,)))
 
     def insert_session(self, r):
         self._q(lambda cur: cur.execute(
             "INSERT INTO sessions (id_hash, tenant_id, role, cred_id, cred_fp, expires_at) VALUES (%s,%s,%s,%s,%s,%s)",
-            (r["id_hash"], r["tenant"], r["role"], r["cred_id"], r["cred_fp"], datetime.fromtimestamp(r["expires_at"], timezone.utc))))
+            (r["id_hash"], r["tenant"], r["role"], r["cred_id"], r["cred_fp"], datetime.fromtimestamp(r["expires_at"], timezone.utc))),
+            tenant=r["tenant"])
 
     def session_by_hash(self, h):
         def go(cur):
-            cur.execute("SELECT s.tenant_id, s.role, s.cred_id, s.cred_fp, s.expires_at, s.last_seen_at, s.revoked_at, t.disabled_at,"
-                        " (SELECT revoked_at FROM api_keys k WHERE 'key:' || k.id = s.cred_id) FROM sessions s JOIN tenants t ON t.id = s.tenant_id"
-                        " WHERE s.id_hash=%s", (h,))
+            cur.execute("SELECT tenant_id, role, cred_id, cred_fp, expires_at, last_seen_at, revoked, tenant_disabled"
+                        " FROM qyrix_lookup_session(%s)", (h,))
             r = cur.fetchone()
             if not r:
                 return None
             return {"tenant": r[0], "role": r[1], "cred_id": r[2], "cred_fp": r[3], "expires_at": r[4].timestamp(), "last_seen": r[5].timestamp(),
-                    "revoked_at": (r[6] or r[8]) and 1.0, "tenant_disabled": r[7] is not None}
+                    "revoked_at": 1.0 if r[6] else None, "tenant_disabled": bool(r[7])}
         return self._q(go)
 
     def touch_session(self, h):
-        self._q(lambda cur: cur.execute("UPDATE sessions SET last_seen_at=now() WHERE id_hash=%s", (h,)))
+        self._q(lambda cur: cur.execute("SELECT qyrix_touch_session(%s)", (h,)))
 
     def revoke_session(self, h):
-        self._q(lambda cur: cur.execute("UPDATE sessions SET revoked_at=now() WHERE id_hash=%s AND revoked_at IS NULL", (h,)))
+        self._q(lambda cur: cur.execute("SELECT qyrix_end_session(%s)", (h,)))
 
 
 _store = MemoryStore()

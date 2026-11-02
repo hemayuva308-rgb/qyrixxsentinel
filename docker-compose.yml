@@ -8,22 +8,39 @@ services:
     environment:
       POSTGRES_USER: qyrix
       POSTGRES_DB: qyrix
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password   # read from the Docker secret, never from config
-    secrets: [db_password]
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password   # ADMIN (superuser) - only db + migrate ever see it
+    secrets: [db_admin_password]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U qyrix -d qyrix"], interval: 3s, timeout: 3s, retries: 20 }
     cap_drop: [ALL]
     cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]   # minimum the official entrypoint needs
     security_opt: ["no-new-privileges:true"]
     networks: [internal]                 # not published, no egress
-  backend:
+  migrate:                               # one-shot, privileged: schema migrations + least-privilege runtime role
     build: ./backend
+    command: ["python", "-m", "app.migrate", "--runtime-password-file", "/run/secrets/db_runtime_password"]
     depends_on: { db: { condition: service_healthy } }
-    secrets: [db_password]                 # mounted at /run/secrets/db_password (app/persistence.py default)
+    secrets: [db_admin_password, db_runtime_password]
     environment:
       QYRIX_DB_HOST: db
       QYRIX_DB_NAME: qyrix
-      QYRIX_DB_USER: qyrix
+      QYRIX_DB_ADMIN_USER: qyrix
+      QYRIX_ENABLE_DEMO_RESET: ${QYRIX_ENABLE_DEMO_RESET:-0}   # 1 => runtime may call the evidence-reset function
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal]
+  backend:
+    build: ./backend
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    secrets: [db_runtime_password]         # ONLY the least-privilege runtime secret; the admin secret is never mounted here
+    environment:
+      QYRIX_DB_HOST: db
+      QYRIX_DB_NAME: qyrix
+      QYRIX_DB_USER: qyrix_runtime         # NOSUPERUSER NOBYPASSRLS, owns nothing; verified at startup (fail closed)
       QYRIX_TSA_URL: ${QYRIX_TSA_URL:-}
       QYRIX_TSA_CA_FILE: ${QYRIX_TSA_CA_FILE:-}
       QYRIX_ADMIN_TOKEN: ${QYRIX_ADMIN_TOKEN:?set in .env}
@@ -82,9 +99,11 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     networks: [internal, edge]          # "edge" exists only so the published port works; the API stays internal
-secrets:
-  db_password:
-    file: ./secrets/db_password            # generated locally, git-ignored - see README "Run with Docker Compose"
+secrets:                                 # generated locally, git-ignored - see README "Run with Docker Compose"
+  db_admin_password:
+    file: ./secrets/db_admin_password
+  db_runtime_password:
+    file: ./secrets/db_runtime_password
 networks:
   internal: { internal: true }          # no egress
   edge: {}

@@ -37,7 +37,7 @@ Start with `docs/PRODUCTION_READINESS.md` (production-readiness classification),
 ## Run with Docker Compose
 ```bash
 cp .env.example .env      # replace both CHANGE_ME tokens:  openssl rand -hex 32
-mkdir -p secrets && openssl rand -hex 32 > secrets/db_password && chmod 644 secrets/db_password   # PostgreSQL password (Docker secret, git-ignored)
+mkdir -p secrets && for f in db_admin_password db_runtime_password state_witness_key; do openssl rand -hex 32 > secrets/$f; done && chmod 644 secrets/*_password secrets/state_witness_key   # see secrets/README.md
 docker compose up --build # db + backend + frontend · http://127.0.0.1:3000 (sign in at /login with the admin token or an API key)
 ```
 Only the web container is published (on 127.0.0.1). The API sits on an **internal-only network with no internet egress**; the Gate

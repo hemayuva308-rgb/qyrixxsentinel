@@ -28,7 +28,14 @@ class Cluster:
             shutil.chown(self.dir, "postgres")
         self._pg("initdb", "-D", self.dir + "/data", "-A", "trust", "-U", "qyrix")
         self.start()
-        self.url = "postgresql://qyrix@127.0.0.1:%d/postgres" % self.port
+        # two accounts, as in production: the privileged admin migrates; the code under test uses the runtime role
+        self.admin_url = "postgresql://qyrix@127.0.0.1:%d/postgres" % self.port
+        from app import migrate as _m
+        _m.migrate(self.admin_url)
+        self.url = self.runtime_url("postgres")
+
+    def runtime_url(self, db):
+        return "postgresql://qyrix_runtime@127.0.0.1:%d/%s" % (self.port, db)
 
     def _pg(self, tool, *args):
         subprocess.run(self.as_user + [os.path.join(PG_BIN, tool), *args], check=True, capture_output=True)
@@ -72,6 +79,13 @@ def boot(env):
     except Exception:
         ctx.state["persistence"] = "down"
     return ctx
+
+
+def admin_exec(env, sql, params=()):
+    """Test-only manipulation of ground truth with the privileged account (the runtime is not allowed to do this)."""
+    import psycopg
+    with psycopg.connect(env["cluster"].admin_url, autocommit=True) as c:
+        c.execute(sql, params)
 
 
 def A(**k):
@@ -150,7 +164,7 @@ def test_expired_and_revoked_grants_cannot_execute_after_restart(env):
     v = g.evaluate(A(tool="file.read", dest="README.md", lineage=[t["id"]]), c1)
     assert g.revoke_grant(v["grant_id"], "admin", c1)["revoked"]
     assert refused(c1, {"gate_evaluation_id": v["gate_evaluation_id"], "grant_id": v["grant_id"]}) == "GRANT_REVOKED"
-    c1.db._run(lambda cur: cur.execute("UPDATE grants SET expires_at = now() - interval '1 second' WHERE id=%s", (e["grant_id"],)))
+    admin_exec(env, "UPDATE grants SET expires_at = now() - interval \'1 second\' WHERE id=%s", (e["grant_id"],))   # test setup as ADMIN: the runtime may not change expiry
     c2 = boot(env)
     assert refused(c2, {"gate_evaluation_id": e["gate_evaluation_id"], "grant_id": e["grant_id"]}) == "GRANT_EXPIRED"
     assert refused(c2, {"gate_evaluation_id": v["gate_evaluation_id"], "grant_id": v["grant_id"]}) == "GRANT_REVOKED"
@@ -161,7 +175,7 @@ def test_expired_in_db_but_not_in_memory_is_still_refused(env):
     c1 = boot(env)
     t = c1.prov.add_step("ticket", "TRUSTED", "read")
     e = g.evaluate(A(tool="file.read", dest="README.md", lineage=[t["id"]]), c1)
-    c1.db._run(lambda cur: cur.execute("UPDATE grants SET expires_at = now() - interval '1 second' WHERE id=%s", (e["grant_id"],)))
+    admin_exec(env, "UPDATE grants SET expires_at = now() - interval \'1 second\' WHERE id=%s", (e["grant_id"],))   # test setup as ADMIN: the runtime may not change expiry
     assert refused(c1, {"gate_evaluation_id": e["gate_evaluation_id"], "grant_id": e["grant_id"]}) == "GRANT_REPLAY"
 
 
@@ -255,12 +269,13 @@ def test_dsn_from_env_modes(tmp_path, monkeypatch):
     monkeypatch.setenv("QYRIX_DB_HOST", "db"); monkeypatch.setenv("QYRIX_DB_PASSWORD_FILE", str(pw))
     from psycopg.conninfo import conninfo_to_dict
     d = conninfo_to_dict(persistence.dsn_from_env())
-    assert d["host"] == "db" and d["dbname"] == "qyrix" and d["user"] == "qyrix" and d["port"] == "5432"
+    assert d["host"] == "db" and d["dbname"] == "qyrix" and d["user"] == "qyrix_runtime" and d["port"] == "5432"
     assert d["password"] == "generated-for-test with 'quote and space"   # read from the file, escaped correctly
     monkeypatch.setenv("QYRIX_DATABASE_URL", "host=other dbname=x user=y")
     assert persistence.dsn_from_env() == "host=other dbname=x user=y"   # explicit URL wins
     monkeypatch.delenv("QYRIX_DB_PASSWORD_FILE"); monkeypatch.delenv("QYRIX_DATABASE_URL")
-    assert persistence.DEFAULT_PASSWORD_FILE == "/run/secrets/db_password"   # Docker Compose secret mount
+    assert persistence.DEFAULT_PASSWORD_FILE == "/run/secrets/db_runtime_password"   # Docker Compose secret mount
+    assert persistence.DEFAULT_ADMIN_PASSWORD_FILE == "/run/secrets/db_admin_password"   # never mounted into the backend
 
 
 def test_connects_with_password_file_settings(cluster, tmp_path, monkeypatch):
@@ -270,8 +285,11 @@ def test_connects_with_password_file_settings(cluster, tmp_path, monkeypatch):
     for k, v in {"QYRIX_DB_HOST": "127.0.0.1", "QYRIX_DB_PORT": str(cluster.port), "QYRIX_DB_NAME": "postgres",
                  "QYRIX_DB_USER": "qyrix", "QYRIX_DB_PASSWORD_FILE": str(pw)}.items():
         monkeypatch.setenv(k, v)
+    for k, v in {"QYRIX_DB_USER": "qyrix_runtime"}.items():
+        monkeypatch.setenv(k, v)
     db = persistence.PgPersistence(persistence.dsn_from_env())
-    assert db.ping() and "001_core_persistence.sql" in db.migrate()
+    db.verify_runtime()                                              # least-privilege account, fully migrated schema
+    assert db.ping()
 
 
 def test_proof_mirror_and_anchors_are_append_only(env):

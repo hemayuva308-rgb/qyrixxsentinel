@@ -30,22 +30,12 @@ class PersistenceConflict(PersistenceError):
     """A state conflict (e.g. approval already consumed by another process) - not an outage."""
 
 
-DEFAULT_PASSWORD_FILE = "/run/secrets/db_password"
+DEFAULT_PASSWORD_FILE = "/run/secrets/db_runtime_password"
+DEFAULT_ADMIN_PASSWORD_FILE = "/run/secrets/db_admin_password"
+DEFAULT_RUNTIME_USER = "qyrix_runtime"
 
 
-def dsn_from_env() -> Optional[str]:
-    """Database connection settings, without ever putting a password in configuration files.
-    1. QYRIX_DATABASE_URL (non-Docker convenience; prefer a ~/.pgpass file over embedding a password), or
-    2. QYRIX_DB_HOST [+ QYRIX_DB_PORT, QYRIX_DB_NAME, QYRIX_DB_USER] with the password read from a file:
-       QYRIX_DB_PASSWORD_FILE (default /run/secrets/db_password = the Docker Compose secret).
-    Returns None for in-memory mode. Raises PersistenceError (=> Gate fails closed) on a missing/empty/placeholder secret."""
-    url = os.getenv("QYRIX_DATABASE_URL", "").strip()
-    if url:
-        return url
-    host = os.getenv("QYRIX_DB_HOST", "").strip()
-    if not host:
-        return None
-    path = os.getenv("QYRIX_DB_PASSWORD_FILE", "").strip() or DEFAULT_PASSWORD_FILE
+def _read_secret(path: str) -> str:
     try:
         with open(path) as f:
             secret = f.read().strip()
@@ -53,9 +43,42 @@ def dsn_from_env() -> Optional[str]:
         raise PersistenceError("database password file not readable") from None
     if not secret or "CHANGE_ME" in secret:
         raise PersistenceError("database password missing or still a placeholder")
+    return secret
+
+
+def admin_dsn_from_env() -> Optional[str]:
+    """Administrative (migration / backup / restore) connection. NEVER used by the long-running backend.
+    QYRIX_ADMIN_DATABASE_URL, or QYRIX_DB_HOST [+PORT, NAME] + QYRIX_DB_ADMIN_USER (default qyrix) +
+    QYRIX_DB_ADMIN_PASSWORD_FILE (default /run/secrets/db_admin_password)."""
+    url = os.getenv("QYRIX_ADMIN_DATABASE_URL", "").strip()
+    if url:
+        return url
+    host = os.getenv("QYRIX_DB_HOST", "").strip()
+    if not host:
+        return None
+    secret = _read_secret(os.getenv("QYRIX_DB_ADMIN_PASSWORD_FILE", "").strip() or DEFAULT_ADMIN_PASSWORD_FILE)
+    from psycopg.conninfo import make_conninfo
+    return make_conninfo(host=host, port=os.getenv("QYRIX_DB_PORT", "5432"), dbname=os.getenv("QYRIX_DB_NAME", "qyrix"),
+                         user=os.getenv("QYRIX_DB_ADMIN_USER", "qyrix"), password=secret, connect_timeout="5")
+
+
+def dsn_from_env() -> Optional[str]:
+    """Database connection settings, without ever putting a password in configuration files.
+    1. QYRIX_DATABASE_URL (non-Docker convenience; prefer a ~/.pgpass file over embedding a password), or
+    2. QYRIX_DB_HOST [+ QYRIX_DB_PORT, QYRIX_DB_NAME, QYRIX_DB_USER] with the password read from a file:
+       QYRIX_DB_PASSWORD_FILE (default /run/secrets/db_runtime_password = the Docker Compose secret) and
+       QYRIX_DB_USER (default qyrix_runtime - the least-privilege login; the backend refuses over-privileged accounts).
+    Returns None for in-memory mode. Raises PersistenceError (=> Gate fails closed) on a missing/empty/placeholder secret."""
+    url = os.getenv("QYRIX_DATABASE_URL", "").strip()
+    if url:
+        return url
+    host = os.getenv("QYRIX_DB_HOST", "").strip()
+    if not host:
+        return None
+    secret = _read_secret(os.getenv("QYRIX_DB_PASSWORD_FILE", "").strip() or DEFAULT_PASSWORD_FILE)
     from psycopg.conninfo import make_conninfo   # escapes every value correctly
     return make_conninfo(host=host, port=os.getenv("QYRIX_DB_PORT", "5432"), dbname=os.getenv("QYRIX_DB_NAME", "qyrix"),
-                         user=os.getenv("QYRIX_DB_USER", "qyrix"), password=secret, connect_timeout="5")
+                         user=os.getenv("QYRIX_DB_USER", DEFAULT_RUNTIME_USER), password=secret, connect_timeout="5")
 
 
 def _ts(epoch: float) -> datetime:
@@ -69,63 +92,131 @@ def _iso(v) -> str:
 TENANT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
 
 
-class _Connection:
-    """One connection per database shared by every tenant view; transactions are serialised (single process).
-    Tenant-scoped transactions run as the least-privilege role `qyrix_app` with `qyrix.tenant_id` set, so PostgreSQL
-    row-level security enforces isolation in addition to the explicit tenant filters in every query."""
+class _Pool:
+    """A small pool of connections for ONE database (the least-privilege runtime account).
 
-    def __init__(self, dsn: str, timeout: int):
+    Tenant context safety: every transaction begins with set_config('qyrix.tenant_id', <tenant or ''>, is_local=true),
+    so the setting is (a) always explicitly (re)written at the start of each transaction and (b) discarded by PostgreSQL
+    at COMMIT/ROLLBACK. A connection is returned to the pool only if it is idle (no open transaction); anything else is
+    closed. Tenant context therefore cannot leak between requests or tenants sharing a pooled connection."""
+
+    def __init__(self, dsn: str, timeout: int, size: int):
         import psycopg                      # imported lazily: memory mode needs no driver
-        self._psycopg, self.dsn, self.timeout = psycopg, dsn, timeout
-        self._conn = None
-        self.lock = threading.RLock()
-        self.app_role = False               # becomes True once migration 002 created qyrix_app
+        import queue
+        self._psycopg, self.dsn, self.timeout, self.size = psycopg, dsn, timeout, max(1, size)
+        self._idle = queue.LifoQueue()
+        self._slots = threading.BoundedSemaphore(self.size)
+        self.lock = threading.RLock()       # kept for callers that serialise multi-call sequences
 
-    def _c(self):
+    def _connect(self):
         try:
-            if self._conn is None or self._conn.closed or self._conn.broken:
-                self._conn = self._psycopg.connect(self.dsn, connect_timeout=self.timeout, autocommit=False)
-            return self._conn
+            return self._psycopg.connect(self.dsn, connect_timeout=self.timeout, autocommit=False)
         except Exception as e:
-            self._conn = None
             raise PersistenceError("database unavailable: " + type(e).__name__) from None
 
-    def run(self, fn, tenant: Optional[str] = None, as_app: bool = True):
-        """fn(cursor) in one transaction. Any error => rollback + PersistenceError (fail closed)."""
-        with self.lock:
-            conn = self._c()
+    def _checkout(self):
+        if not self._slots.acquire(timeout=self.timeout):
+            raise PersistenceError("database pool exhausted")
+        while True:
             try:
-                with conn.transaction():
-                    with conn.cursor() as cur:
-                        if tenant is not None:
-                            if as_app and self.app_role:
-                                cur.execute("SET LOCAL ROLE qyrix_app")
-                            cur.execute("SELECT set_config('qyrix.tenant_id', %s, true)", (tenant,))
-                        return fn(cur)
-            except PersistenceError:
-                raise
-            except Exception as e:
-                try:
-                    if conn.broken:
-                        self._conn = None
-                except Exception:
-                    self._conn = None
-                raise PersistenceError("database error: " + type(e).__name__) from None
+                conn = self._idle.get_nowait()
+            except Exception:
+                break
+            if not conn.closed and not conn.broken:
+                return conn
+        try:
+            return self._connect()
+        except Exception:
+            self._slots.release()
+            raise
+
+    def _checkin(self, conn):
+        try:
+            idle = (not conn.closed and not conn.broken
+                    and conn.info.transaction_status == self._psycopg.pq.TransactionStatus.IDLE)
+            if idle:
+                self._idle.put(conn)
+            else:
+                conn.close()
+        finally:
+            self._slots.release()
+
+    def run(self, fn, tenant: Optional[str] = None):
+        """fn(cursor) in one transaction, tenant context set first. Any error => rollback + PersistenceError."""
+        conn = self._checkout()
+        try:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute("SELECT set_config('qyrix.tenant_id', %s, true)", (tenant or "",))
+                    return fn(cur)
+        except PersistenceError:
+            raise
+        except Exception as e:
+            msg = str(getattr(e, "diag", None) and e.diag.message_primary or "")
+            if "row-level security" in msg:
+                from app import observability as obs   # an RLS violation is never expected from correct code
+                obs.inc("qyrix_tenant_isolation_violations_total")
+                obs.event("tenant_isolation_violation", severity="critical", tenant=tenant or "", error=type(e).__name__)
+            raise PersistenceError("database error: " + type(e).__name__) from None
+        finally:
+            self._checkin(conn)
+
+    def close_all(self):
+        while True:
+            try:
+                self._idle.get_nowait().close()
+            except Exception:
+                return
 
 
-_POOL: Dict[str, _Connection] = {}
+_POOL: Dict[str, _Pool] = {}
 _POOL_LOCK = threading.Lock()
 
 
-def shared_connection(dsn: str, timeout: int = 5) -> _Connection:
+def shared_connection(dsn: str, timeout: int = 5) -> _Pool:
     with _POOL_LOCK:
         if dsn not in _POOL:
-            _POOL[dsn] = _Connection(dsn, timeout)
+            _POOL[dsn] = _Pool(dsn, timeout, int(os.getenv("QYRIX_DB_POOL_SIZE", "5")))
         return _POOL[dsn]
 
 
+def expected_migrations() -> List[str]:
+    return sorted(os.path.basename(p) for p in glob.glob(os.path.join(MIGRATIONS, "*.sql")))
+
+
+RUNTIME_CHECK_SQL = """
+SELECT r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication,
+       (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public' AND c.relowner = r.oid) AS owned,
+       (SELECT d.datdba = r.oid FROM pg_database d WHERE d.datname = current_database()) AS db_owner,
+       (SELECT count(*) FROM pg_roles x WHERE x.oid <> r.oid AND (x.rolsuper OR x.rolbypassrls OR x.rolcreaterole
+                                   OR x.rolname IN ('qyrix_auth', 'qyrix_maint'))
+                                   AND pg_has_role(r.oid, x.oid, 'MEMBER')) AS powerful_memberships,
+       pg_has_role(r.oid, 'qyrix_app', 'MEMBER') AS app_member
+  FROM pg_roles r WHERE r.rolname = current_user
+"""
+
+
+def runtime_privilege_problems(cur) -> List[str]:
+    """Empty list = the connected account is a proper least-privilege runtime account."""
+    cur.execute(RUNTIME_CHECK_SQL)
+    r = cur.fetchone()
+    names = ["superuser", "bypassrls", "createrole", "createdb", "replication"]
+    problems = [n for n, v in zip(names, r[:5]) if v]
+    if r[5]:
+        problems.append("owns %d table(s)/object(s)" % r[5])
+    if r[6]:
+        problems.append("owns the database")
+    if r[7]:
+        problems.append("member of a privileged role")
+    if not r[8]:
+        problems.append("not a member of qyrix_app")
+    return problems
+
+
 class PgPersistence:
-    """Tenant-bound view of the database. Every statement is scoped to `self.t` (filters + RLS)."""
+    """Tenant-bound view of the database. Every statement is scoped to `self.t` (explicit filters + RLS), runs as the
+    least-privilege runtime account and never changes role."""
     name = "postgres"
 
     def __init__(self, dsn: str, tenant_id: str = "default", connect_timeout: int = 5):
@@ -137,34 +228,31 @@ class PgPersistence:
         self.db = shared_connection(dsn, connect_timeout)
 
     def _run(self, fn):
-        return self.db.run(fn, tenant=self.t, as_app=True)
-
-    def _run_owner(self, fn):
-        return self.db.run(fn, tenant=self.t, as_app=False)
+        return self.db.run(fn, tenant=self.t)
 
     def ping(self) -> bool:
         self.db.run(lambda cur: cur.execute("SELECT 1"))
         return True
 
-    def migrate(self) -> List[str]:
+    def verify_runtime(self) -> None:
+        """Startup gate: refuse (fail closed) unless connected as a least-privilege account to a fully migrated schema.
+        The backend never migrates; `python -m app.migrate` does, with the separate administrative account."""
         def go(cur):
-            cur.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
-            cur.execute("SELECT pg_advisory_xact_lock(424242)")          # one migrator at a time
+            problems = runtime_privilege_problems(cur)
             cur.execute("SELECT name FROM schema_migrations")
-            done = {r[0] for r in cur.fetchall()}
-            applied = []
-            for path in sorted(glob.glob(os.path.join(MIGRATIONS, "*.sql"))):
-                name = os.path.basename(path)
-                if name in done:
-                    continue
-                cur.execute(open(path).read())
-                cur.execute("INSERT INTO schema_migrations (name) VALUES (%s)", (name,))
-                applied.append(name)
-            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'qyrix_app'")
-            return applied, cur.fetchone() is not None
-        applied, role = self.db.run(go)
-        self.db.app_role = role
-        return applied
+            done = {x[0] for x in cur.fetchall()}
+            return problems, [m for m in expected_migrations() if m not in done]
+        try:
+            problems, missing = self.db.run(go)
+        except PersistenceError:
+            raise
+        if problems:
+            from app import observability as obs
+            obs.inc("qyrix_db_privilege_violations_total")
+            obs.event("db_privilege_violation", severity="critical", problems=",".join(problems))
+            raise PersistenceError("runtime database account is over-privileged: " + ", ".join(problems))
+        if missing:
+            raise PersistenceError("database schema not migrated (run `python -m app.migrate`): missing " + ", ".join(missing))
 
     def tenant_exists(self) -> bool:
         def go(cur):
@@ -290,10 +378,7 @@ class PgPersistence:
         return self._run(go)
 
     def reset(self) -> None:
-        """Demo/eval reset of THIS tenant only (guarded by QYRIX_ENABLE_DEMO_RESET at the API). Runs as the table owner,
-        because the application role can never delete evidence."""
-        def go(cur):
-            cur.execute("SELECT set_config('qyrix.allow_reset', 'on', true)")
-            for t in ("grants", "gate_evaluations", "approvals", "provenance_steps", "proof_records", "proof_anchors"):
-                cur.execute("DELETE FROM %s WHERE tenant_id = %%s" % t, (self.t,))
-        self._run_owner(go)
+        """Demo/eval reset of THIS tenant only. The runtime cannot DELETE evidence; it may only call the SECURITY DEFINER
+        function qyrix_reset_tenant_evidence, and only if the operator granted it at migration time
+        (`python -m app.migrate --allow-demo-reset`). Otherwise this raises (=> refused, nothing deleted)."""
+        self._run(lambda cur: cur.execute("SELECT qyrix_reset_tenant_evidence(%s)", (self.t,)))

@@ -68,12 +68,12 @@ def populate(env):
 def test_backup_restores_into_a_fresh_cluster(two):
     c, s = populate(two)
     out = str(two["tmp"] / "bk")
-    m = bk.backup(two["src"].url, two["chain_dir"], out)
+    m = bk.backup(two["src"].admin_url, two["chain_dir"], out)
     assert m["order"] == ["db.dump", "chain.tar"] and oct(os.stat(out).st_mode & 0o777) == "0o700"
 
     shutil.rmtree(two["chain_dir"]); os.makedirs(two["chain_dir"])
     two["src"].destroy()                                            # the original database is gone
-    bk.restore(two["dst"].url, two["chain_dir"], out)
+    bk.restore(two["dst"].admin_url, two["chain_dir"], out)
 
     r = boot(two["dst"].url, two["chain_dir"], two["ws"])
     assert r.state["persistence"] == "postgres" and not r.state["degraded"]
@@ -88,11 +88,16 @@ def test_backup_restores_into_a_fresh_cluster(two):
     finally:
         identity.use_store(identity.MemoryStore())
     import psycopg                                                  # RLS + least-privilege role survive restore
-    with psycopg.connect(two["dst"].url) as conn, conn.transaction():
-        conn.execute("SET LOCAL ROLE qyrix_app")
-        assert conn.execute("SELECT count(*) FROM proof_records").fetchone()[0] == 0     # no tenant set => nothing
+    with psycopg.connect(two["dst"].url) as conn:
+        with conn.transaction():
+            assert conn.execute("SELECT count(*) FROM proof_records").fetchone()[0] == 0     # no tenant set => nothing
+            assert persistence.runtime_privilege_problems(conn.cursor()) == []
         with pytest.raises(psycopg.Error):
-            conn.execute("SELECT count(*) FROM api_keys")
+            with conn.transaction():
+                conn.execute("SELECT key_hash FROM api_keys")
+    with psycopg.connect(two["dst"].admin_url) as conn:            # definer functions still owned by the NOLOGIN role
+        owners = dict(conn.execute("SELECT proname, pg_get_userbyid(proowner) FROM pg_proc WHERE proname LIKE 'qyrix_%'").fetchall())
+        assert owners["qyrix_lookup_key"] == "qyrix_auth" and owners["qyrix_reset_tenant_evidence"] == "qyrix_maint"
 
 
 def test_chain_older_than_database_fails_closed(two):
@@ -101,9 +106,9 @@ def test_chain_older_than_database_fails_closed(two):
     shutil.copytree(two["chain_dir"], early)                        # WRONG ORDER: chain captured first...
     g.evaluate(A(tool="file.read", dest="README.md"), c)            # ...more decisions happen...
     out = str(two["tmp"] / "bk")
-    bk.backup(two["src"].url, two["chain_dir"], out)                # ...then the DB is captured
+    bk.backup(two["src"].admin_url, two["chain_dir"], out)                # ...then the DB is captured
     shutil.rmtree(two["chain_dir"]); shutil.copytree(early, two["chain_dir"])
-    bk.restore(two["dst"].url, str(two["tmp"] / "unused-dir"), out)
+    bk.restore(two["dst"].admin_url, str(two["tmp"] / "unused-dir"), out)
     r = boot(two["dst"].url, two["chain_dir"], two["ws"])
     assert r.state["degraded"] is True and r.state["persistence"] == "down"
     assert g.evaluate(A(tool="file.read", dest="README.md"), r)["verdict"] == "BLOCK"
@@ -114,16 +119,16 @@ def test_older_database_newer_chain_stays_replay_safe(two):
     After restore the grant row says 'unused' but the chain holds EXECUTION_STARTED => it is loaded as used."""
     c, s = populate(two)
     old = str(two["tmp"] / "old"); new = str(two["tmp"] / "new"); mixed = str(two["tmp"] / "mixed")
-    bk.backup(two["src"].url, two["chain_dir"], old)                 # DB while 'unused' is unused
+    bk.backup(two["src"].admin_url, two["chain_dir"], old)                 # DB while 'unused' is unused
     assert run(c, s["unused"])["executed"]                            # executes after the DB snapshot
-    bk.backup(two["src"].url, two["chain_dir"], new)                 # chain containing EXECUTION_STARTED
+    bk.backup(two["src"].admin_url, two["chain_dir"], new)                 # chain containing EXECUTION_STARTED
     os.makedirs(mixed)
     shutil.copy(os.path.join(old, "db.dump"), mixed); shutil.copy(os.path.join(new, "chain.tar"), mixed)
     with open(os.path.join(mixed, "manifest.json"), "w") as f:
         json.dump({"format": bk.FORMAT, "order": ["db.dump", "chain.tar"],
                    "files": {n: bk._sha(os.path.join(mixed, n)) for n in ("db.dump", "chain.tar")}}, f)
     restored_chain = str(two["tmp"] / "restored")
-    bk.restore(two["dst"].url, restored_chain, mixed)
+    bk.restore(two["dst"].admin_url, restored_chain, mixed)
     r = boot(two["dst"].url, restored_chain, two["ws"])
     assert r.state["persistence"] == "postgres" and not r.state["degraded"]   # DB mirror is a prefix: back-filled
     assert r.grants[s["unused"]["grant_id"]]["used"] is True
@@ -133,21 +138,21 @@ def test_older_database_newer_chain_stays_replay_safe(two):
 def test_tampered_backup_is_refused(two):
     populate(two)
     out = str(two["tmp"] / "bk")
-    bk.backup(two["src"].url, two["chain_dir"], out)
+    bk.backup(two["src"].admin_url, two["chain_dir"], out)
     with open(os.path.join(out, "chain.tar"), "r+b") as f:
         f.seek(600); f.write(b"X")
     with pytest.raises(SystemExit, match="does not match its manifest"):
-        bk.restore(two["dst"].url, str(two["tmp"] / "new"), out)
+        bk.restore(two["dst"].admin_url, str(two["tmp"] / "new"), out)
 
 
 def test_restore_refuses_to_overwrite_live_chain_and_backup_never_overwrites(two):
     populate(two)
     out = str(two["tmp"] / "bk")
-    bk.backup(two["src"].url, two["chain_dir"], out)
+    bk.backup(two["src"].admin_url, two["chain_dir"], out)
     with pytest.raises(FileExistsError):
-        bk.backup(two["src"].url, two["chain_dir"], out)
+        bk.backup(two["src"].admin_url, two["chain_dir"], out)
     with pytest.raises(SystemExit, match="not empty"):
-        bk.restore(two["dst"].url, two["chain_dir"], out)
+        bk.restore(two["dst"].admin_url, two["chain_dir"], out)
 
 
 def test_password_is_passed_by_environment_not_argv():

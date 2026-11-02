@@ -9,7 +9,8 @@ ORDERING INVARIANT (why this is consistent without stopping the service):
   longer than the DB mirror (back-filled on start), never shorter. Restoring a chain older than the DB is detected on
   startup and fails closed (Gate degraded + persistence down), never silently accepted.
 
-Usage (password via the usual QYRIX_DB_* env + password file, or QYRIX_DATABASE_URL; never on the command line):
+Usage (ADMIN connection: QYRIX_ADMIN_DATABASE_URL or QYRIX_DB_HOST + QYRIX_DB_ADMIN_* + password file; never on the command line;
+the least-privilege runtime account cannot read every tenant and is deliberately not usable for backups):
   python scripts/backup.py backup  --chain-dir /data --out /backups/2026-11-02
   python scripts/backup.py restore --chain-dir /data --from /backups/2026-11-02 [--force]
   python scripts/backup.py verify  --from /backups/2026-11-02
@@ -56,7 +57,8 @@ def backup(dsn: str, chain_dir: str, out: str) -> dict:
     conn, env = _pg_env(dsn)
     t0 = time.time()
     # 1) database first (one consistent snapshot: pg_dump runs in a single repeatable-read transaction)
-    subprocess.run([_tool("pg_dump"), "--format=custom", "--no-owner", "--file", os.path.join(out, "db.dump"), "--dbname", conn],
+    # ownership is kept: SECURITY DEFINER lookup functions must stay owned by the unprivileged qyrix_auth role
+    subprocess.run([_tool("pg_dump"), "--format=custom", "--file", os.path.join(out, "db.dump"), "--dbname", conn],
                    env=env, check=True, capture_output=True)
     # 2) chain files second (may be longer than the DB mirror; that is the safe direction)
     with tarfile.open(os.path.join(out, "chain.tar"), "w") as tar:
@@ -91,14 +93,12 @@ def restore(dsn: str, chain_dir: str, src: str, force: bool = False) -> dict:
     if existing and not force:
         raise SystemExit("chain directory is not empty; stop the backend and pass --force to replace it")
     conn, env = _pg_env(dsn)
-    psql = [_tool("psql"), "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "--dbname", conn]
-    # roles are cluster-global and not part of pg_dump: make sure the least-privilege app role exists
-    subprocess.run(psql + ["-c", "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='qyrix_app') THEN "
-                                 "CREATE ROLE qyrix_app NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $$; "
-                                 "GRANT qyrix_app TO CURRENT_USER;"], env=env, check=True, capture_output=True)
-    # replace the schema wholesale; append-only triggers are dropped with their tables by --clean
-    subprocess.run([_tool("pg_restore"), "--clean", "--if-exists", "--no-owner", "--single-transaction", "--exit-on-error",
+    from app import migrate as _migrate
+    _migrate.ensure_roles(dsn)                    # roles are cluster-global and not part of pg_dump
+    # replace the schema wholesale (ownership + grants + RLS policies restored as dumped)
+    subprocess.run([_tool("pg_restore"), "--clean", "--if-exists", "--single-transaction", "--exit-on-error",
                     "--dbname", conn, os.path.join(src, "db.dump")], env=env, check=True, capture_output=True)
+    _migrate.migrate(dsn)                         # bring an older backup up to the current schema / privileges
     if existing:
         for root, _, fs in os.walk(chain_dir):
             for f in fs:
@@ -120,9 +120,9 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "verify":
         print(json.dumps(verify(a.src), indent=2)); return 0
-    dsn = persistence.dsn_from_env()
+    dsn = persistence.admin_dsn_from_env()
     if not dsn:
-        raise SystemExit("no database configured (QYRIX_DATABASE_URL or QYRIX_DB_HOST + password file)")
+        raise SystemExit("no administrative database connection configured (QYRIX_ADMIN_DATABASE_URL or QYRIX_DB_HOST + admin password file)")
     if a.cmd == "backup":
         print(json.dumps(backup(dsn, a.chain_dir, a.out), indent=2))
     else:

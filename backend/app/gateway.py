@@ -21,7 +21,7 @@ from urllib.parse import unquote
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app import adapter as adapters, anchor, netguard, persistence, proof, provenance as prov
 
@@ -361,10 +361,17 @@ def _persistence_down(ctx: "GateContext") -> bool:
         return True
     ctx.state["db_retry"] = time.time()
     try:
+        if not ctx.state.get("attached"):
+            # the initial attach never completed (DB down at start, over-privileged account, unmigrated schema...):
+            # recovery must run the FULL verified attach, never just flip the state back (v1.3 fail-open bug)
+            attach_persistence(ctx, ctx.db)
+            return ctx.state["persistence"] != "postgres"
+        ctx.db.verify_runtime()                       # account/schema re-checked on every recovery
         _sync_proof_mirror(ctx)
         ctx.state["persistence"] = "postgres"
         return False
     except Exception:
+        ctx.state["persistence"] = "down"
         return True
 
 
@@ -391,6 +398,9 @@ def _prove(a: "Action", verdict: str, rules: List[str], dest: Optional[str], lin
 
 # ---------------- Execution gate (deterministic, default-deny, fail-closed) ----------------
 class Action(BaseModel):
+    # v1.4: unknown fields are REFUSED (422), not silently ignored - a client must never believe a constraint such as
+    # "tenant" or "scope" was applied when the Gate never saw it (same rule as /tools/execute).
+    model_config = ConfigDict(extra="forbid")
     tool: str = Field("http", max_length=32)
     method: str = Field("GET", max_length=10)
     dest: str = Field("", max_length=2048)
@@ -693,7 +703,8 @@ def attach_persistence(ctx: GateContext, db) -> None:
     started per the chain are marked used. A DB row alone never authorises anything."""
     ctx.db = db
     ctx.state["persistence"] = "down"
-    db.migrate()
+    ctx.state["attached"] = False
+    db.verify_runtime()                               # least-privilege account + current schema, else fail closed
     _sync_proof_mirror(ctx)
     allowed = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("kind", "gate_decision") == "gate_decision" and r["verdict"] == "ALLOW"}
     started = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("verdict") == "EXECUTION_STARTED"}
@@ -722,6 +733,7 @@ def attach_persistence(ctx: GateContext, db) -> None:
     if ctx.anchors and proof.evaluate_anchors(ctx.chain, ctx.anchors).get("anchor_status") == "ANCHOR_MISMATCH":
         ctx.state["degraded"] = True
     ctx.prov.persist = db.save_step
+    ctx.state["attached"] = True
     ctx.state["persistence"] = "postgres"
 
 
@@ -799,6 +811,11 @@ def decide_approval(aid: str, decision: str, who: str, ctx: Optional[GateContext
 
 def _reset_state(ctx: Optional[GateContext] = None) -> None:
     ctx = ctx or PROD
+    if ctx.db is not None:                            # database FIRST: if it refuses, nothing else is touched
+        try:
+            ctx.db.reset()                            # demo/eval mode only (endpoint is guarded; DB grant is opt-in)
+        except persistence.PersistenceError:
+            raise ExecRefused("RESET_NOT_PERMITTED_BY_DATABASE", 409)
     ctx.prov.reset(); ctx.appr.clear(); ctx.chain.clear(); ctx.lat.clear(); ctx.ext["calls"] = 0
     ctx.evals.clear(); ctx.grants.clear(); ctx.anchors.clear()
     ctx.state["degraded"] = False
@@ -807,7 +824,6 @@ def _reset_state(ctx: Optional[GateContext] = None) -> None:
         if os.path.exists(ctx.chain_file + ".anchors.jsonl"):
             open(ctx.chain_file + ".anchors.jsonl", "w").close()
     if ctx.db is not None:
-        ctx.db.reset()                                # demo/eval mode only (endpoint is guarded)
         ctx.state["persistence"] = "postgres"
 
 

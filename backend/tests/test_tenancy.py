@@ -76,13 +76,15 @@ def cluster():
 def mt(cluster, monkeypatch, tmp_path):
     db = "t" + os.urandom(4).hex()
     import psycopg
-    with psycopg.connect(cluster.url, autocommit=True) as c:
+    with psycopg.connect(cluster.admin_url, autocommit=True) as c:
         c.execute("CREATE DATABASE %s" % db)
-    url = cluster.url.rsplit("/", 1)[0] + "/" + db
+    admin = cluster.admin_url.rsplit("/", 1)[0] + "/" + db
+    from app import migrate
+    migrate.migrate(admin)
+    url = cluster.runtime_url(db)
     monkeypatch.setenv("QYRIX_DATABASE_URL", url)
     monkeypatch.setenv("QYRIX_MULTI_TENANT", "1")
     monkeypatch.setenv("QYRIX_PLATFORM_TOKEN", PLATFORM)
-    persistence.PgPersistence(url).migrate()
     identity.use_store(identity.PgStore(persistence.shared_connection(url)))
     identity.limiter.clear()
     pl = as_(PLATFORM)
@@ -90,7 +92,7 @@ def mt(cluster, monkeypatch, tmp_path):
     assert pl.post("/api/v1/platform/tenants", json={"id": "globex", "name": "Globex"}).status_code == 200
     a = pl.post("/api/v1/platform/tenants/acme/keys", json={"role": "owner"}).json()["api_key"]
     b = pl.post("/api/v1/platform/tenants/globex/keys", json={"role": "owner"}).json()["api_key"]
-    yield {"url": url, "a": as_(a), "b": as_(b), "a_key": a, "b_key": b}
+    yield {"url": url, "admin": admin, "a": as_(a), "b": as_(b), "a_key": a, "b_key": b}
     with tenancy._lock:
         tenancy._contexts.clear()
     identity.use_store(identity.MemoryStore())
@@ -197,36 +199,29 @@ def test_default_tenant_admin_cannot_reach_other_tenants(mt):
 
 
 @pg
-def test_row_level_security_blocks_cross_tenant_rows_for_the_app_role(mt):
+def test_row_level_security_blocks_cross_tenant_rows_for_the_runtime_account(mt):
+    """Through the API two tenants write data; then, connected as the backend's own runtime login (no role switch),
+    the other tenant's rows are invisible and cannot be forged. Full adversarial suite: test_db_privileges.py."""
     _evaluate_file(mt["a"], "README.md")
     mt["a"].post(P + "/provenance/step", json={"label": "TRUSTED", "text": "acme"})
-    import psycopg
+    import psycopg, uuid as _u
     with psycopg.connect(mt["url"]) as c:
         with c.transaction():
-            c.execute("SET LOCAL ROLE qyrix_app")
             c.execute("SELECT set_config('qyrix.tenant_id', 'globex', true)")
-            for t in ("gate_evaluations", "provenance_steps", "proof_records"):
-                n = c.execute("SELECT count(*) FROM %s WHERE tenant_id = 'acme'" % t).fetchone()[0]
-                assert n == 0, t                                 # RLS hides other tenants even with an explicit filter
+            for t in ("gate_evaluations", "provenance_steps", "proof_records", "api_keys", "sessions"):
+                assert c.execute("SELECT count(tenant_id) FROM %s WHERE tenant_id = 'acme'" % t).fetchone()[0] == 0, t
         with c.transaction():
-            c.execute("SET LOCAL ROLE qyrix_app")                # no tenant set => sees nothing
-            assert c.execute("SELECT count(*) FROM gate_evaluations").fetchone()[0] == 0
-        with pytest.raises(psycopg.Error):
+            c.execute("SELECT set_config('qyrix.tenant_id', 'acme', true)")
+            assert c.execute("SELECT count(*) FROM gate_evaluations").fetchone()[0] >= 1      # positive control
+        with c.transaction():
+            assert c.execute("SELECT count(*) FROM gate_evaluations").fetchone()[0] == 0      # no tenant => nothing
+        with pytest.raises(psycopg.errors.InsufficientPrivilege, match="row-level security"):
             with c.transaction():
-                c.execute("SET LOCAL ROLE qyrix_app")
                 c.execute("SELECT set_config('qyrix.tenant_id', 'globex', true)")
-                c.execute("INSERT INTO provenance_steps (tenant_id, id, label, data) "
-                          "SELECT 'acme', id || '-x', label, data FROM provenance_steps LIMIT 1")
-                c.execute("INSERT INTO approvals (tenant_id, id, data) VALUES ('acme', 'apr_forged', '{}')")
-        for stmt in ("SELECT count(*) FROM api_keys", "DELETE FROM proof_records", "UPDATE proof_records SET hash = 'x'"):
-            with pytest.raises(psycopg.Error):
-                with c.transaction():
-                    c.execute("SET LOCAL ROLE qyrix_app")
-                    c.execute("SELECT set_config('qyrix.tenant_id', 'acme', true)")
-                    c.execute(stmt)
-        with c.transaction():                                    # owner sees both tenants' rows => data really exists
-            n = c.execute("SELECT count(DISTINCT tenant_id) FROM proof_records").fetchone()[0]
-            assert n >= 1
+                c.execute("INSERT INTO provenance_steps (tenant_id, id, source, declared_label, effective_label, created_at)"
+                          " VALUES ('acme', %s, 'x', 'TRUSTED', 'TRUSTED', now())", (str(_u.uuid4()),))
+    with psycopg.connect(mt["admin"]) as c:                    # ground truth (admin): both tenants really have data
+        assert c.execute("SELECT count(DISTINCT tenant_id) FROM proof_records").fetchone()[0] >= 1
 
 
 @pg
@@ -252,3 +247,15 @@ def test_duplicate_and_unknown_tenants_are_clean_errors(mt):
     assert pl.post("/api/v1/platform/tenants/default/disable").status_code == 404
     assert mt["a"].get(P + "/status").json()["tenant"] == "acme"
     assert TestClient(app, headers=ADMIN).get(P + "/status").json()["tenant"] == "default"
+
+
+@pg
+def test_client_supplied_tenant_hints_are_ignored(mt):
+    """The tenant comes only from the authenticated credential: headers, query strings and body fields cannot select it."""
+    ra = _evaluate_file(mt["a"], "README.md")
+    hints = {"X-Qyrix-Tenant": "acme", "X-Tenant-Id": "acme", "X-Forwarded-Tenant": "acme"}
+    b = TestClient(app, headers={"Authorization": "Bearer " + mt["b_key"], **hints})
+    assert b.get(P + "/status?tenant=acme&tenant_id=acme").json()["tenant"] == "globex"
+    assert ra["gate_evaluation_id"] not in b.get(P + "/proofs?tenant=acme").text
+    r = b.post(P + "/gate/evaluate", json={"tool": "file.read", "dest": "README.md", "tenant": "acme"})
+    assert r.status_code == 422                                   # unknown body fields are refused, not ignored
