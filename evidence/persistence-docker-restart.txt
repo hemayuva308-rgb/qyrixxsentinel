@@ -1,0 +1,23 @@
+# PostgreSQL restart-persistence check (Docker Compose, Docker-secret password) - 2026-11-01T18:03:01Z
+backend: Up 24 seconds
+db: Up 31 seconds (healthy)
+frontend: Up 24 seconds
+## 1. create records
+revoke g2: 200
+before restart: persistence=postgres decisions=2 chain=PARTIAL_UNANCHORED steps: TRUSTED=TRUSTED derived(declared TRUSTED)->UNTRUSTED approval=apr_4baec2c11d grants=ALLOW,ALLOW
+## 2. docker compose restart backend
+after restart: persistence=postgres gate=available proof=available decisions=2 (before 2)
+  provenance: step 50f3b5b7 present=True; derived effective=UNTRUSTED
+  approval apr_4baec2c11d: status=approved used=False
+  execute persisted grant: 200 True 42
+  replay: 409 GRANT_REPLAY
+  revoked grant: 409 GRANT_REVOKED
+## 3. database outage: docker compose stop db
+  db down -> evaluate: 200 BLOCK ['R17_PERSISTENCE_UNAVAILABLE'] grant: None
+  db down -> add provenance step: 503 PERSISTENCE_UNAVAILABLE
+  status persistence: down
+## 4. database back
+  db back -> evaluate: 200 ALLOW []
+  execute: 200 True | persistence: postgres | chain: PARTIAL_UNANCHORED
+## 5. append-only proof mirror
+ERROR:  append-only table proof_records

@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-02T08:40:35Z",
+  "host": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
+  "cpus": 4,
+  "decisions": 2000,
+  "chain_records": 2000,
+  "backup_bytes": {
+    "db.dump.age": 337141,
+    "chain.tar.age": 1014200
+  },
+  "seconds": {
+    "populate": 7.4,
+    "backup": 0.14,
+    "restore": 0.21,
+    "boot_and_verify": 0.07
+  },
+  "restored_state_verified": true,
+  "notes": "Single host, synthetic data, no network transfer. RTO excludes detection, decision and provisioning; RPO equals the backup interval (no PITR / WAL archiving)."
+}

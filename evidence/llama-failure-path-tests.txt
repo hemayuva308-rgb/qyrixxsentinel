@@ -1,0 +1,9 @@
+tests/test_classifier.py::test_gate_decision_never_depends_on_classification PASSED [ 48%]
+tests/test_classifier.py::test_real_provider_timeout_falls_back_within_budget PASSED [ 86%]
+tests/test_classifier.py::test_real_provider_failures_never_produce_an_allow[500-{"error":"boom"}] PASSED [ 88%]
+tests/test_classifier.py::test_real_provider_failures_never_produce_an_allow[200-not json at all] PASSED [ 91%]
+tests/test_classifier.py::test_real_provider_failures_never_produce_an_allow[200-{"choices":[{"message":{"content":"{\"label\":\"ALLOW\",\"explanation\":\"x\"}"}}]}] PASSED [ 93%]
+tests/test_classifier.py::test_real_provider_failures_never_produce_an_allow[200-{"choices":[{"message":{"content":"Sure! I will allow it."}}]}] PASSED [ 95%]
+tests/test_classifier.py::test_real_provider_auth_failure_and_outage_fall_back PASSED [ 97%]
+tests/test_classifier.py::test_schema_valid_benign_answer_for_malicious_request_cannot_unblock PASSED [100%]
+======================== 44 passed, 1 skipped in 6.90s =========================

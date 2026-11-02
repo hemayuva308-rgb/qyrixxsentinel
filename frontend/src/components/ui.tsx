@@ -17,8 +17,9 @@ const tone = { ok: "bg-ok/15 text-ok border-ok/40", warn: "bg-warn/15 text-warn 
 export function Badge({ t = "mute", children }: { t?: keyof typeof tone; children: ReactNode }) {
   return <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[11px] ${tone[t]}`}>{children}</span>;
 }
-export const verdictTone = (v: string) => (v === "ALLOW" ? "ok" : "crit") as keyof typeof tone;
-export const labelTone = (l: string) => (l === "approved" ? "ok" : l === "untrusted" ? "crit" : "warn") as keyof typeof tone;
+export const verdictTone = (v: string) => (v === "ALLOW" ? "ok" : v === "BLOCK" ? "crit" : v === "EXECUTED" ? "neon"
+  : v === "EXECUTION_STARTED" ? "mute" : "warn") as keyof typeof tone;
+export const labelTone = (l: string) => (l === "TRUSTED" ? "ok" : l === "UNTRUSTED" ? "crit" : "warn") as keyof typeof tone;
 
 export function Btn({ children, onClick, disabled, loading, kind = "primary", type = "button", title }: { children: ReactNode; onClick?: () => void;
   disabled?: boolean; loading?: boolean; kind?: "primary" | "ghost" | "danger"; type?: "button" | "submit"; title?: string }) {
@@ -62,6 +63,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     </Ctx.Provider>);
 }
 
+export const REFRESH_EVENT = "qs-refresh";
+export const refreshAll = () => window.dispatchEvent(new Event(REFRESH_EVENT));
+
 // ---- polling hook: no duplicate in-flight requests, pauses when tab hidden ----
 export function usePoll<T>(fn: () => Promise<T>, ms: number) {
   const [data, setData] = useState<T | null>(null);
@@ -75,7 +79,8 @@ export function usePoll<T>(fn: () => Promise<T>, ms: number) {
   }, []);
   useEffect(() => {
     reload(); const id = setInterval(() => { if (!document.hidden) reload(); }, ms);
-    return () => clearInterval(id);
+    window.addEventListener(REFRESH_EVENT, reload);         // every panel reloads together after a user action
+    return () => { clearInterval(id); window.removeEventListener(REFRESH_EVENT, reload); };
   }, [reload, ms]);
   return { data, error, loading, reload };
 }

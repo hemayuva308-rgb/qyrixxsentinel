@@ -1,0 +1,3 @@
+reduced-motion {"hiddenReveals":["0.6:STEP 2 · ESTABLISH TRUSTLabel ","0.6:STEP 3 · GATE EXECUTIONDecide ","0.6:STEP 4 · VERIFY PROOFKeep evid"],"runningAnims":0,"jsReveal":false,"svgPaused":3}
+mobile demo: decisions shown before response = 0 | waiting notice = 1 | after = 5 Decision BLOCK No grant issued. The adapter was never called. Independent safe task after the block: ALLOW → completed
+first tab focus: Skip to content

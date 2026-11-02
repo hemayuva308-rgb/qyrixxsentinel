@@ -1,31 +1,130 @@
 # Backend is NOT published to the host: only the frontend (which proxies server-side) is reachable.
+# Network-level egress control (SG-01): the backend sits ONLY on "internal", a Docker network with no route to the
+# outside world, so it cannot reach the internet at all. Real outbound tool execution (HttpAdapter) and Meta Llama
+# calls require the explicit opt-in override:  docker compose -f docker-compose.yml -f docker-compose.egress.yml up
 services:
+  db:
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab   # pinned digest
+    environment:
+      POSTGRES_USER: qyrix
+      POSTGRES_DB: qyrix
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password   # ADMIN (superuser) - only db + migrate ever see it
+    secrets: [db_admin_password]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U qyrix -d qyrix"], interval: 3s, timeout: 3s, retries: 20 }
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]   # minimum the official entrypoint needs
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal]                 # not published, no egress
+  migrate:                               # one-shot, privileged: schema migrations + least-privilege runtime role
+    build: ./backend
+    command: ["python", "-m", "app.migrate", "--runtime-password-file", "/run/secrets/db_runtime_password"]
+    depends_on: { db: { condition: service_healthy } }
+    secrets: [db_admin_password, db_runtime_password]
+    environment:
+      QYRIX_DB_HOST: db
+      QYRIX_DB_NAME: qyrix
+      QYRIX_DB_ADMIN_USER: qyrix
+      QYRIX_ENABLE_DEMO_RESET: ${QYRIX_ENABLE_DEMO_RESET:-0}   # 1 => runtime may call the evidence-reset function
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal]
   backend:
     build: ./backend
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    secrets: [db_runtime_password, state_witness_key, data_key, client_sig_key]   # NEVER the admin secret
     environment:
+      QYRIX_DB_HOST: db
+      QYRIX_DB_NAME: qyrix
+      QYRIX_DB_USER: qyrix_runtime         # NOSUPERUSER NOBYPASSRLS, owns nothing; verified at startup (fail closed)
+      # silent data-loss detection: signed witness on its OWN volume (not the DB, not the chain volume)
+      QYRIX_STATE_WITNESS_DIR: /witness
+      QYRIX_STATE_WITNESS_KEY_FILE: /run/secrets/state_witness_key
+      QYRIX_EXPECTED_INSTALL_ID: ${QYRIX_EXPECTED_INSTALL_ID:-}   # set after first start (see docs/DISASTER_RECOVERY.md)
+      # human accounts: TOTP secrets are AES-256-GCM encrypted with this key; MFA is mandatory unless set to 0
+      QYRIX_DATA_KEY_FILE: /run/secrets/data_key
+      QYRIX_REQUIRE_MFA: ${QYRIX_REQUIRE_MFA:-1}
+      QYRIX_MAIL_WEBHOOK_URL: ${QYRIX_MAIL_WEBHOOK_URL:-}           # e-mail boundary (docs/OPERATIONS.md); empty = not configured
+      QYRIX_PUBLIC_URL: ${QYRIX_PUBLIC_URL:-}
+      QYRIX_TSA_URL: ${QYRIX_TSA_URL:-}
+      QYRIX_TSA_CA_FILE: ${QYRIX_TSA_CA_FILE:-}
       QYRIX_ADMIN_TOKEN: ${QYRIX_ADMIN_TOKEN:?set in .env}
       QYRIX_AGENT_TOKEN: ${QYRIX_AGENT_TOKEN:?set in .env}
+      QYRIX_PLATFORM_TOKEN: ${QYRIX_PLATFORM_TOKEN:-}        # tenant lifecycle only; no tenant data access. Empty = disabled
+      QYRIX_METRICS_TOKEN: ${QYRIX_METRICS_TOKEN:-}          # GET /api/v1/metrics bearer. Empty = endpoint disabled
+      QYRIX_MULTI_TENANT: ${QYRIX_MULTI_TENANT:-0}           # 1 = allow non-default tenants (requires PostgreSQL)
+      QYRIX_SESSION_TTL_SECONDS: ${QYRIX_SESSION_TTL_SECONDS:-28800}
+      QYRIX_SESSION_IDLE_SECONDS: ${QYRIX_SESSION_IDLE_SECONDS:-1800}
+      QYRIX_RATE_LIMIT_PER_MIN: ${QYRIX_RATE_LIMIT_PER_MIN:-1200}
+      QYRIX_AUTH_FAIL_PER_MIN: ${QYRIX_AUTH_FAIL_PER_MIN:-20}
+      QYRIX_AUTH_FAIL_GLOBAL_PER_MIN: ${QYRIX_AUTH_FAIL_GLOBAL_PER_MIN:-300}
+      QYRIX_TENANT_WORKSPACE_ROOT: /workspaces               # writable; one subdirectory per tenant
+      QYRIX_CLIENT_SIG_KEY_FILE: /run/secrets/client_sig_key  # verifies the frontend-signed visitor identity (no blind trust)
       QYRIX_APPROVED_DOMAINS: ${QYRIX_APPROVED_DOMAINS:-}
       QYRIX_ENABLE_DEMO_RESET: ${QYRIX_ENABLE_DEMO_RESET:-0}
+      QYRIX_APPROVAL_TTL_SECONDS: ${QYRIX_APPROVAL_TTL_SECONDS:-900}
+      QYRIX_GRANT_TTL_SECONDS: ${QYRIX_GRANT_TTL_SECONDS:-120}
+      QYRIX_PUBLIC_DEMO: ${QYRIX_PUBLIC_DEMO:-1}
+      QYRIX_DEMO_RATE_PER_MIN: ${QYRIX_DEMO_RATE_PER_MIN:-20}
+      QYRIX_DEMO_GLOBAL_RATE_PER_MIN: ${QYRIX_DEMO_GLOBAL_RATE_PER_MIN:-600}
       META_API_KEY: ${META_API_KEY:-}
       META_MODEL: ${META_MODEL:-}
       BASETEN_API_KEY: ${BASETEN_API_KEY:-}
       BASETEN_MODEL: ${BASETEN_MODEL:-}
-    volumes: ["chain:/data"]
+    volumes: ["chain:/data", "workspaces:/workspaces", "witness:/witness"]
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     networks: [internal]
+    healthcheck:                         # readiness = proof chain valid, gate not degraded, database reachable
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
     environment:
       BACKEND_URL: http://backend:8000
+      QYRIX_CLIENT_SIG_KEY_FILE: /run/secrets/client_sig_key
+      # number of reverse proxies in front of this container that OVERWRITE/append X-Forwarded-For. 0 = none: the
+      # visitor IP is unknowable and per-IP limits are skipped (per-account + global limits still apply)
+      QYRIX_TRUSTED_PROXY_HOPS: ${QYRIX_TRUSTED_PROXY_HOPS:-0}
+      HOSTNAME: 0.0.0.0                  # Next standalone binds to $$HOSTNAME; 0.0.0.0 lets the healthcheck use loopback
       QYRIX_COOKIE_SECURE: ${QYRIX_COOKIE_SECURE:-0}
+    secrets: [client_sig_key]
     ports: ["127.0.0.1:3000:3000"]
-    depends_on: [backend]
+    depends_on: { backend: { condition: service_healthy } }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     read_only: true
     cap_drop: [ALL]
-    networks: [internal]
-networks: { internal: {} }
-volumes: { chain: {} }
+    security_opt: ["no-new-privileges:true"]
+    networks: [internal, edge]          # "edge" exists only so the published port works; the API stays internal
+secrets:                                 # generated locally, git-ignored - see README "Run with Docker Compose"
+  db_admin_password:
+    file: ./secrets/db_admin_password
+  db_runtime_password:
+    file: ./secrets/db_runtime_password
+  state_witness_key:
+    file: ./secrets/state_witness_key
+  data_key:
+    file: ./secrets/data_key
+  client_sig_key:
+    file: ./secrets/client_sig_key
+networks:
+  internal: { internal: true }          # no egress
+  edge: {}
+volumes: { chain: {}, pgdata: {}, workspaces: {}, witness: {} }

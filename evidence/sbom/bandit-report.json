@@ -1,0 +1,289 @@
+{
+ "tool": "bandit 1.9.4",
+ "scope": "backend/app backend/scripts",
+ "note": "Summary only: code snippets and quoted values are deliberately omitted (they made secret scanners flag synthetic fixtures). Re-run bandit locally for full context.",
+ "counts": {
+  "LOW": 31
+ },
+ "results": [
+  {
+   "test_id": "B404",
+   "test_name": "blacklist",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/anchor.py",
+   "line": 21,
+   "cwe": 78
+  },
+  {
+   "test_id": "B607",
+   "test_name": "start_process_with_partial_path",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/anchor.py",
+   "line": 61,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/anchor.py",
+   "line": 61,
+   "cwe": 78
+  },
+  {
+   "test_id": "B110",
+   "test_name": "try_except_pass",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/gateway.py",
+   "line": 68,
+   "cwe": 703
+  },
+  {
+   "test_id": "B110",
+   "test_name": "try_except_pass",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/gateway.py",
+   "line": 601,
+   "cwe": 703
+  },
+  {
+   "test_id": "B110",
+   "test_name": "try_except_pass",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/gateway.py",
+   "line": 609,
+   "cwe": 703
+  },
+  {
+   "test_id": "B110",
+   "test_name": "try_except_pass",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/gateway.py",
+   "line": 676,
+   "cwe": 703
+  },
+  {
+   "test_id": "B110",
+   "test_name": "try_except_pass",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/identity.py",
+   "line": 433,
+   "cwe": 703
+  },
+  {
+   "test_id": "B110",
+   "test_name": "try_except_pass",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/identity.py",
+   "line": 509,
+   "cwe": 703
+  },
+  {
+   "test_id": "B105",
+   "test_name": "hardcoded_password_string",
+   "severity": "LOW",
+   "confidence": "MEDIUM",
+   "file": "app/mailer.py",
+   "line": 36,
+   "cwe": 259
+  },
+  {
+   "test_id": "B105",
+   "test_name": "hardcoded_password_string",
+   "severity": "LOW",
+   "confidence": "MEDIUM",
+   "file": "app/persistence.py",
+   "line": 33,
+   "cwe": 259
+  },
+  {
+   "test_id": "B105",
+   "test_name": "hardcoded_password_string",
+   "severity": "LOW",
+   "confidence": "MEDIUM",
+   "file": "app/persistence.py",
+   "line": 34,
+   "cwe": 259
+  },
+  {
+   "test_id": "B110",
+   "test_name": "try_except_pass",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "app/persistence.py",
+   "line": 166,
+   "cwe": 703
+  },
+  {
+   "test_id": "B404",
+   "test_name": "blacklist",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 32,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 100,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 118,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 119,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 127,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 144,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 191,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 208,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 219,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/backup.py",
+   "line": 220,
+   "cwe": 78
+  },
+  {
+   "test_id": "B404",
+   "test_name": "blacklist",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/dr_drill.py",
+   "line": 10,
+   "cwe": 78
+  },
+  {
+   "test_id": "B607",
+   "test_name": "start_process_with_partial_path",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/dr_drill.py",
+   "line": 25,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/dr_drill.py",
+   "line": 25,
+   "cwe": 78
+  },
+  {
+   "test_id": "B607",
+   "test_name": "start_process_with_partial_path",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/dr_drill.py",
+   "line": 26,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/dr_drill.py",
+   "line": 26,
+   "cwe": 78
+  },
+  {
+   "test_id": "B404",
+   "test_name": "blacklist",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/run_benchmark.py",
+   "line": 8,
+   "cwe": 78
+  },
+  {
+   "test_id": "B607",
+   "test_name": "start_process_with_partial_path",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/run_benchmark.py",
+   "line": 31,
+   "cwe": 78
+  },
+  {
+   "test_id": "B603",
+   "test_name": "subprocess_without_shell_equals_true",
+   "severity": "LOW",
+   "confidence": "HIGH",
+   "file": "scripts/run_benchmark.py",
+   "line": 31,
+   "cwe": 78
+  }
+ ]
+}

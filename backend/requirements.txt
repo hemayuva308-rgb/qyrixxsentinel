@@ -1,5 +1,8 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-pydantic>=2.6
-httpx>=0.27
-pytest>=8
+# Runtime dependencies (direct). The image installs the fully pinned, hash-verified requirements-lock.txt generated from
+# this file:  uv pip compile requirements.txt --generate-hashes --python-version 3.12 -o requirements-lock.txt
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+pydantic>=2.6,<3
+httpx>=0.27,<1
+psycopg[binary]>=3.2,<4
+cryptography>=44,<51        # AES-GCM for TOTP secrets at rest (PyCA, well maintained)

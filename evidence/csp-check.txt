@@ -1,0 +1,6 @@
+# CSP enforcement check (production build in Docker) - 2026-11-01T17:10:54Z
+Method: intercept GET / keeping the real response headers, inject an inline eval probe into the HTML document.
+Playwright-injected scripts (addScriptTag/evaluate) bypass CSP even on a control page, so they are not a valid test.
+CSP header present: true | in-document probe: eval BLOCKED EvalError
+external fetch blocked | CSP violation reports: 2 | page still works: Secure Every AI Action. Before Execution.
+Control page (script-src 'self' 'unsafe-inline', inline eval): BLOCKED EvalError

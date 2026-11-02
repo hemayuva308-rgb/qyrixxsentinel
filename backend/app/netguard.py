@@ -94,12 +94,19 @@ def resolve_public(host: str) -> List[str]:
 def pinned_request(method: str, url: str, host: str, ip: str, timeout: float = 5.0) -> int:
     """Connect to the validated IP (no second DNS lookup); keep hostname for Host header + TLS SNI/verification.
     Redirects are never followed: a redirect target must be re-submitted to the gate."""
+    return pinned_request_full(method, url, host, ip, timeout)[0]
+
+
+def pinned_request_full(method: str, url: str, host: str, ip: str, timeout: float = 5.0):
+    """Like pinned_request but also returns the redirect Location (never followed). No credentials are ever sent."""
     p = urlsplit(url)
     ipn = "[%s]" % ip if ":" in ip else ip
     target = p._replace(netloc=ipn + (":%d" % p.port if p.port else "")).geturl()
     ext = {"sni_hostname": host} if p.scheme == "https" else {}
     with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as c:
-        return c.request(method, target, headers={"Host": host}, extensions=ext).status_code
+        r = c.request(method, target, headers={"Host": host}, extensions=ext)
+        headers = getattr(r, "headers", None) or {}
+        return r.status_code, headers.get("location")
 
 
 _PROTECTED = {".env", ".ssh", ".aws", ".git", ".gnupg", "id_rsa", "id_ed25519", "credentials", "shadow", "passwd"}
@@ -110,8 +117,11 @@ def confine_path(root: str, path: str) -> bool:
     if not path or "\x00" in path:
         return False
     real_root = os.path.realpath(root)
-    real = os.path.realpath(os.path.join(real_root, path))
+    lexical = os.path.normpath(os.path.join(real_root, path))
+    real = os.path.realpath(lexical)
     if os.path.commonpath([real_root, real]) != real_root:
+        return False
+    if real != lexical:                  # a symlink somewhere on the path: rejected for the MVP (master plan 11)
         return False
     rel = os.path.relpath(real, real_root).split(os.sep)
     return not any(part.lower() in _PROTECTED or part.lower().startswith(".env") for part in rel)

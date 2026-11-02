@@ -1,0 +1,66 @@
+# Prometheus alerting rules for QYRIX SENTINEL (v1.4). Scrape GET /api/v1/metrics with bearer QYRIX_METRICS_TOKEN.
+# Every alert links to its runbook in docs/OPERATIONS.md. Counters are per process: scrape every replica.
+groups:
+  - name: qyrix-sentinel
+    rules:
+      - alert: QyrixTenantIsolationViolation
+        expr: increase(qyrix_tenant_isolation_violations_total[5m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Row-level security rejected a cross-tenant statement", runbook: "docs/OPERATIONS.md#rb-isolation" }
+      - alert: QyrixDbPrivilegeViolation
+        expr: increase(qyrix_db_privilege_violations_total[5m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Backend refused an over-privileged database account", runbook: "docs/OPERATIONS.md#rb-db-privilege" }
+      - alert: QyrixDataIntegrityRecoveryRequired
+        expr: min by (tenant) (qyrix_integrity_ok) == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "Data-loss / integrity check failed for {{ $labels.tenant }} - Gate is blocking", runbook: "docs/OPERATIONS.md#rb-integrity" }
+      - alert: QyrixStateWitnessDisabled
+        expr: min(qyrix_integrity_ok) == -1
+        for: 10m
+        labels: { severity: high }
+        annotations: { summary: "Silent data-loss detection is DISABLED", runbook: "docs/OPERATIONS.md#rb-integrity" }
+      - alert: QyrixProofChainDegraded
+        expr: max by (tenant) (qyrix_gate_degraded) == 1
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "Proof chain integrity failure for {{ $labels.tenant }} - Gate blocks everything", runbook: "docs/OPERATIONS.md#rb-proof" }
+      - alert: QyrixPersistenceDown
+        expr: min by (tenant) (qyrix_persistence_up) == -1
+        for: 2m
+        labels: { severity: high }
+        annotations: { summary: "PostgreSQL unavailable for {{ $labels.tenant }} (R17 fail-closed)", runbook: "docs/OPERATIONS.md#rb-database" }
+      - alert: QyrixRateLimitStoreErrors
+        expr: increase(qyrix_rate_limit_backend_errors_total[5m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Shared rate-limit store failing - authentication paths return 503", runbook: "docs/OPERATIONS.md#rb-database" }
+      - alert: QyrixAuthFailureSpike
+        expr: sum(increase(qyrix_auth_failures_total[5m])) + sum(increase(qyrix_login_failures_total[5m])) > 100
+        labels: { severity: high }
+        annotations: { summary: "Authentication failure spike (brute force / credential stuffing?)", runbook: "docs/OPERATIONS.md#rb-auth" }
+      - alert: QyrixMfaFailureSpike
+        expr: sum(increase(qyrix_mfa_failures_total[5m])) > 20
+        labels: { severity: high }
+        annotations: { summary: "MFA failure spike", runbook: "docs/OPERATIONS.md#rb-auth" }
+      - alert: QyrixRepeatedExecutionBlocks
+        expr: sum by (tenant) (increase(qyrix_gate_decisions_total{verdict="BLOCK"}[5m])) > 50
+        labels: { severity: high }
+        annotations: { summary: "Many blocked executions for {{ $labels.tenant }} (active attack or compromised agent?)", runbook: "docs/OPERATIONS.md#rb-blocks" }
+      - alert: QyrixSecurityAlertRaised
+        expr: increase(qyrix_alerts_total{severity=~"critical|high"}[5m]) > 0
+        labels: { severity: high }
+        annotations: { summary: "Application raised {{ $labels.alert }}", runbook: "docs/OPERATIONS.md#rb-alerts" }
+      - alert: QyrixAlertEngineBroken
+        expr: increase(qyrix_alert_engine_errors_total[15m]) > 0
+        labels: { severity: high }
+        annotations: { summary: "In-process alert evaluation is failing", runbook: "docs/OPERATIONS.md#rb-alerts" }
+      - alert: QyrixBackupTooOld
+        expr: time() - qyrix_backup_last_success_timestamp_seconds > 26 * 3600
+        labels: { severity: high }
+        annotations: { summary: "No successful encrypted backup for > 26 h (RPO at risk)", runbook: "docs/DISASTER_RECOVERY.md" }
+      - alert: QyrixNotReady
+        expr: probe_success{job="qyrix-ready"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "GET /api/v1/ready failing (blackbox probe)", runbook: "docs/OPERATIONS.md#rb-ready" }
