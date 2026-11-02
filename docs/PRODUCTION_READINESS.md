@@ -100,7 +100,7 @@ Classification legend
 ### 1.7 Supply chain and dependencies
 | # | Requirement | Class | Evidence / note |
 |---|---|---|---|
-| S1 | Python dependencies pinned with hashes, installed with `--require-hashes` | IT | `requirements.lock`; suite green on the locked set (Python 3.12) |
+| S1 | Python dependencies pinned with hashes, installed with `--require-hashes` | IT | `requirements-lock.txt`; suite green on the locked set (Python 3.12) |
 | S2 | Known-vulnerability scan clean | IT | `npm audit` 0; `pip-audit` (PyPI service) clean — at commit time only |
 | S3 | Continuous dependency scanning in CI | NI | no CI pipeline in this repository |
 | S4 | Base images pinned by digest; SBOM; signed images | NI | tags only |

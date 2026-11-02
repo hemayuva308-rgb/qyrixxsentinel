@@ -1,0 +1,132 @@
+# QYRIX SENTINEL - CI security pipeline (v1.4). Every third-party action is pinned to an immutable commit SHA (tag in
+# the comment); downloaded tools are pinned by version AND verified against the release checksum file.
+# Any job failing fails the pipeline. Accepted scanner exceptions are listed in docs/DEPENDENCY_AUDIT.md - nothing is
+# suppressed silently.
+name: security
+on:
+  push:
+  pull_request:
+  schedule: [{ cron: "17 3 * * 1" }]     # weekly re-scan for newly published vulnerabilities
+permissions:
+  contents: read
+concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true }
+
+env:
+  GITLEAKS_VERSION: 8.30.0
+  SYFT_VERSION: 1.33.0
+  GRYPE_VERSION: 0.100.0
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1          # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0      # v7.1.0
+        with: { python-version: "3.12" }
+      - name: PostgreSQL + openssl (real-database and RFC 3161 tests must not skip)
+        run: sudo apt-get update && sudo apt-get install -y postgresql openssl
+      - name: Install locked, hash-verified dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip==26.2.2
+          pip install --require-hashes -r requirements-lock.txt
+          pip install pytest==9.2.0
+      - name: Tests (fail if the PostgreSQL suites were skipped)
+        working-directory: backend
+        run: |
+          python -m pytest -q -p no:logging --junitxml=junit.xml -rs | tee pytest.log
+          if grep -q "PostgreSQL not available" pytest.log; then echo "PostgreSQL tests skipped" && exit 1; fi
+      - name: Exact 10-case benchmark (must stay 7/7 blocked, 3/3 allowed)
+        working-directory: backend
+        run: |
+          python scripts/run_benchmark.py --out ../bench | tee bench.txt
+          grep -q "attacks blocked 7/7 | safe allowed 3/3 | false positives 0/3" bench.txt
+
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1          # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1        # v7.1.0
+        with: { node-version: "22" }
+      - name: Lockfile consistency (npm ci refuses a lock that does not match package.json)
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+      - name: Vulnerability audit (fail on high or critical)
+        working-directory: frontend
+        run: npm audit --audit-level=high
+      - name: Typecheck + production build
+        working-directory: frontend
+        run: npx tsc --noEmit && npm run build
+
+  dependency-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1          # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0      # v7.1.0
+        with: { python-version: "3.12" }
+      - name: pip-audit on the hash-locked set (OSV database)
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit --strict --require-hashes -r backend/requirements-lock.txt
+
+  secrets-and-static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1          # v7.0.1
+        with: { fetch-depth: 0 }                                                  # whole history
+      - name: gitleaks (pinned + checksum-verified binary) over the full git history
+        run: |
+          f=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -sSLO https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$f
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt | grep " $f\$" | sha256sum -c -
+          tar -xzf $f gitleaks && ./gitleaks git --redact --no-banner .
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0      # v7.1.0
+        with: { python-version: "3.12" }
+      - name: bandit (fail on medium or high severity)
+        run: pip install bandit==1.9.4 && bandit -r backend/app backend/scripts -ll
+
+  codeql:
+    runs-on: ubuntu-24.04
+    permissions: { contents: read, security-events: write }
+    strategy: { matrix: { language: [python, javascript-typescript] } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1          # v7.0.1
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370   # v4.39.1
+        with: { languages: "${{ matrix.language }}", queries: security-extended }
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370   # v4.39.1
+
+  compose-images-sbom:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1          # v7.0.1
+      - name: Every image pinned by digest; no :latest
+        run: |
+          ! grep -nE "^FROM [^@]+$|image: [^@]+$|:latest" backend/Dockerfile frontend/Dockerfile docker-compose.yml
+      - name: Validate Docker Compose configuration (throw-away secrets)
+        run: |
+          for f in db_admin_password db_runtime_password state_witness_key data_key client_sig_key; do openssl rand -hex 32 > secrets/$f; done
+          QYRIX_ADMIN_TOKEN=$(openssl rand -hex 32) QYRIX_AGENT_TOKEN=$(openssl rand -hex 32) docker compose config -q
+      - name: Build images (no cache)
+        run: |
+          docker build --no-cache --pull -t qyrix-backend:ci backend
+          docker build --no-cache --pull -t qyrix-frontend:ci frontend
+      - name: Install syft + grype (pinned, checksum-verified)
+        run: |
+          for t in syft:${SYFT_VERSION} grype:${GRYPE_VERSION}; do n=${t%%:*}; v=${t#*:}; f=${n}_${v}_linux_amd64.tar.gz
+            curl -sSLO https://github.com/anchore/$n/releases/download/v$v/$f
+            curl -sSL https://github.com/anchore/$n/releases/download/v$v/${n}_${v}_checksums.txt | grep " $f\$" | sha256sum -c -
+            tar -xzf $f $n; done
+      - name: SBOMs (SPDX JSON) for the source tree and both images
+        run: |
+          mkdir -p sbom
+          ./syft dir:. -o spdx-json=sbom/source.spdx.json
+          ./syft qyrix-backend:ci -o spdx-json=sbom/backend-image.spdx.json
+          ./syft qyrix-frontend:ci -o spdx-json=sbom/frontend-image.spdx.json
+      - name: Image vulnerability scan (fail on critical with an available fix; full report kept)
+        run: |
+          for i in backend frontend; do
+            ./grype sbom:sbom/$i-image.spdx.json -o table > sbom/$i-grype.txt || true
+            ./grype sbom:sbom/$i-image.spdx.json --only-fixed --fail-on critical
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        with: { name: sbom-and-scans, path: sbom/, retention-days: 90 }

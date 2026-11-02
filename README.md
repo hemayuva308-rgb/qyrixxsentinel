@@ -59,7 +59,7 @@ Set `QYRIX_ENABLE_DEMO_RESET=1` only for demo/evaluation environments (it enable
   (Prometheus text), JSON security events on the backend's stdout.
 * **Backup / restore** — `scripts/backup.sh` (database first, then the proof chain volume, hash manifest; store it encrypted and
   off-host), `scripts/restore.sh backups/<timestamp> --yes`. The backend re-verifies the restored chain and fails closed on mismatch.
-* **Dependencies** — Python installs from the hash-pinned `backend/requirements.lock`; tests need `requirements-dev.txt`.
+* **Dependencies** — Python installs from the hash-pinned `backend/requirements-lock.txt`; tests need `requirements-dev.txt`.
 
 ## Run without Docker
 ```bash

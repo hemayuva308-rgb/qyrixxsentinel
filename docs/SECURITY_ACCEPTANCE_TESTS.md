@@ -69,7 +69,7 @@ Live Compose E2E: 22/22. Evidence: `evidence/pytest-junit.xml`, `evidence/produc
 | SAT-7.3 | Security events emitted and contain no tokens, keys, sessions, secrets or destinations | `test_security_events_never_contain_secrets`; live log scan |
 | SAT-7.4 | Per-credential rate limit | `test_per_credential_rate_limit` |
 | SAT-7.5 | No secrets in the repository | secret scan (`evidence/secret-scan.txt`, re-run per release) |
-| SAT-7.6 | Dependencies: `npm audit` 0 and `pip-audit` clean on `requirements.lock` | manual, per release |
+| SAT-7.6 | Dependencies: `npm audit` 0 and `pip-audit` clean on `requirements-lock.txt` | manual, per release |
 
 ## Not covered (must not be claimed)
 External penetration test · load / soak testing · multi-replica behaviour · public TSA anchoring · live Meta Llama ·

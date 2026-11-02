@@ -1,0 +1,14 @@
+# Accepted gitleaks findings - each one reviewed by hand (docs/DEPENDENCY_AUDIT.md "Secret scanning exceptions").
+# All are SYNTHETIC test fixtures required by the security tests or the unchanged 10-case benchmark
+# (sk-synth-9f3a21c, RAWSECRET123) or the weak-password DENYLIST in app/accounts.py. No real credential.
+# Fingerprints are exact (commit:file:rule:line): any new finding still fails CI and must be reviewed.
+0bdb8d0f637fc4c2c030d612dc43f6a631b1cbb1:backend/app/accounts.py:generic-api-key:43
+3f6c6dd5ba38f0cd7090874580dd02c846055d61:backend/tests/test_classifier.py:generic-api-key:359
+767c22b2cd9cc04dc9940e616c2e8c21924a839b:backend/app/gateway.py:generic-api-key:691
+b3320ff2dd645def35de379c669612757eea7867:backend/app/gateway.py:generic-api-key:482
+b3320ff2dd645def35de379c669612757eea7867:backend/tests/test_sentinel.py:generic-api-key:42
+b3320ff2dd645def35de379c669612757eea7867:backend/tests/test_sentinel.py:generic-api-key:75
+backend/app/accounts.py:generic-api-key:43
+backend/app/gateway.py:generic-api-key:886
+backend/tests/test_sentinel.py:generic-api-key:42
+backend/tests/test_sentinel.py:generic-api-key:75

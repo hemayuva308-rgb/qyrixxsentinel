@@ -1,5 +1,5 @@
-# Runtime dependencies (direct). The image installs the fully pinned, hash-verified requirements.lock generated from
-# this file:  uv pip compile requirements.txt --generate-hashes --python-version 3.12 -o requirements.lock
+# Runtime dependencies (direct). The image installs the fully pinned, hash-verified requirements-lock.txt generated from
+# this file:  uv pip compile requirements.txt --generate-hashes --python-version 3.12 -o requirements-lock.txt
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
 pydantic>=2.6,<3

@@ -33,7 +33,7 @@ test or a recorded drill in this repository exercises the failure; "Analysed" me
 
 | Dependency | Control | Status at this commit | Residual |
 |---|---|---|---|
-| Python packages (PyPI) | `requirements.lock`: 25 packages pinned with SHA-256 hashes, installed with `--require-hashes` | `pip-audit` (PyPI advisories): no known vulnerabilities | no SBOM; no continuous scan; osv.dev unreachable here |
+| Python packages (PyPI) | `requirements-lock.txt`: 25 packages pinned with SHA-256 hashes, installed with `--require-hashes` | `pip-audit` (PyPI advisories): no known vulnerabilities | no SBOM; no continuous scan; osv.dev unreachable here |
 | npm packages | `package-lock.json`, `npm ci`; `overrides` pins Next's nested PostCSS to 8.5.32 | `npm audit`: 0 vulnerabilities | transitive updates need re-audit; no SBOM |
 | Base images `python:3.12-slim`, `node:22-slim`, `postgres:16-alpine` | tags | not digest-pinned | **pin by digest** before production; Docker Hub rate limits observed during this run |
 | Docker Hub availability | image pulls | 429 rate limiting reproduced | use a registry mirror / pre-pulled images for production builds |
