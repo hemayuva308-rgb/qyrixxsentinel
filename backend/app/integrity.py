@@ -39,6 +39,25 @@ class WitnessError(Exception):
     pass
 
 
+# Every reason the detector can report. Reasons are SHOWN (status, unauthenticated /ready) so they come only from this
+# fixed set; unexpected exceptions are reported as CHECK_FAILED with the class name in the internal security log only.
+REASONS = frozenset({
+    "WITNESS_NOT_CONFIGURED", "WITNESS_KEY_NOT_CONFIGURED", "WITNESS_KEY_UNAVAILABLE", "WITNESS_UNREADABLE",
+    "WITNESS_FORGED_OR_WRONG_KEY", "WITNESS_UNKNOWN_FORMAT", "WITNESS_MISSING", "WITNESS_CHANGED_SINCE_START",
+    "WITNESS_CHANGED_AT_RUNTIME", "WITNESS_WRITE_FAILED", "EXPECTED_INSTALLATION_MISSING", "DATABASE_LOST_OR_REPLACED",
+    "INSTALLATION_MISMATCH", "INSTALLATION_MISMATCH_EXPECTED", "DATABASE_EVIDENCE_EMPTIED", "PROOF_CHAIN_REGRESSED",
+    "PROOF_CHAIN_DIVERGED", "DATABASE_EVIDENCE_REGRESSED", "CHECK_FAILED", "INSTALLATION_UNCHECKED"})
+
+
+def reason_of(e: BaseException) -> str:
+    """Map an exception to a public reason code from REASONS (never its text or class)."""
+    r = next((x for x in REASONS if isinstance(e, WitnessError) and x == str(e)), None)
+    if r is None:
+        obs.event("integrity_check_error", severity="critical", error_class=type(e).__name__)
+        return "CHECK_FAILED"
+    return r
+
+
 # ---------------- configuration ----------------
 def disabled() -> bool:
     return os.getenv("QYRIX_STATE_WITNESS", "").strip().lower() == "disabled"
@@ -151,12 +170,10 @@ def check_installation(ctx, db) -> Dict:
             if census["records"] == 0 and any(m.get("n", 0) > 0 for m in w.get("tenants", {}).values()):
                 raise WitnessError("DATABASE_EVIDENCE_EMPTIED")                # rows deleted from a known installation
             _install.update(status=OK, reason=None, install_id=db_id)
-        except WitnessError as e:
-            _install.update(status=RECOVERY, reason=str(e), install_id=None)
-            _fail(ctx, str(e), "installation")
-        except Exception as e:                                                 # DB error etc: cannot establish => block
-            _install.update(status=RECOVERY, reason="CHECK_FAILED:" + type(e).__name__, install_id=None)
-            _fail(ctx, _install["reason"], "installation")
+        except Exception as e:                                                 # incl. DB errors: cannot establish => block
+            reason = reason_of(e)
+            _install.update(status=RECOVERY, reason=reason, install_id=None)
+            _fail(ctx, reason, "installation")
         return dict(_install)
 
 
@@ -191,10 +208,8 @@ def check_tenant(ctx, db) -> None:
             ctx.state["integrity"] = {"status": OK, "reason": None, "pending_recovery_records": len(pending)}
             if pending:
                 ctx.state["integrity"]["pending"] = pending
-        except WitnessError as e:
-            _fail(ctx, str(e), "tenant")
         except Exception as e:
-            _fail(ctx, "CHECK_FAILED:" + type(e).__name__, "tenant")
+            _fail(ctx, reason_of(e), "tenant")
 
 
 def seal(ctx) -> None:
@@ -213,8 +228,7 @@ def seal(ctx) -> None:
             w["tenants"][tid] = {"n": n, "head": ctx.chain[-1]["hash"], "at": time.time()}
             write_witness(w)
         except Exception as e:
-            reason = str(e) if isinstance(e, WitnessError) else "WITNESS_WRITE_FAILED:" + type(e).__name__
-            _fail(ctx, reason, "tenant")
+            _fail(ctx, reason_of(e) if isinstance(e, WitnessError) else "WITNESS_WRITE_FAILED", "tenant")
 
 
 def acknowledge_pending(ctx, record_fn) -> None:

@@ -20,9 +20,9 @@ this repository exercises it; "Analysed" = reasoning only.
 * **gitleaks** (`.gitleaksignore`, 12 exact fingerprints): the synthetic credential `sk-synth-9f3a21c` (also in `evidence/benchmark-case-texts.json`) required by the
   unchanged benchmark case D1 and by tests, `RAWSECRET123` and a fake `sk-live-…` value asserted to be redacted in tests, and the weak-password **denylist** in
   `app/accounts.py`. No real secret. Any new finding fails CI.
-* **bandit** (20 LOW, 0 MEDIUM/HIGH; `evidence/sbom/bandit-report.json`): B110 try/except/pass — all are best-effort
+* **bandit** (31 LOW, 0 MEDIUM/HIGH after the PR #1 remediation; `evidence/sbom/bandit-report.json`, summary only — no code snippets): B110 try/except/pass — all are best-effort
   side effects after a fail-closed decision (compensations, last-used timestamps, cleanup, base64 probe); B603/B607/B404
-  — fixed-argv `openssl` / `pg_dump` calls; B105 — false positives (file paths, the benchmark fixture).
+  — fixed-argv `openssl` / `pg_dump` calls; B105 — false positives (secret file paths). PR #1 CodeQL / GitGuardian review: `evidence/pr1-security-remediation.md`.
 * **Grype policy in CI**: fail on *critical with an available fix*; unfixed findings are reported in the artifact,
   not ignored — review them on each release.
 

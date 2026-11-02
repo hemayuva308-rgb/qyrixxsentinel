@@ -82,9 +82,12 @@ def verify_token(head_hash: str, token_b64: str, queryfile: Optional[str] = None
         try:
             r = _openssl(*args)
         except Exception as e:
-            return False, "openssl failed: " + type(e).__name__
+            return False, "verification unavailable"
         ok = r.returncode == 0 and "Verification: OK" in (r.stdout + r.stderr)
-        return ok, "Verification: OK" if ok else (r.stdout + r.stderr).strip().splitlines()[-1][:160] if (r.stdout + r.stderr).strip() else "verification failed"
+        if not ok:                                     # openssl output can contain server paths: internal log only
+            from app import observability as obs
+            obs.event("anchor_verify_failed", severity="warning", openssl_rc=r.returncode)
+        return ok, "Verification: OK" if ok else "verification failed"
 
 
 def _token_info(tsr: str) -> Dict[str, Optional[str]]:
@@ -114,7 +117,7 @@ def create_anchor(head_hash: str, n: int) -> Dict:
             resp = httpx.post(c["url"], content=open(tsq, "rb").read(), timeout=c["timeout"],
                               headers={"Content-Type": "application/timestamp-query", "Accept": "application/timestamp-reply"})
         except Exception as e:
-            raise AnchorError("ANCHOR_UNAVAILABLE", "TSA unreachable: " + type(e).__name__)
+            raise AnchorError("ANCHOR_UNAVAILABLE", "TSA unreachable")
         if resp.status_code != 200 or not resp.content:
             raise AnchorError("ANCHOR_UNAVAILABLE", "TSA HTTP %s" % resp.status_code)
         open(tsr, "wb").write(resp.content)

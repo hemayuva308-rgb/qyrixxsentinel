@@ -55,7 +55,7 @@ def read_jailed(root: str, rel: str, limit: int = MAX_FILE_BYTES) -> bytes:
             chunks.append(b)
         return b"".join(chunks)
     except OSError as e:            # ELOOP (symlink), ENOENT, ENOTDIR ... never leak paths
-        raise AdapterError("file not readable: " + type(e).__name__) from None
+        raise AdapterError("file not readable") from None
     finally:
         for f in reversed(fds):
             os.close(f)

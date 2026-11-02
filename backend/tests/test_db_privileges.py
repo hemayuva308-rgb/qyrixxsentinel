@@ -164,7 +164,7 @@ def test_credential_lookup_functions_cannot_enumerate(db):
         for probe in ("", "%", "' OR '1'='1", "a" * 63, "0" * 64):
             assert c.execute("SELECT count(*) FROM qyrix_lookup_key(%s)", (probe,)).fetchone()[0] == 0, probe
             assert c.execute("SELECT count(*) FROM qyrix_lookup_session(%s)", (probe,)).fetchone()[0] == 0, probe
-        h = identity._sha(db["key"]["api_key"])
+        h = identity.token_digest(db["key"]["api_key"])
         rows = c.execute("SELECT tenant_id, role FROM qyrix_lookup_key(%s)", (h,)).fetchall()
         assert rows == [("acme", "owner")]
 

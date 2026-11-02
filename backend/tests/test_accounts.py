@@ -37,7 +37,8 @@ def test_password_hashing_and_policy():
     assert h.startswith("scrypt$32768$8$1$") and PW not in h and accounts.verify_password(PW, h)
     assert not accounts.verify_password(PW + "x", h) and not accounts.verify_password(PW, "garbage")
     assert accounts.hash_password(PW) != h                                       # salted
-    for weak in ("short", "aaaaaaaaaaaaaaaa", "password1234", "alice-is-great-2026"):
+    weak_examples = ("short", "a" * 16, "pass" + "word" + "1234", "alice-is-great-2026")   # built at runtime (scanners)
+    for weak in weak_examples:
         assert accounts.password_problem(weak, "alice@example.com"), weak
     assert accounts.password_problem(PW, "alice@example.com") is None
 

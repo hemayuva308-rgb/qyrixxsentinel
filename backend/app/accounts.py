@@ -155,13 +155,34 @@ def open_secret(blob: bytes, user_id: str) -> bytes:
 
 
 # ---------------- helpers ----------------
-def _sha(s: str) -> str:
-    return hashlib.sha256(s.encode()).hexdigest()
+_TOKEN_RE = re.compile(r"^q(si|pr|ch)_[A-Za-z0-9_-]{43}$")      # invitation / password-reset / login-challenge tokens
+
+
+def _token_digest(t: str) -> Optional[str]:
+    """Lookup digest of a server-minted 256-bit random token (qsi_/qpr_/qch_), or None if `t` is not one. SHA-256 is
+    appropriate for full-entropy random tokens; anything else is refused, never hashed (no password ever comes here)."""
+    if not isinstance(t, str) or not _TOKEN_RE.fullmatch(t):
+        return None
+    return hashlib.sha256(t.encode()).hexdigest()
+
+
+def _rc_digest(code: str) -> Optional[str]:
+    """Digest of a one-time recovery code: 16 base32 characters = 80 random bits minted by _new_recovery_codes (an
+    offline search of 2^80 is infeasible, so a fast hash is adequate; the value is not user-chosen)."""
+    n = _norm_rc(code)
+    if not re.fullmatch(r"[a-z2-7]{16}", n):
+        return None
+    return hashlib.sha256(n.encode()).hexdigest()
+
+
+def _bucket(*parts: str) -> str:
+    """Pseudonymous rate-limit bucket key (e-mail / tenant). Not a secret; the limiter hashes it again before storage."""
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
 def _tok(prefix: str) -> Tuple[str, str]:
     t = prefix + secrets.token_urlsafe(32)
-    return t, _sha(t)
+    return t, _token_digest(t)
 
 
 def email_tag(email: str) -> str:
@@ -195,7 +216,7 @@ def _user_of(p: Principal) -> str:
 
 # ---------------- throttling (shared limiter; DB-backed when PostgreSQL is configured) ----------------
 def _throttle_login(client: str, tenant: str, email: str) -> str:
-    acct = "login:acct:" + _sha(tenant + "|" + email)
+    acct = "login:acct:" + _bucket(tenant, email)
     if not identity.hit_ip("login", client, _int("QYRIX_LOGIN_PER_IP_PER_MIN", 30)) or \
        not identity.limiter.hit(acct, _int("QYRIX_LOGIN_MAX_FAILURES", 5), window=_int("QYRIX_LOGIN_LOCK_SECONDS", 900), count=False):
         obs.inc("qyrix_rate_limited_total", scope="login")
@@ -262,10 +283,11 @@ def login(tenant: str, email: str, password: str, client: str) -> Dict:
 
 def _take_challenge(cur, token: str, purpose: str) -> Tuple[str, str]:
     """Locks the challenge row; returns (user_id, tenant). Burns it after too many attempts."""
-    if not isinstance(token, str) or not token.startswith("qch_"):
+    h = _token_digest(token)
+    if h is None or not token.startswith("qch_"):
         raise AuthError(401, "invalid or expired challenge")
     cur.execute("SELECT user_id, tenant_id, attempts FROM login_challenges WHERE token_hash=%s AND purpose=%s AND used_at IS NULL"
-                " AND expires_at > now() FOR UPDATE", (_sha(token), purpose))
+                " AND expires_at > now() FOR UPDATE", (h, purpose))
     r = cur.fetchone()
     if not r or r[2] >= MAX_CHALLENGE_ATTEMPTS:
         raise AuthError(401, "invalid or expired challenge")
@@ -273,7 +295,7 @@ def _take_challenge(cur, token: str, purpose: str) -> Tuple[str, str]:
 
 
 def _bump(db, token: str):
-    db.run(lambda cur: cur.execute("UPDATE login_challenges SET attempts = attempts + 1 WHERE token_hash=%s", (_sha(token),)))
+    db.run(lambda cur: cur.execute("UPDATE login_challenges SET attempts = attempts + 1 WHERE token_hash=%s", (_token_digest(token),)))
 
 
 def _role(cur, tenant: str, uid: str) -> Optional[str]:
@@ -285,7 +307,7 @@ def _role(cur, tenant: str, uid: str) -> Optional[str]:
 def login_mfa(challenge: str, code: Optional[str], recovery_code: Optional[str], client: str) -> Dict:
     db = _db()
     if not identity.hit_ip("mfa", client, _int("QYRIX_MFA_PER_IP_PER_MIN", 30)) or \
-       not identity.limiter.hit("mfa:challenge:" + _sha(challenge or ""), MAX_CHALLENGE_ATTEMPTS + 1, window=CHALLENGE_TTL):
+       not identity.limiter.hit("mfa:challenge:" + _bucket("challenge", challenge or ""), MAX_CHALLENGE_ATTEMPTS + 1, window=CHALLENGE_TTL):
         raise AuthError(429, "too many attempts; try again later")
 
     def go(cur):
@@ -305,14 +327,14 @@ def login_mfa(challenge: str, code: Optional[str], recovery_code: Optional[str],
                 return None, uid, tenant, "totp_replay"
         elif recovery_code:
             cur.execute("UPDATE recovery_codes SET used_at=now() WHERE user_id=%s AND code_hash=%s AND used_at IS NULL RETURNING 1",
-                        (uid, _sha(_norm_rc(recovery_code))))
+                        (uid, _rc_digest(recovery_code)))
             method = "recovery_code" if cur.fetchone() else None
         if not method:
             return None, uid, tenant, "bad_code"
         role = _role(cur, tenant, uid)
         if not role:
             return None, uid, tenant, "not_a_member"
-        cur.execute("UPDATE login_challenges SET used_at=now() WHERE token_hash=%s", (_sha(challenge),))
+        cur.execute("UPDATE login_challenges SET used_at=now() WHERE token_hash=%s", (_token_digest(challenge),))
         return (role, method), uid, tenant, None
     try:
         ok, uid, tenant, why = db.run(go, tenant="")
@@ -354,7 +376,7 @@ def _new_recovery_codes(cur, uid: str):
     for _ in range(RECOVERY_CODES):
         c = base64.b32encode(secrets.token_bytes(10)).decode().lower()          # 80 bits
         c = "-".join(c[i:i + 4] for i in range(0, 16, 4))
-        cur.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (%s,%s)", (uid, _sha(_norm_rc(c))))
+        cur.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (%s,%s)", (uid, _rc_digest(c)))
         codes.append(c)
     return codes
 
@@ -378,7 +400,7 @@ def enroll_confirm(challenge: str, code: str) -> Dict:
         cur.execute("UPDATE users SET totp_secret_enc=totp_pending_enc, totp_pending_enc=NULL, mfa_enabled_at=now(), last_totp_step=%s"
                     " WHERE id=%s", (step, uid))
         codes = _new_recovery_codes(cur, uid)
-        cur.execute("UPDATE login_challenges SET used_at=now() WHERE token_hash=%s", (_sha(challenge),))
+        cur.execute("UPDATE login_challenges SET used_at=now() WHERE token_hash=%s", (_token_digest(challenge),))
         cur.execute("SELECT set_config('qyrix.tenant_id', %s, true)", (tenant,))
         return (_role(cur, tenant, uid), codes), uid, tenant
     ok, uid, tenant = db.run(go)
@@ -452,7 +474,7 @@ def forgot_password(email: str, client: str) -> Dict:
     except AuthError:
         return generic
     if not identity.hit_ip("reset", client, _int("QYRIX_RESET_PER_IP_PER_HOUR", 10), window=3600) or \
-       not identity.limiter.hit("reset:acct:" + _sha(email), 3, window=3600):
+       not identity.limiter.hit("reset:acct:" + _bucket(email), 3, window=3600):
         return generic
     db = _db()
     u = db.run(lambda cur: (cur.execute("SELECT id FROM users WHERE email=%s AND disabled_at IS NULL", (email,)), cur.fetchone())[1])
@@ -465,19 +487,20 @@ def forgot_password(email: str, client: str) -> Dict:
 
 def reset_password(token: str, new: str) -> Dict:
     db = _db()
-    if not isinstance(token, str) or not token.startswith("qpr_"):
+    th = _token_digest(token)
+    if th is None or not token.startswith("qpr_"):
         raise AuthError(401, "invalid or expired reset token")
 
     def go(cur):
         cur.execute("SELECT r.user_id, u.email FROM password_resets r JOIN users u ON u.id = r.user_id WHERE r.token_hash=%s"
-                    " AND r.used_at IS NULL AND r.expires_at > now() FOR UPDATE OF r", (_sha(token),))
+                    " AND r.used_at IS NULL AND r.expires_at > now() FOR UPDATE OF r", (th,))
         r = cur.fetchone()
         if not r:
             return None
         prob = password_problem(new, r[1])
         if prob:
             return ("weak", prob)
-        cur.execute("UPDATE password_resets SET used_at=now() WHERE token_hash=%s", (_sha(token),))
+        cur.execute("UPDATE password_resets SET used_at=now() WHERE token_hash=%s", (th,))
         cur.execute("UPDATE users SET password_hash=%s, password_changed_at=now() WHERE id=%s", (hash_password(new), r[0]))
         return ("ok", r[0])
     r = db.run(go)
@@ -532,10 +555,11 @@ def accept_invitation(token: str, name: str, password: str, client: str) -> Dict
     if not identity.hit_ip("invite", client, _int("QYRIX_INVITE_PER_IP_PER_MIN", 10)) or \
        not identity.limiter.hit("invite:global", _int("QYRIX_INVITE_GLOBAL_PER_MIN", 120)):
         raise AuthError(429, "too many attempts; try again later")
-    if not isinstance(token, str) or not token.startswith("qsi_"):
+    ih = _token_digest(token)
+    if ih is None or not token.startswith("qsi_"):
         raise AuthError(401, "invalid or expired invitation")
     inv = db.run(lambda cur: (cur.execute("SELECT id, tenant_id, email, role, expires_at, accepted, revoked, tenant_disabled"
-                                          " FROM qyrix_lookup_invitation(%s)", (_sha(token),)), cur.fetchone())[1])
+                                          " FROM qyrix_lookup_invitation(%s)", (ih,)), cur.fetchone())[1])
     if not inv or inv[5] or inv[6] or inv[7] or inv[4] < _now():
         obs.event("invitation_accept_failed", severity="warning", reason="invalid", client=client[:64])
         raise AuthError(401, "invalid or expired invitation")

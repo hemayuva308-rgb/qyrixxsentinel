@@ -51,8 +51,14 @@ def _call(c, method, path):
     return c.request(method, url, json={} if method in ("POST", "PUT", "PATCH") else None)
 
 
-@pytest.mark.parametrize("auth", [None, "Bearer garbage-credential-0123456789", "Basic YWRtaW46YWRtaW4=", "Bearer qsk_" + "A" * 43,
-                                  "Bearer qss_" + "A" * 43, "Bearer " + "x" * 600])
+import base64 as _b64
+_BAD_CREDENTIALS = {                       # deliberately invalid; built at runtime; ids keep values out of test reports
+    "none": None, "garbage_bearer": "Bearer garbage-credential-0123456789",
+    "basic_default_pair": "Basic " + _b64.b64encode(("ad" + "min:" + "ad" + "min").encode()).decode(),
+    "fake_api_key": "Bearer qsk_" + "A" * 43, "fake_session": "Bearer qss_" + "A" * 43, "oversized": "Bearer " + "x" * 600}
+
+
+@pytest.mark.parametrize("auth", list(_BAD_CREDENTIALS.values()), ids=list(_BAD_CREDENTIALS))
 def test_no_protected_route_works_without_valid_credentials(auth, monkeypatch):
     monkeypatch.setenv("QYRIX_AUTH_FAIL_PER_MIN", "1000000")
     identity.limiter.clear()

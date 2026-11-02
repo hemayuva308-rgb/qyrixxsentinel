@@ -170,6 +170,18 @@ def heuristic_classify(text: str) -> Dict:
             else "No unapproved destination or exfil pattern."}
 
 
+def _public_llm_error(e: Exception) -> str:
+    """Fixed vocabulary for advisory-provider failures shown in /inspect (no exception text or class names)."""
+    if isinstance(e, httpx.TimeoutException):
+        return "Timeout"
+    if isinstance(e, httpx.TransportError):
+        return "provider unreachable"
+    if isinstance(e, (ValueError, KeyError, IndexError, TypeError)):
+        return "invalid model output (schema)"
+    obs.event("llm_provider_error", severity="warning", error_class=type(e).__name__)
+    return "provider error"
+
+
 def classify(text: str) -> Dict:
     """LLM classifies + explains only. It can never allow an action; the gate stays deterministic and never calls this.
     Only REDACTED, bounded text is sent. Invalid/off-schema model output is discarded and the next provider is tried."""
@@ -185,14 +197,17 @@ def classify(text: str) -> Dict:
         try:
             r = httpx.post(base + "/chat/completions", headers={"Authorization": "Bearer " + key},
                            timeout=float(os.getenv("QYRIX_LLM_TIMEOUT_SECONDS", "30")), json=llm_payload(model, safe))
-            if getattr(r, "status_code", 200) != 200:
-                raise RuntimeError("HTTP %s" % r.status_code)
+            status = int(getattr(r, "status_code", 200))
+            if status != 200:
+                attempts.append({"provider": name, "ok": False, "ms": round((time.perf_counter() - t0) * 1000, 1),
+                                 "error": "HTTP %d" % status})
+                continue
             res = parse_classification(r.json()["choices"][0]["message"]["content"])
             ms = round((time.perf_counter() - t0) * 1000, 1)
             attempts.append({"provider": name, "ok": True, "ms": ms, "error": None})
             return {**res, "source": "%s:%s" % (name, model), "provider": name, "model": model, "latency_ms": ms, "attempts": attempts}
         except Exception as e:
-            attempts.append({"provider": name, "ok": False, "ms": round((time.perf_counter() - t0) * 1000, 1), "error": str(e)[:60] if isinstance(e, (RuntimeError, ValueError)) else type(e).__name__})
+            attempts.append({"provider": name, "ok": False, "ms": round((time.perf_counter() - t0) * 1000, 1), "error": _public_llm_error(e)})
     t0 = time.perf_counter()
     h = heuristic_classify(text)
     return {**h, "source": "heuristic-fallback (" + "; ".join("%s: %s" % (x["provider"], x["error"]) for x in attempts) + ")",
@@ -333,6 +348,21 @@ def _load() -> None:
             attach_persistence(PROD, persistence.PgPersistence(dsn))
         except Exception:
             _db_down(PROD, "STARTUP_ATTACH_FAILED")
+
+
+# Messages an execution failure may show to the caller. Exceptions never reach a response directly: their text is only
+# compared against this fixed vocabulary, and anything else (including the exception class name) becomes a generic code.
+_EXEC_ERRORS = {m: m for m in (
+    "path not allowed", "not a regular file", "file exceeds 1 MB limit", "file not readable", "destination no longer allowed",
+    "platform lacks O_NOFOLLOW/O_DIRECTORY; file jail refuses to run", "dns failure", "no dns answers",
+    "prohibited address in dns answer")}
+
+
+def _public_exec_error(e: Exception) -> str:
+    known = _EXEC_ERRORS.get(str(e)) if isinstance(e, (adapters.AdapterError, netguard.NetguardError)) else None
+    if known is None:
+        obs.event("execution_failed", severity="warning", error_class=type(e).__name__)   # operators: internal log only
+    return known or "execution failed"
 
 
 def _degrade(ctx: "GateContext", reason: str) -> None:
@@ -661,7 +691,7 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
     try:
         result, ok = run(params), True
     except Exception as e:
-        result, ok = {"error": str(e)[:80] if isinstance(e, (adapters.AdapterError, netguard.NetguardError)) else type(e).__name__}, False
+        result, ok = {"error": _public_exec_error(e)}, False
     with ctx.lock:
         if ok and isinstance(result, dict) and result.get("redirect"):
             ev["redirect_location"] = result["redirect"]["location"]

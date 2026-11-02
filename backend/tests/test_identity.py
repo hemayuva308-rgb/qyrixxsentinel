@@ -133,7 +133,8 @@ def test_expired_key_is_rejected():
     assert as_(k["api_key"]).get(P + "/status").status_code == 401
 
 
-@pytest.mark.parametrize("bad", ["", "Bearer", "Bearer qsk_nope", "Bearer qss_nope", "Bearer " + "x" * 600, "Basic abc"])
+@pytest.mark.parametrize("bad", ["", "Bearer", "Bearer qsk_nope", "Bearer qss_nope", "Bearer " + "x" * 600, "Basic abc"],
+                         ids=["empty", "bearer_only", "unknown_key", "unknown_session", "oversized", "basic_scheme"])
 def test_malformed_credentials_rejected(bad):
     assert TestClient(app, headers={"Authorization": bad} if bad else {}).get(P + "/status").status_code == 401
 

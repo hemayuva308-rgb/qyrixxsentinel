@@ -79,8 +79,36 @@ class AuthError(Exception):
         self.status, self.detail = status, detail
 
 
-def _sha(s: str) -> str:
-    return hashlib.sha256(s.encode()).hexdigest()
+# Opaque credentials minted by this server: "qsk_" (API key) / "qss_" (session) + secrets.token_urlsafe(32) = 256 bits.
+_TOKEN_RE = re.compile(r"^q(sk|ss)_[A-Za-z0-9_-]{43}$")
+
+
+def token_digest(token: str) -> Optional[str]:
+    """Lookup digest for a SERVER-GENERATED 256-bit random token (API key or session id), or None if `token` is not one.
+
+    SHA-256 is deliberate and sufficient here: the input has 256 bits of entropy, so a fast hash cannot be brute-forced,
+    and a slow KDF would add CPU cost (DoS surface) to every authenticated request. It is NOT a password hash: anything
+    that does not have the exact minted format is refused instead of hashed, so a human password or an operator token
+    can never be stored or compared through this function. Output is byte-identical to v1.3/v1.4 (no migration)."""
+    if not isinstance(token, str) or not _TOKEN_RE.fullmatch(token):
+        return None
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+_FP_CACHE: Dict[str, str] = {}
+
+
+def _secret_fingerprint(name: str, value: str) -> str:
+    """Rotation fingerprint of an OPERATOR-CHOSEN secret (env token), stored in sessions.cred_fp. Such secrets may be
+    low-entropy, so a fast hash stored in the database would allow offline guessing: use scrypt (memory-hard) and keep
+    only 64 bits. Computed once per process per value (the env value does not change while the process runs)."""
+    key = name + "\0" + value
+    if key not in _FP_CACHE:
+        dk = hashlib.scrypt(value.encode(), salt=("qyrix-env-fp:" + name).encode(), n=2 ** 15, r=8, p=1,
+                            maxmem=64 * 1024 * 1024, dklen=16)
+        _FP_CACHE.clear()                            # at most one live value per name: never accumulate old secrets
+        _FP_CACHE[key] = dk.hex()[:16]
+    return _FP_CACHE[key]
 
 
 def _env(name: str) -> str:
@@ -102,7 +130,7 @@ def _env_match(tok: str) -> Optional[Principal]:
 def _env_fingerprint(cred_id: str) -> Optional[str]:
     name = {"env:admin": "QYRIX_ADMIN_TOKEN", "env:agent": "QYRIX_AGENT_TOKEN"}.get(cred_id)
     v = _env(name) if name else ""
-    return _sha("fp:" + v)[:16] if v else None
+    return _secret_fingerprint(name, v) if v else None
 
 
 def session_ttl() -> int:
@@ -470,16 +498,21 @@ def authenticate(token: str, allow_session: bool = True) -> Principal:
     if p:
         return p
     if token.startswith("qsk_"):
-        r = _store.key_by_hash(_sha(token))
+        h = token_digest(token)
+        if h is None:
+            raise AuthError(401, "invalid credentials")
+        r = _store.key_by_hash(h)
         if not r or r.get("revoked_at") or r.get("tenant_disabled") or (r.get("expires_at") and time.time() > r["expires_at"]):
             raise AuthError(401, "invalid credentials")
         try:
-            _store.touch_key(_sha(token))
+            _store.touch_key(h)
         except Exception:
             pass
         return Principal(r["tenant_id"], r["role"], "key:" + r["id"])
     if token.startswith("qss_") and allow_session:
-        h = _sha(token)
+        h = token_digest(token)
+        if h is None:
+            raise AuthError(401, "session expired")
         r = _store.session_by_hash(h)
         now = time.time()
         if (not r or r.get("revoked_at") or r.get("tenant_disabled") or now > r["expires_at"]
@@ -499,7 +532,7 @@ def create_session(credential: str) -> Dict:
         raise AuthError(403, "platform credentials cannot open a product session")
     token = "qss_" + secrets.token_urlsafe(32)
     exp = time.time() + session_ttl()
-    _store.insert_session({"id_hash": _sha(token), "tenant": p.tenant, "role": p.role, "cred_id": p.cred_id,
+    _store.insert_session({"id_hash": token_digest(token), "tenant": p.tenant, "role": p.role, "cred_id": p.cred_id,
                            "cred_fp": _env_fingerprint(p.cred_id), "expires_at": exp, "last_seen": time.time(), "revoked_at": None})
     obs.inc("qyrix_sessions_total", action="created")
     obs.event("session_created", tenant=p.tenant, role=p.role, cred=p.cred_id)
@@ -510,7 +543,7 @@ def create_user_session(user_id: str, tenant: str, role: str) -> Dict:
     """Human session (after password + MFA). Same opaque qss_ format and lifetime rules as key sessions, bound to a user."""
     token = "qss_" + secrets.token_urlsafe(32)
     exp = time.time() + session_ttl()
-    _store.insert_session({"id_hash": _sha(token), "tenant": tenant, "role": role, "cred_id": "user:" + user_id, "cred_fp": None,
+    _store.insert_session({"id_hash": token_digest(token), "tenant": tenant, "role": role, "cred_id": "user:" + user_id, "cred_fp": None,
                            "expires_at": exp, "last_seen": time.time(), "revoked_at": None, "user_id": user_id})
     obs.inc("qyrix_sessions_total", action="created")
     obs.event("session_created", tenant=tenant, role=role, cred="user:" + user_id)
@@ -518,8 +551,9 @@ def create_user_session(user_id: str, tenant: str, role: str) -> Dict:
 
 
 def end_session(token: str) -> None:
-    if token.startswith("qss_"):
-        _store.revoke_session(_sha(token))
+    h = token_digest(token)
+    if h is not None and token.startswith("qss_"):
+        _store.revoke_session(h)
         obs.inc("qyrix_sessions_total", action="revoked")
 
 
@@ -538,7 +572,7 @@ def create_key(actor: Principal, tenant: str, role: str, name: str, ttl_days: Op
         raise AuthError(422, "ttl_days out of range")
     token = "qsk_" + secrets.token_urlsafe(32)
     kid = "key_" + secrets.token_hex(6)
-    rec = {"id": kid, "tenant_id": tenant, "role": role, "name": name[:80], "key_hash": _sha(token), "created_by": actor.label(),
+    rec = {"id": kid, "tenant_id": tenant, "role": role, "name": name[:80], "key_hash": token_digest(token), "created_by": actor.label(),
            "created_at": datetime.now(timezone.utc).isoformat(), "expires_at": time.time() + ttl_days * 86400 if ttl_days else None,
            "revoked_at": None, "last_used_at": None}
     _store.insert_key(rec)

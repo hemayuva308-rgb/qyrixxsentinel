@@ -44,7 +44,7 @@ def status() -> dict:
         out["witness"] = None if w is None else {"install_id": w["install_id"], "tenants": w.get("tenants", {}),
                                                  "recoveries": len(w.get("recoveries", [])), "pending_records": len(w.get("pending_records", []))}
     except integrity.WitnessError as e:
-        out["witness_error"] = str(e)
+        out["witness_error"] = integrity.reason_of(e)
     dsn = persistence.dsn_from_env()
     if dsn:
         out["database_install_id"] = persistence.PgPersistence(dsn).install_id()
