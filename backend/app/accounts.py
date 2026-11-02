@@ -196,7 +196,7 @@ def _user_of(p: Principal) -> str:
 # ---------------- throttling (shared limiter; DB-backed when PostgreSQL is configured) ----------------
 def _throttle_login(client: str, tenant: str, email: str) -> str:
     acct = "login:acct:" + _sha(tenant + "|" + email)
-    if not identity.limiter.hit("login:ip:" + client, _int("QYRIX_LOGIN_PER_IP_PER_MIN", 30)) or \
+    if not identity.hit_ip("login", client, _int("QYRIX_LOGIN_PER_IP_PER_MIN", 30)) or \
        not identity.limiter.hit(acct, _int("QYRIX_LOGIN_MAX_FAILURES", 5), window=_int("QYRIX_LOGIN_LOCK_SECONDS", 900), count=False):
         obs.inc("qyrix_rate_limited_total", scope="login")
         obs.event("login_throttled", severity="warning", tenant=tenant, email=email_tag(email), client=client[:64])
@@ -284,7 +284,8 @@ def _role(cur, tenant: str, uid: str) -> Optional[str]:
 
 def login_mfa(challenge: str, code: Optional[str], recovery_code: Optional[str], client: str) -> Dict:
     db = _db()
-    if not identity.limiter.hit("mfa:ip:" + client, _int("QYRIX_MFA_PER_IP_PER_MIN", 30)):
+    if not identity.hit_ip("mfa", client, _int("QYRIX_MFA_PER_IP_PER_MIN", 30)) or \
+       not identity.limiter.hit("mfa:challenge:" + _sha(challenge or ""), MAX_CHALLENGE_ATTEMPTS + 1, window=CHALLENGE_TTL):
         raise AuthError(429, "too many attempts; try again later")
 
     def go(cur):
@@ -450,7 +451,7 @@ def forgot_password(email: str, client: str) -> Dict:
         email = norm_email(email)
     except AuthError:
         return generic
-    if not identity.limiter.hit("reset:ip:" + client, _int("QYRIX_RESET_PER_IP_PER_HOUR", 10), window=3600) or \
+    if not identity.hit_ip("reset", client, _int("QYRIX_RESET_PER_IP_PER_HOUR", 10), window=3600) or \
        not identity.limiter.hit("reset:acct:" + _sha(email), 3, window=3600):
         return generic
     db = _db()
@@ -528,7 +529,8 @@ def invite(p: Optional[Principal], tenant: str, email: str, role: str) -> Dict:
 
 def accept_invitation(token: str, name: str, password: str, client: str) -> Dict:
     db = _db()
-    if not identity.limiter.hit("invite:ip:" + client, _int("QYRIX_INVITE_PER_IP_PER_MIN", 10)):
+    if not identity.hit_ip("invite", client, _int("QYRIX_INVITE_PER_IP_PER_MIN", 10)) or \
+       not identity.limiter.hit("invite:global", _int("QYRIX_INVITE_GLOBAL_PER_MIN", 120)):
         raise AuthError(429, "too many attempts; try again later")
     if not isinstance(token, str) or not token.startswith("qsi_"):
         raise AuthError(401, "invalid or expired invitation")

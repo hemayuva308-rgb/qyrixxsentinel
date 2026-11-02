@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { BACKEND, clientId, sameOrigin } from "@/lib/backend";
+import { BACKEND, clientHeader, sameOrigin } from "@/lib/backend";
 
 // Human-account relay (v1.4). Each step forwards ONLY its allow-listed fields to the backend. The short-lived MFA /
 // enrolment challenge is kept in an httpOnly cookie scoped to this route, never exposed to page JavaScript; the final
@@ -32,10 +32,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ step: stri
     if (!c) return NextResponse.json({ detail: "sign-in expired, start again" }, { status: 401 });
     body.challenge = c;
   }
-  const client = clientId(req);
   const r = await fetch(`${BACKEND}${spec.path}`, {
     method: "POST", cache: "no-store", signal: AbortSignal.timeout(20000),
-    headers: { "content-type": "application/json", ...(client ? { "x-qyrix-client": client } : {}) },
+    headers: { "content-type": "application/json", ...clientHeader(req) },
     body: JSON.stringify(body),
   }).catch(() => null);
   if (!r) return NextResponse.json({ detail: "backend unreachable" }, { status: 502 });

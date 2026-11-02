@@ -36,7 +36,7 @@ services:
     depends_on:
       db: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
-    secrets: [db_runtime_password, state_witness_key, data_key]   # NEVER the admin secret
+    secrets: [db_runtime_password, state_witness_key, data_key, client_sig_key]   # NEVER the admin secret
     environment:
       QYRIX_DB_HOST: db
       QYRIX_DB_NAME: qyrix
@@ -63,7 +63,7 @@ services:
       QYRIX_AUTH_FAIL_PER_MIN: ${QYRIX_AUTH_FAIL_PER_MIN:-20}
       QYRIX_AUTH_FAIL_GLOBAL_PER_MIN: ${QYRIX_AUTH_FAIL_GLOBAL_PER_MIN:-300}
       QYRIX_TENANT_WORKSPACE_ROOT: /workspaces               # writable; one subdirectory per tenant
-      QYRIX_TRUST_CLIENT_HEADER: "1"                         # the API is reachable only from our frontend (internal network)
+      QYRIX_CLIENT_SIG_KEY_FILE: /run/secrets/client_sig_key  # verifies the frontend-signed visitor identity (no blind trust)
       QYRIX_APPROVED_DOMAINS: ${QYRIX_APPROVED_DOMAINS:-}
       QYRIX_ENABLE_DEMO_RESET: ${QYRIX_ENABLE_DEMO_RESET:-0}
       QYRIX_APPROVAL_TTL_SECONDS: ${QYRIX_APPROVAL_TTL_SECONDS:-900}
@@ -94,8 +94,13 @@ services:
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
     environment:
       BACKEND_URL: http://backend:8000
+      QYRIX_CLIENT_SIG_KEY_FILE: /run/secrets/client_sig_key
+      # number of reverse proxies in front of this container that OVERWRITE/append X-Forwarded-For. 0 = none: the
+      # visitor IP is unknowable and per-IP limits are skipped (per-account + global limits still apply)
+      QYRIX_TRUSTED_PROXY_HOPS: ${QYRIX_TRUSTED_PROXY_HOPS:-0}
       HOSTNAME: 0.0.0.0                  # Next standalone binds to $$HOSTNAME; 0.0.0.0 lets the healthcheck use loopback
       QYRIX_COOKIE_SECURE: ${QYRIX_COOKIE_SECURE:-0}
+    secrets: [client_sig_key]
     ports: ["127.0.0.1:3000:3000"]
     depends_on: { backend: { condition: service_healthy } }
     healthcheck:
@@ -117,6 +122,8 @@ secrets:                                 # generated locally, git-ignored - see 
     file: ./secrets/state_witness_key
   data_key:
     file: ./secrets/data_key
+  client_sig_key:
+    file: ./secrets/client_sig_key
 networks:
   internal: { internal: true }          # no egress
   edge: {}

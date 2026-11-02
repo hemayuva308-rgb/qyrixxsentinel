@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { BACKEND, clientId, sameOrigin } from "@/lib/backend";
+import { BACKEND, clientHeader, sameOrigin } from "@/lib/backend";
 
 const COOKIE = "qs_session";
 
@@ -10,10 +10,9 @@ export async function POST(req: NextRequest) {
   if (!sameOrigin(req)) return NextResponse.json({ detail: "bad origin" }, { status: 403 });
   const { token } = (await req.json().catch(() => ({}))) as { token?: string };
   if (typeof token !== "string" || !token || token.length > 512) return NextResponse.json({ detail: "token required" }, { status: 400 });
-  const client = clientId(req);
   const r = await fetch(`${BACKEND}/api/v1/auth/session`, {
     method: "POST", cache: "no-store", signal: AbortSignal.timeout(15000),
-    headers: { "content-type": "application/json", ...(client ? { "x-qyrix-client": client } : {}) },
+    headers: { "content-type": "application/json", ...clientHeader(req) },
     body: JSON.stringify({ credential: token }),
   }).catch(() => null);
   if (!r) return NextResponse.json({ detail: "backend unreachable" }, { status: 502 });

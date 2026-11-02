@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { BACKEND, clientId } from "@/lib/backend";
+import { BACKEND, clientHeader } from "@/lib/backend";
 
 // Same-origin proxy: the browser holds only an httpOnly server-side session cookie, never the API credential, and the API needs no CORS.
 async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
@@ -15,7 +15,7 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] 
   if (!token) return NextResponse.json({ detail: "not authenticated" }, { status: 401 });
   const r = await fetch(`${BACKEND}/api/v1/${rel}${req.nextUrl.search}`, {
     method: req.method,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(clientId(req) ? { "x-qyrix-client": clientId(req) } : {}) },
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...clientHeader(req) },
     body: req.method === "GET" ? undefined : await req.text(),
     cache: "no-store", signal: AbortSignal.timeout(30000),
   }).catch(() => null);

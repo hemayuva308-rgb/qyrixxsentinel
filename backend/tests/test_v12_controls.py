@@ -19,7 +19,7 @@ EX = "/api/v1/tools/execute"
 @pytest.fixture(autouse=True)
 def clean():
     c.post(P + "/reset")
-    demo._rl.clear(); demo._rl_global.clear()
+    from app import identity; identity.limiter.clear()
     yield
     c.post(P + "/reset")
 
@@ -316,11 +316,18 @@ def test_demo_never_uses_real_adapters_or_llm(monkeypatch):
     assert anon.post("/api/v1/demo/run", json={"scenario": "safe"}).status_code == 200
 
 
-def test_demo_rate_limited(monkeypatch):
+def test_demo_rate_limited(monkeypatch, tmp_path):
+    from app.auth import sign_client
+    k = b"client-signing-key-for-tests-0123456789"
+    f = tmp_path / "k"; f.write_bytes(k); monkeypatch.setenv("QYRIX_CLIENT_SIG_KEY_FILE", str(f))
     monkeypatch.setenv("QYRIX_DEMO_RATE_PER_MIN", "3")
-    codes = [anon.post("/api/v1/demo/run", json={"scenario": "safe"}, headers={"x-qyrix-demo-client": "1.2.3.4"}).status_code for _ in range(5)]
-    assert codes == [200, 200, 200, 429, 429]
-    assert anon.post("/api/v1/demo/run", json={"scenario": "safe"}, headers={"x-qyrix-demo-client": "5.6.7.8"}).status_code == 200
+    run = lambda ip: anon.post("/api/v1/demo/run", json={"scenario": "safe"}, headers={"x-qyrix-client": sign_client(ip, k)}).status_code
+    assert [run("1.2.3.4") for _ in range(5)] == [200, 200, 200, 429, 429]
+    assert run("5.6.7.8") == 200
+    # the v1.3 header was trusted blindly; it is now ignored (spoofing it cannot mint fresh buckets)
+    old = [anon.post("/api/v1/demo/run", json={"scenario": "safe"}, headers={"x-qyrix-demo-client": "9.9.9.%d" % i}).status_code
+           for i in range(5)]
+    assert old.count(429) >= 1
 
 
 def test_demo_can_be_disabled(monkeypatch):

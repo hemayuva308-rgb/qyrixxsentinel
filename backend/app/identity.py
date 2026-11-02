@@ -302,8 +302,10 @@ def store():
 
 
 def use_store(s) -> None:
+    """Also selects the limiter backend: a durable (PostgreSQL) identity store => shared counters across instances."""
     global _store
     _store = s
+    limiter.impl = SharedLimiter(s.db) if getattr(s, "durable", False) and hasattr(s, "db") else Limiter()
 
 
 def multi_tenant_enabled() -> bool:
@@ -312,6 +314,8 @@ def multi_tenant_enabled() -> bool:
 
 # ---------------- rate limiting (sliding window, in-process) ----------------
 class Limiter:
+    """In-process sliding window. Used directly in memory mode (single instance) and as the documented degraded
+    fallback for NON-security scopes when the shared store is unavailable."""
     def __init__(self):
         self.lock = threading.Lock()
         self.win: Dict[str, Deque[float]] = defaultdict(deque)
@@ -337,7 +341,98 @@ class Limiter:
             self.win.clear()
 
 
-limiter = Limiter()
+# Scopes whose limits protect authentication: if the shared store is unavailable they FAIL CLOSED (503) rather than
+# silently degrading to per-instance counters an attacker could spread across replicas.
+SECURITY_SCOPES = ("authfail", "login", "mfa", "reset", "invite")
+
+
+class SharedLimiter:
+    """Rate limits shared by every application instance, stored in PostgreSQL (migration 006).
+
+    Approximate sliding window from two aligned fixed windows: estimate = previous * (1 - elapsed/window) + current.
+    Each decision is ONE transaction that row-locks the current bucket (upsert), so concurrent requests on any number of
+    instances are serialised per bucket: no lost updates, no over-admission. Counters survive application restarts."""
+
+    def __init__(self, pool):
+        self.pool = pool
+        self.local = Limiter()
+        self._n = 0
+
+    @staticmethod
+    def _bucket(key: str) -> str:
+        return hashlib.sha256(("qyrix-rl:" + key).encode()).hexdigest()
+
+    def hit(self, key: str, limit: int, window: float = 60.0, count: bool = True) -> bool:
+        w = max(1, int(window))
+        now = time.time()
+        cur_start = int(now // w) * w
+        frac = (now - cur_start) / w
+        b = self._bucket(key)
+
+        def go(c):
+            c.execute("INSERT INTO rate_limits (bucket, window_start, count, expires_at) VALUES (%s,%s,0, now() + make_interval(secs => %s))"
+                      " ON CONFLICT (bucket, window_start) DO UPDATE SET count = rate_limits.count RETURNING count",
+                      (b, cur_start, 2 * w + 5))
+            cur = c.fetchone()[0]                                     # row is now locked until COMMIT
+            c.execute("SELECT count FROM rate_limits WHERE bucket=%s AND window_start=%s", (b, cur_start - w))
+            r = c.fetchone()
+            prev = r[0] if r else 0
+            est = prev * (1 - frac) + cur
+            allowed = est + (1 if count else 0) <= limit if count else est < limit
+            if allowed and count:
+                c.execute("UPDATE rate_limits SET count = count + 1 WHERE bucket=%s AND window_start=%s", (b, cur_start))
+            return allowed
+        try:
+            allowed = self.pool.run(go)
+            self._n += 1
+            if self._n % 500 == 0:
+                self.pool.run(lambda c: c.execute("DELETE FROM rate_limits WHERE expires_at < now()"))
+        except Exception:
+            scope = key.split(":", 1)[0]
+            obs.inc("qyrix_rate_limit_backend_errors_total", scope=scope)
+            obs.event("rate_limit_backend_unavailable", severity="critical", scope=scope)
+            if scope in SECURITY_SCOPES:
+                raise AuthError(503, "rate limiter unavailable")      # fail closed for authentication paths
+            allowed = self.local.hit(key, limit, window, count)       # degraded, per-instance (documented)
+        if not allowed:
+            obs.inc("qyrix_rate_limit_denials_total", scope=key.split(":", 1)[0])
+        return allowed
+
+    def clear(self):
+        self.local.clear()
+        try:
+            self.pool.run(lambda c: c.execute("DELETE FROM rate_limits"))
+        except Exception:
+            pass
+
+
+class _LimiterProxy:
+    """Module-level `limiter`: shared (PostgreSQL) when an identity database is configured, in-process otherwise."""
+    def __init__(self):
+        self.impl = Limiter()
+
+    def hit(self, key: str, limit: int, window: float = 60.0, count: bool = True) -> bool:
+        return self.impl.hit(key, limit, window, count)
+
+    def clear(self):
+        self.impl.clear()
+
+    @property
+    def shared(self) -> bool:
+        return isinstance(self.impl, SharedLimiter)
+
+
+limiter = _LimiterProxy()
+
+
+def client_known(client: str) -> bool:
+    """Per-IP limits need a TRUSTED client address (see auth.client_key). An unknown client is not collapsed into one
+    shared bucket (that would let one attacker lock out everybody); per-account and global limits still apply."""
+    return bool(client) and client != "unknown"
+
+
+def hit_ip(scope: str, client: str, limit: int, window: float = 60.0, count: bool = True) -> bool:
+    return True if not client_known(client) else limiter.hit(scope + ":ip:" + client, limit, window, count)
 
 
 def _lim(name: str, default: str) -> int:
@@ -345,14 +440,15 @@ def _lim(name: str, default: str) -> int:
 
 
 def check_auth_failures_allowed(client: str) -> None:
-    if not limiter.hit("authfail:" + client, _lim("QYRIX_AUTH_FAIL_PER_MIN", "20"), count=False) or \
+    if not hit_ip("authfail", client, _lim("QYRIX_AUTH_FAIL_PER_MIN", "20"), count=False) or \
        not limiter.hit("authfail:*", _lim("QYRIX_AUTH_FAIL_GLOBAL_PER_MIN", "300"), count=False):
         obs.inc("qyrix_rate_limited_total", scope="auth")
+        obs.event("auth_throttled", severity="warning", client=client[:64])
         raise AuthError(429, "too many failed authentication attempts")
 
 
 def record_auth_failure(client: str, reason: str) -> None:
-    limiter.hit("authfail:" + client, 10 ** 9)
+    hit_ip("authfail", client, 10 ** 9)
     limiter.hit("authfail:*", 10 ** 9)
     obs.inc("qyrix_auth_failures_total", reason=reason)
     obs.event("auth_failure", reason=reason, client=client[:64])

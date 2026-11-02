@@ -205,20 +205,62 @@ def test_auth_failure_throttling_blocks_brute_force(monkeypatch):
     assert anon.post("/api/v1/auth/session", json={"credential": ADMIN["Authorization"][7:]}).status_code == 429
 
 
-def test_global_auth_failure_ceiling(monkeypatch):
+SIGKEY = b"client-signing-key-for-tests-0123456789"
+
+
+@pytest.fixture
+def sigkey(monkeypatch, tmp_path):
+    f = tmp_path / "client.key"; f.write_bytes(SIGKEY)
+    monkeypatch.setenv("QYRIX_CLIENT_SIG_KEY_FILE", str(f))
+    return SIGKEY
+
+
+def from_ip(ip, key=SIGKEY, auth="Bearer nope", ts=None):
+    from app.auth import sign_client
+    return TestClient(app, headers={"Authorization": auth, "x-qyrix-client": sign_client(ip, key, ts)})
+
+
+def test_global_auth_failure_ceiling(monkeypatch, sigkey):
     monkeypatch.setenv("QYRIX_AUTH_FAIL_GLOBAL_PER_MIN", "3")
-    monkeypatch.setenv("QYRIX_TRUST_CLIENT_HEADER", "1")
     for i in range(3):
-        TestClient(app, headers={"Authorization": "Bearer nope", "x-qyrix-client": "10.0.0.%d" % i}).get(P + "/status")
-    assert TestClient(app, headers={"Authorization": "Bearer nope", "x-qyrix-client": "10.0.0.99"}).get(P + "/status").status_code == 429
+        from_ip("10.0.0.%d" % i).get(P + "/status")
+    assert from_ip("10.0.0.99").get(P + "/status").status_code == 429
 
 
-def test_client_header_ignored_unless_trusted(monkeypatch):
-    monkeypatch.delenv("QYRIX_TRUST_CLIENT_HEADER", raising=False)
+def test_signed_client_identity_gives_per_ip_buckets(monkeypatch, sigkey):
+    monkeypatch.setenv("QYRIX_AUTH_FAIL_PER_MIN", "2")
+    for _ in range(2):
+        from_ip("10.0.0.1").get(P + "/status")
+    assert from_ip("10.0.0.1").get(P + "/status").status_code == 429
+    assert from_ip("10.0.0.2").get(P + "/status").status_code == 401        # a different (verified) visitor is unaffected
+
+
+def test_forged_stale_or_unsigned_client_headers_are_not_trusted(monkeypatch, sigkey):
+    """Spoofing the visitor identity must not create fresh per-IP buckets: forged, stale, wrong-key and raw headers all
+    fall back to the TCP peer, which is one bucket."""
+    import time as _t
+    monkeypatch.setenv("QYRIX_AUTH_FAIL_PER_MIN", "3")
+    attempts = [from_ip("10.9.0.1", key=b"attacker-guessed-key-000000000000000"),
+                from_ip("10.9.0.2", ts=int(_t.time()) - 3600),
+                TestClient(app, headers={"Authorization": "Bearer nope", "x-qyrix-client": "10.9.0.3"}),
+                TestClient(app, headers={"Authorization": "Bearer nope", "x-qyrix-client": "v1|10.9.0.4|1|deadbeef"})]
+    codes = [c.get(P + "/status").status_code for c in attempts]
+    assert codes == [401, 401, 401, 429]                                     # all four counted against ONE bucket
+
+
+def test_client_header_ignored_without_signing_key(monkeypatch):
+    monkeypatch.delenv("QYRIX_CLIENT_SIG_KEY_FILE", raising=False)
     monkeypatch.setenv("QYRIX_AUTH_FAIL_PER_MIN", "2")
     for i in range(2):
-        TestClient(app, headers={"Authorization": "Bearer nope", "x-qyrix-client": "spoof-%d" % i}).get(P + "/status")
-    assert TestClient(app, headers={"Authorization": "Bearer nope", "x-qyrix-client": "spoof-x"}).get(P + "/status").status_code == 429
+        TestClient(app, headers={"Authorization": "Bearer nope", "x-qyrix-client": "v1|10.0.0.%d|1|x" % i}).get(P + "/status")
+    assert TestClient(app, headers={"Authorization": "Bearer nope", "x-qyrix-client": "v1|10.0.0.7|1|x"}).get(P + "/status").status_code == 429
+
+
+def test_unknown_client_skips_per_ip_but_not_global_limits(monkeypatch, sigkey):
+    monkeypatch.setenv("QYRIX_AUTH_FAIL_PER_MIN", "1")
+    monkeypatch.setenv("QYRIX_AUTH_FAIL_GLOBAL_PER_MIN", "4")
+    codes = [from_ip("unknown").get(P + "/status").status_code for _ in range(6)]
+    assert codes == [401, 401, 401, 401, 429, 429]                           # no shared "unknown" lock-out; global holds
 
 
 # ---------------- monitoring ----------------

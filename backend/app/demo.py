@@ -68,34 +68,12 @@ class DemoReq(BaseModel):
     scenario: Literal["safe", "direct", "transformed", "delayed"]
 
 
-# ---- rate limiting (in-process sliding window; per client + global backstop)
-_rl_lock = threading.Lock()
-_rl: Dict[str, deque] = defaultdict(deque)
-_rl_global: deque = deque()
-
-
+# ---- rate limiting: shared limiter (PostgreSQL when configured), per TRUSTED client + global backstop
 def _allow(client: str) -> bool:
+    from app import identity
     per = int(os.getenv("QYRIX_DEMO_RATE_PER_MIN", "20"))
     glob = int(os.getenv("QYRIX_DEMO_GLOBAL_RATE_PER_MIN", "600"))
-    now = time.monotonic()
-    with _rl_lock:
-        for q in (_rl[client], _rl_global):
-            while q and now - q[0] > 60:
-                q.popleft()
-        if len(_rl[client]) >= per or len(_rl_global) >= glob:
-            return False
-        _rl[client].append(now)
-        _rl_global.append(now)
-        if len(_rl) > 10000:                       # bound memory: drop idle clients
-            for k in [k for k, q in _rl.items() if not q][:5000]:
-                _rl.pop(k, None)
-        return True
-
-
-def _client_key(request: Request) -> str:
-    # The backend is reachable only from the frontend container; the frontend forwards the visitor address.
-    fwd = (request.headers.get("x-qyrix-demo-client") or "").strip()[:64]
-    return fwd or (request.client.host if request.client else "unknown")
+    return identity.limiter.hit("demo:global", glob) and identity.hit_ip("demo", client, per)
 
 
 def new_context() -> "g.GateContext":
@@ -170,6 +148,7 @@ def scenarios_ep():
 def run_ep(b: DemoReq, request: Request):
     if os.getenv("QYRIX_PUBLIC_DEMO", "1") != "1":
         raise HTTPException(404, "public demo disabled")
-    if not _allow(_client_key(request)):
+    from app.auth import client_key
+    if not _allow(client_key(request)):
         raise HTTPException(429, "demo rate limit reached, try again in a minute")
     return run_scenario(b.scenario)
