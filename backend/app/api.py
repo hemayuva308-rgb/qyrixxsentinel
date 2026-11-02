@@ -214,7 +214,8 @@ def reset_ep(p: Principal = Depends(require("demo.reset"))):
 @sentinel.get("/status")
 def status_ep(p: Principal = Depends(require("read"))):
     ctx = tenancy.ctx_for(p)
-    return {**g.status_snapshot(ctx, p.role), "tenant": p.tenant, "credential": p.cred_id, "multi_tenant": identity.multi_tenant_enabled()}
+    return {**g.status_snapshot(ctx, p.role), "tenant": p.tenant, "credential": p.cred_id, "multi_tenant": identity.multi_tenant_enabled(),
+            "integrity": {k: v for k, v in tenancy.ctx_for(p).state.get("integrity", {"status": "NOT_APPLICABLE"}).items() if k != "pending"}}
 
 
 @sentinel.post("/benchmark")
@@ -351,14 +352,18 @@ def ready():
     ctx = g.PROD
     v = g.verify_chain(ctx)
     checks = {"proof_chain": "ok" if v["valid"] else "fail", "gate": "degraded" if ctx.state["degraded"] else "ok",
-              "persistence": ctx.state["persistence"]}
+              "persistence": ctx.state["persistence"],
+              "integrity": ctx.state.get("integrity", {}).get("status", "NOT_APPLICABLE")}
+    if ctx.state.get("integrity", {}).get("reason"):
+        checks["integrity_reason"] = ctx.state["integrity"]["reason"]
     if identity.store().durable:
         try:
             ctx.db.ping() if ctx.db is not None else None
             checks["database"] = "ok" if ctx.db is not None else "fail"
         except Exception:
             checks["database"] = "fail"
-    ok = checks["proof_chain"] == "ok" and checks["gate"] == "ok" and checks["persistence"] != "down" and checks.get("database", "ok") == "ok"
+    ok = (checks["proof_chain"] == "ok" and checks["gate"] == "ok" and checks["persistence"] != "down"
+          and checks.get("database", "ok") == "ok" and checks["integrity"] in ("OK", "FRESH_INSTALL", "ADOPTED_EXISTING", "NOT_APPLICABLE"))
     if not ok:
         raise HTTPException(503, {"ready": False, "checks": checks})
     return {"ready": True, "checks": checks}

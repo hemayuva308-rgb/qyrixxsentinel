@@ -350,6 +350,9 @@ def _record(ctx: GateContext, fields: Dict) -> Dict:
             ctx.db.save_proof(r)
         except Exception:
             ctx.state["persistence"] = "down"   # fail closed from now on (R17) until the mirror is caught up
+            return r
+        from app import integrity
+        integrity.seal(ctx)                     # witness high-water mark only after chain file AND DB mirror hold it
     return r
 
 
@@ -357,6 +360,8 @@ def _persistence_down(ctx: "GateContext") -> bool:
     """True when the context needs PostgreSQL and it is unavailable. Tries to recover at most every 2 s."""
     if ctx.state["persistence"] != "down":
         return False
+    if ctx.state.get("integrity", {}).get("status") == "RECOVERY_REQUIRED":
+        return True                                   # only an operator recovery + restart may clear this
     if ctx.db is None or time.time() - ctx.state.get("db_retry", 0) < 2:
         return True
     ctx.state["db_retry"] = time.time()
@@ -705,6 +710,12 @@ def attach_persistence(ctx: GateContext, db) -> None:
     ctx.state["persistence"] = "down"
     ctx.state["attached"] = False
     db.verify_runtime()                               # least-privilege account + current schema, else fail closed
+    from app import integrity
+    if integrity.snapshot()["status"] is None:
+        integrity.check_installation(ctx, db)         # once per process: DB vs witness vs deployment config
+    integrity.check_tenant(ctx, db)                   # BEFORE back-filling the mirror: never "heal" over lost data
+    if ctx.state["integrity"]["status"] == integrity.RECOVERY:
+        raise RuntimeError("data integrity cannot be established: " + str(ctx.state["integrity"]["reason"]))
     _sync_proof_mirror(ctx)
     allowed = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("kind", "gate_decision") == "gate_decision" and r["verdict"] == "ALLOW"}
     started = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("verdict") == "EXECUTION_STARTED"}
@@ -735,6 +746,8 @@ def attach_persistence(ctx: GateContext, db) -> None:
     ctx.prov.persist = db.save_step
     ctx.state["attached"] = True
     ctx.state["persistence"] = "postgres"
+    integrity.acknowledge_pending(ctx, _record)       # operator-accepted recoveries become proof records
+    integrity.seal(ctx)
 
 
 # ---------------- REST ----------------
@@ -816,6 +829,8 @@ def _reset_state(ctx: Optional[GateContext] = None) -> None:
             ctx.db.reset()                            # demo/eval mode only (endpoint is guarded; DB grant is opt-in)
         except persistence.PersistenceError:
             raise ExecRefused("RESET_NOT_PERMITTED_BY_DATABASE", 409)
+        from app import integrity
+        integrity.reset_tenant_mark(ctx)              # audited: the witness must not flag an intended demo reset
     ctx.prov.reset(); ctx.appr.clear(); ctx.chain.clear(); ctx.lat.clear(); ctx.ext["calls"] = 0
     ctx.evals.clear(); ctx.grants.clear(); ctx.anchors.clear()
     ctx.state["degraded"] = False

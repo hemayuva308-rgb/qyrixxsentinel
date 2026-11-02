@@ -141,16 +141,30 @@ class _Pool:
         finally:
             self._slots.release()
 
-    def run(self, fn, tenant: Optional[str] = None):
-        """fn(cursor) in one transaction, tenant context set first. Any error => rollback + PersistenceError."""
+    def run(self, fn, tenant: Optional[str] = None, _retry: bool = True):
+        """fn(cursor) in one transaction, tenant context set first. Any error => rollback + PersistenceError.
+        A pooled connection killed by a server restart fails on the FIRST statement (the tenant set_config), before any
+        of fn's work: that case alone is retried once on a fresh connection."""
         conn = self._checkout()
+        started = False
         try:
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute("SELECT set_config('qyrix.tenant_id', %s, true)", (tenant or "",))
+                    started = True
                     return fn(cur)
         except PersistenceError:
             raise
+        except self._psycopg.OperationalError:
+            if not started and _retry:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                self._checkin(conn)
+                conn = None
+                return self.run(fn, tenant, _retry=False)
+            raise PersistenceError("database unavailable") from None
         except Exception as e:
             msg = str(getattr(e, "diag", None) and e.diag.message_primary or "")
             if "row-level security" in msg:
@@ -159,7 +173,8 @@ class _Pool:
                 obs.event("tenant_isolation_violation", severity="critical", tenant=tenant or "", error=type(e).__name__)
             raise PersistenceError("database error: " + type(e).__name__) from None
         finally:
-            self._checkin(conn)
+            if conn is not None:
+                self._checkin(conn)
 
     def close_all(self):
         while True:
@@ -253,6 +268,29 @@ class PgPersistence:
             raise PersistenceError("runtime database account is over-privileged: " + ", ".join(problems))
         if missing:
             raise PersistenceError("database schema not migrated (run `python -m app.migrate`): missing " + ", ".join(missing))
+
+    # ---- installation identity (silent data-loss detection, app/integrity.py)
+    def install_id(self) -> Optional[str]:
+        def go(cur):
+            cur.execute("SELECT install_id FROM installation WHERE id = 1")
+            r = cur.fetchone()
+            return str(r[0]) if r else None
+        return self.db.run(go)
+
+    def init_install(self, install_id: str) -> str:
+        """Insert-once; returns the id actually stored (an existing one wins)."""
+        def go(cur):
+            cur.execute("INSERT INTO installation (id, install_id) VALUES (1, %s) ON CONFLICT (id) DO NOTHING", (install_id,))
+            cur.execute("SELECT install_id FROM installation WHERE id = 1")
+            return str(cur.fetchone()[0])
+        return self.db.run(go)
+
+    def proof_census(self) -> Dict[str, int]:
+        def go(cur):
+            cur.execute("SELECT tenants, records FROM qyrix_proof_census()")
+            r = cur.fetchone()
+            return {"tenants": int(r[0]), "records": int(r[1])}
+        return self.db.run(go)
 
     def tenant_exists(self) -> bool:
         def go(cur):

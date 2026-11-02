@@ -36,11 +36,15 @@ services:
     depends_on:
       db: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
-    secrets: [db_runtime_password]         # ONLY the least-privilege runtime secret; the admin secret is never mounted here
+    secrets: [db_runtime_password, state_witness_key]   # NEVER the admin secret
     environment:
       QYRIX_DB_HOST: db
       QYRIX_DB_NAME: qyrix
       QYRIX_DB_USER: qyrix_runtime         # NOSUPERUSER NOBYPASSRLS, owns nothing; verified at startup (fail closed)
+      # silent data-loss detection: signed witness on its OWN volume (not the DB, not the chain volume)
+      QYRIX_STATE_WITNESS_DIR: /witness
+      QYRIX_STATE_WITNESS_KEY_FILE: /run/secrets/state_witness_key
+      QYRIX_EXPECTED_INSTALL_ID: ${QYRIX_EXPECTED_INSTALL_ID:-}   # set after first start (see docs/DISASTER_RECOVERY.md)
       QYRIX_TSA_URL: ${QYRIX_TSA_URL:-}
       QYRIX_TSA_CA_FILE: ${QYRIX_TSA_CA_FILE:-}
       QYRIX_ADMIN_TOKEN: ${QYRIX_ADMIN_TOKEN:?set in .env}
@@ -66,7 +70,7 @@ services:
       META_MODEL: ${META_MODEL:-}
       BASETEN_API_KEY: ${BASETEN_API_KEY:-}
       BASETEN_MODEL: ${BASETEN_MODEL:-}
-    volumes: ["chain:/data", "workspaces:/workspaces"]
+    volumes: ["chain:/data", "workspaces:/workspaces", "witness:/witness"]
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: [ALL]
@@ -104,7 +108,9 @@ secrets:                                 # generated locally, git-ignored - see 
     file: ./secrets/db_admin_password
   db_runtime_password:
     file: ./secrets/db_runtime_password
+  state_witness_key:
+    file: ./secrets/state_witness_key
 networks:
   internal: { internal: true }          # no egress
   edge: {}
-volumes: { chain: {}, pgdata: {}, workspaces: {} }
+volumes: { chain: {}, pgdata: {}, workspaces: {}, witness: {} }
