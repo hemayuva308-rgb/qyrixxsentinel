@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app import observability as obs, adapter as adapters, anchor, netguard, persistence, proof, provenance as prov
 
 TOOLS = ("http", "file.read")            # `shell` is recognised but never executable in this MVP (R8)
+STATE_CHANGING = frozenset(("POST", "PUT", "PATCH", "DELETE"))   # R19: need trusted lineage or explicit human approval
 SECRET = re.compile(r"(sk-[a-z]+-\w{3,}|api[_-]?key|secret|token|password|aws_\w+|\.env)", re.I)
 # key=value redaction: a deterministic single-pass scanner (see _redact). Every character is visited a bounded number of
 # times, so cost is O(len) for any input. The earlier regexes `(?<![\w.-])[\w.-]+(?=\s*[=:])` and `(\s*[=:]\s*)[^...]+`
@@ -502,7 +503,7 @@ class Action(BaseModel):
 # ---------------- Grant binding (v1.5 P1): agent, task, policy version ----------------
 # Bump whenever Gate rule CODE changes (rules R0-R18, netguard classification, adapters' confinement): it is part of the
 # policy version, so outstanding grants issued under the old logic become unusable.
-POLICY_ENGINE_VERSION = "gate-rules/2026-11-03.1"
+POLICY_ENGINE_VERSION = "gate-rules/2026-11-03.2"   # .2: R19 untrusted state change, R20 deceptive hostname
 _TASK_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
@@ -520,6 +521,7 @@ def policy_inputs(ctx: "GateContext") -> Dict:
         "adapters": sorted(ctx.adapters),
         "require_task_id": require_task_id(),
         "max_redirects": MAX_REDIRECTS,
+        "state_changing_methods": sorted(STATE_CHANGING),
         "max_file_bytes": adapters.MAX_FILE_BYTES,
         "detectors": {"secret": [SECRET.pattern, SECRET.flags], "inject": [INJECT.pattern, INJECT.flags],
                       "cmds": [CMDS.pattern, CMDS.flags], "kv_words": [_KV_WORD.pattern, _KV_WORD.flags],
@@ -615,6 +617,8 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None, agent_id: Optional[st
                 host = chk.host
                 if chk.reason == "SSRF":
                     rules.append("R9_SSRF_BLOCKED")
+                elif chk.reason == "DECEPTIVE_HOST":
+                    rules.append("R20_DECEPTIVE_HOSTNAME")   # invisible chars, look-alike dots, mixed scripts...
                 elif not chk.ok:
                     rules.append("R1_DEST_NOT_APPROVED")
             elif tool == "file.read" and not (ctx.workspace and netguard.confine_path(ctx.workspace, a.dest)):
@@ -651,6 +655,13 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None, agent_id: Optional[st
                     rules.append("R14_APPROVAL_EXPIRED")
             elif needs_approval:
                 rules.append("R7_APPROVAL_REQUIRED")
+            # R19: an approved destination is NOT authorization for a state change. If any instruction in the lineage
+            # is untrusted (UNTRUSTED / UNVERIFIED, directly or inherited), POST/PUT/PATCH/DELETE needs an explicit,
+            # valid human approval of this exact action (approvals are digest-bound; agents cannot approve).
+            approval_ok = bool(a.approval_id) and ap is not None and not any(
+                r in rules for r in ("R4_APPROVAL_SCOPE_MISMATCH", "R6_APPROVAL_REPLAY", "R14_APPROVAL_EXPIRED"))
+            if tool == "http" and method in STATE_CHANGING and taint and not approval_ok:
+                rules.append("R19_UNTRUSTED_STATE_CHANGE")
             if require_task_id() and not a.task_id:
                 rules.append("R18_TASK_ID_REQUIRED")       # QYRIX_REQUIRE_TASK_ID=1: no task context => no grant
         except Exception:
@@ -724,6 +735,7 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None, agent_id: Optional[st
                 "external_calls": ctx.ext["calls"], "executed": False, "exec_status": None, "proof": rec,
                 "gate_evaluation_id": eval_id, "params_digest": digest, "redirect_hop": hop,
                 "correlation_id": a.correlation_id or eval_id, "task_id": a.task_id, "policy_version": pv,
+                "dest_host": host,                       # canonical A-label host: the unambiguous form to display
                 "grant_id": grant["id"] if grant else None, "grant_expires_at": grant["expires_at"] if grant else None}
 
 

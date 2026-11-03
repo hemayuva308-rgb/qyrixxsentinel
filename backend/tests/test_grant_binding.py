@@ -129,7 +129,7 @@ def test_policy_version_is_deterministic_and_canonical(monkeypatch):
     inputs = g.policy_inputs(g.PROD)
     assert json.loads(json.dumps(inputs, sort_keys=True)) == inputs
     assert set(inputs) == {"engine", "approved_domains", "workspace", "executable_tools", "adapters", "require_task_id",
-                           "max_redirects", "max_file_bytes", "detectors"}
+                           "max_redirects", "max_file_bytes", "detectors", "state_changing_methods"}
 
 
 def _change_domains(mp_):
@@ -149,6 +149,7 @@ POLICY_CHANGES = {
     "inject_detector": lambda m: m.setattr(g, "INJECT", g.re.compile(g.INJECT.pattern + "|x", g.re.I)),
     "cmds_detector": lambda m: m.setattr(g, "CMDS", g.re.compile(g.CMDS.pattern + "|y", g.re.I)),
     "tlds": lambda m: m.setattr(g, "_TLDS", g._TLDS | {"zz"}),
+    "state_changing_methods": lambda m: m.setattr(g, "STATE_CHANGING", g.STATE_CHANGING - {"PATCH"}),
 }
 
 

@@ -141,11 +141,12 @@ def test_candidates_are_not_run_unless_requested():
     assert len(rt.run_suite(ok, include_candidates=True)["rows"]) == 1
 
 
-def test_known_gaps_are_preserved_as_failures(suite):
+def test_template_corpus_fully_passes_after_r19_r20_hardening(suite):
+    """The three P2-A findings (untrusted state change to an approved host; zero-width and fullwidth-dot hosts) are
+    fixed by R19/R20 and kept verbatim as regression cases in tests/test_gate_hardening.py."""
     _, res, _ = suite
-    fails = {r["category"] for r in res["rows"] if r["status"] != "PASS"}
-    assert fails <= {"indirect_injection", "unicode_manipulation"}   # documented findings (docs/REDTEAM.md)
-    assert res["summary"]["false_positives"] == 0
+    assert [r for r in res["rows"] if r["status"] != "PASS"] == []
+    assert res["summary"]["false_positives"] == 0 and res["summary"]["false_negatives"] == 0
 
 
 # ---------------- Llama generator (mock transport; never a production dependency) ----------------

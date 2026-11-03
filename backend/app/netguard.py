@@ -1,8 +1,9 @@
 """Destination validation, SSRF defence and DNS-pinned requests (pure helpers, unit-tested)."""
 from __future__ import annotations
-import ipaddress, os, re, socket
+import ipaddress, os, re, socket, unicodedata
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
+import idna                                              # IDNA2008 (RFC 5891-5893); pinned via requirements-lock
 from urllib.parse import urlsplit
 import httpx
 
@@ -42,6 +43,94 @@ class DestCheck:
     url: Optional[str] = None
 
 
+# ---------------- strict hostname canonicalization (v1.5, R20) ----------------
+# Characters that are not label separators in DNS but that IDNA2003/UTS-46 processing silently turns into "." or removes.
+_LOOKALIKE_DOTS = frozenset("\u3002\uff0e\uff61\u2024\ufe52\u2e3c\u0701\u0702\u06d4")
+_SCRIPT_GROUPS = ({"HAN", "HIRAGANA", "KATAKANA"}, {"HAN", "HANGUL"}, {"HAN", "BOPOMOFO"})
+
+
+def _script(ch: str) -> Optional[str]:
+    """Coarse Unicode script of a character, or None for script-neutral characters (digits, hyphen, combining marks)."""
+    if ch.isascii() and not ch.isalpha():
+        return None
+    if unicodedata.category(ch).startswith("M"):
+        return None                                      # combining marks inherit the base character's script
+    name = unicodedata.name(ch, "")
+    head = name.split(" ")[0]
+    if head == "CJK":
+        return "HAN"
+    if head.startswith("KATAKANA-HIRAGANA"):
+        return "KATAKANA"
+    return head or "UNKNOWN"
+
+
+def _single_script(label: str) -> bool:
+    scripts = {s for s in (_script(c) for c in label) if s}
+    return len(scripts) <= 1 or any(scripts <= grp for grp in _SCRIPT_GROUPS)
+
+
+def canonical_host(raw: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (ascii_a_label_host, None) or (None, reason). Deliberately strict and unambiguous:
+    * invisible / format / control / space / private-use / unassigned characters  -> DECEPTIVE
+    * look-alike dots (fullwidth, ideographic, halfwidth ...)                       -> DECEPTIVE
+    * compatibility forms (fullwidth letters etc., NFKC != input) or non-NFC text   -> DECEPTIVE
+    * a label mixing scripts (e.g. Latin + Cyrillic)                                -> DECEPTIVE
+    * anything IDNA2008 (RFC 5891 + contextual + bidi rules) refuses, malformed punycode, bad lengths -> INVALID
+    Genuine single-script internationalised names are accepted and returned as their A-label (xn--...)."""
+    if not raw or len(raw) > 253:
+        return None, "INVALID"
+    for ch in raw:
+        if unicodedata.category(ch) in ("Cf", "Cc", "Cs", "Co", "Cn", "Zs", "Zl", "Zp"):
+            return None, "DECEPTIVE"
+        if ch in _LOOKALIKE_DOTS:
+            return None, "DECEPTIVE"
+    if unicodedata.normalize("NFKC", raw) != raw or unicodedata.normalize("NFC", raw) != raw:
+        return None, "DECEPTIVE"
+    out = []
+    for label in raw.split("."):
+        if not label or len(label) > 63:
+            return None, "INVALID"
+        if label.isascii():
+            lab = label.lower()
+            if not re.fullmatch(r"[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?", lab):
+                return None, "INVALID"
+            if lab[2:4] == "--" and not lab.startswith("xn--"):
+                return None, "INVALID"                   # reserved R-LDH labels other than xn--
+            if lab.startswith("xn--"):
+                try:
+                    u = idna.decode(lab)
+                    if idna.encode(u).decode("ascii") != lab:
+                        return None, "INVALID"
+                except (idna.IDNAError, UnicodeError):
+                    return None, "INVALID"
+                if not _single_script(u):
+                    return None, "DECEPTIVE"
+            out.append(lab)
+        else:
+            if not _single_script(label):
+                return None, "DECEPTIVE"
+            try:
+                out.append(idna.encode(label, uts46=False).decode("ascii"))
+            except (idna.IDNAError, UnicodeError):
+                return None, "INVALID"
+    host = ".".join(out)
+    return (host, None) if len(host) <= 253 else (None, "INVALID")
+
+
+def _display(raw: str) -> str:
+    """Unambiguous ASCII rendering of a refused hostname for logs/proofs (invisible characters become visible)."""
+    return raw.encode("ascii", "backslashreplace").decode("ascii")[:255]
+
+
+def _canonical_set(approved: tuple) -> frozenset:
+    out = set()
+    for d in approved or ():
+        h, _ = canonical_host((d or "").strip().lower().rstrip("."))
+        if h:
+            out.add(h)
+    return frozenset(out)
+
+
 def check_http_dest(dest: str, approved: tuple) -> DestCheck:
     s = (dest or "").strip()
     if not s or any(ord(c) <= 32 or ord(c) == 127 for c in s):
@@ -67,13 +156,14 @@ def check_http_dest(dest: str, approved: tuple) -> DestCheck:
         return DestCheck(False, "SSRF", host)
     if host == "localhost" or host.endswith(".localhost"):
         return DestCheck(False, "SSRF", host)
-    try:
-        host = host.encode("idna").decode("ascii").lower()
-    except UnicodeError:
-        return DestCheck(False, "INVALID")
+    canon, why = canonical_host(host)
+    if canon is None:
+        return DestCheck(False, "DECEPTIVE_HOST" if why == "DECEPTIVE" else "INVALID", _display(host))
+    host = canon                                         # the ONLY form used for policy, logs, proofs and approvals
     if port not in ALLOWED_PORTS:
         return DestCheck(False, "NOT_APPROVED", host)
-    return DestCheck(host in approved, "OK" if host in approved else "NOT_APPROVED", host, s)
+    ok = host in _canonical_set(approved)
+    return DestCheck(ok, "OK" if ok else "NOT_APPROVED", host, s)
 
 
 def resolve_public(host: str) -> List[str]:

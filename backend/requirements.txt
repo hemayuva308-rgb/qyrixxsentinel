@@ -4,5 +4,6 @@ fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
 pydantic>=2.6,<3
 httpx>=0.27,<1
+idna>=3.7,<4               # IDNA2008 hostname validation (R20); already pinned via httpx in requirements-lock.txt
 psycopg[binary]>=3.2,<4
 cryptography>=44,<51        # AES-GCM for TOTP secrets at rest (PyCA, well maintained)
