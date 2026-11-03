@@ -7,7 +7,7 @@ Configuration (all required unless noted; nothing is read from the backend):
   OBSERVER_SIGNING_KEY_FILE      observer signing key (PEM); must be listed and valid in the manifest
   OBSERVER_OPERATOR_TOKEN_FILE   (optional) bearer token for GET /v1/status; without it /v1/status is disabled
   OBSERVER_HEARTBEAT_SECONDS, OBSERVER_GRACE_SECONDS, OBSERVER_MAX_SKEW_SECONDS   (optional; defaults 10 / 30 / 120)
-  OBSERVER_BIND (default 0.0.0.0), OBSERVER_PORT (default 9000)
+  OBSERVER_BIND (default 127.0.0.1; the C5 deployment sets the container address), OBSERVER_PORT (default 9000)
 
 Start-up is fail closed: manifest signature, manifest rollback, runtime account privileges, schema version and the full
 ledger chain are verified before the port opens."""
@@ -68,7 +68,7 @@ def main() -> int:
         tok = open(os.environ["OBSERVER_OPERATOR_TOKEN_FILE"]).read().strip() or None
     threading.Thread(target=monitor, args=(obs, obs.cfg.H), name="observer-monitor", daemon=True).start()
     import uvicorn
-    uvicorn.run(create_app(obs, tok), host=os.getenv("OBSERVER_BIND", "0.0.0.0"), port=int(os.getenv("OBSERVER_PORT", "9000")))
+    uvicorn.run(create_app(obs, tok), host=os.getenv("OBSERVER_BIND", "127.0.0.1"), port=int(os.getenv("OBSERVER_PORT", "9000")))
     return 0
 
 
