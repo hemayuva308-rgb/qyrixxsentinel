@@ -40,6 +40,7 @@ listener + canary files) records side effects, and a deterministic reconciler co
 (`ENFORCEMENT_VERIFIED`, `BYPASS_DETECTED`, `UNAUTHORIZED_EXECUTION`, `INCONCLUSIVE`; missing telemetry is never
 verified). Dashboard: **/enforcement**. The first platform integration is a stdio **MCP proxy** (`python -m app.mcp_proxy`).
 Details, limits and tests: `docs/CONTINUOUS_ENFORCEMENT_VERIFICATION.md`. What is built vs proposed: `docs/FEATURE_MATRIX.md`.
+Grants are bound to the authenticated agent, the task context and the policy version (`docs/AUTHORIZATION_BINDING.md`).
 
 ## Run with Docker Compose
 ```bash

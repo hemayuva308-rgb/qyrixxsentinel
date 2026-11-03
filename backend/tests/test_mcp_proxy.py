@@ -26,12 +26,12 @@ admin = TestClient(app, headers=ADMIN)
 
 
 class Harness:
-    def __init__(self, tmp_path, sentinel=None, timeout=10.0, mapping=MAPPING):
-        self.log = str(tmp_path / "server-calls.jsonl")
+    def __init__(self, tmp_path, sentinel=None, timeout=10.0, mapping=MAPPING, task_id=None):
+        self.log = str(tmp_path / ("server-calls-%s.jsonl" % (task_id or "none")))
         self.msgs, self.cv = [], threading.Condition()
         env = {**os.environ, "MCP_FIXTURE_LOG": self.log}
         self.proxy = mp.McpProxy(sentinel or mp.SentinelClient(http=TestClient(app, headers=AGENT)), SERVER, mapping,
-                                 self._out, timeout, env).start()
+                                 self._out, timeout, env, task_id=task_id).start()
 
     def _out(self, msg):
         with self.cv:
@@ -151,7 +151,7 @@ def test_sentinel_unreachable_fails_closed(tmp_path):
 
 def test_failed_redemption_is_not_forwarded(tmp_path):
     class Replay(mp.SentinelClient):
-        def redeem(self, d, corr):
+        def redeem(self, d, corr, task=None):
             raise mp.SentinelError("GRANT_REPLAY")
     x = Harness(tmp_path, sentinel=Replay(http=TestClient(app, headers=AGENT)))
     try:

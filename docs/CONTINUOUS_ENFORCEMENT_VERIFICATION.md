@@ -71,12 +71,15 @@ event happened. That independent evidence comes from the observer, whose own lim
 
 ## 5. Universal adapter contract (`qyrix-adapter-contract/v1`)
 
-1. **Evaluate:** `POST /api/v1/sentinel/gate/evaluate` with `{tool, method, dest, cmd, data, lineage, correlation_id}`.
+1. **Evaluate:** `POST /api/v1/sentinel/gate/evaluate` with `{tool, method, dest, cmd, data, lineage, correlation_id, task_id}`.
+   The grant is bound to the authenticated credential, the `task_id` and the current policy version
+   (`docs/AUTHORIZATION_BINDING.md`).
 2. **Enforce:**
    - On BLOCK, the integration must not perform the action.
    - On ALLOW, either Sentinel executes it (`POST /api/v1/tools/execute`), or the integration redeems the single-use
-     grant (`POST /api/v1/tools/redeem` with `{gate_evaluation_id, grant_id, params_digest, correlation_id}` and the
-     header `X-Qyrix-Integration`) and only then executes exactly those parameters.
+     grant (`POST /api/v1/tools/redeem` with `{gate_evaluation_id, grant_id, params_digest, correlation_id, task_id}` and the
+     header `X-Qyrix-Integration`) and only then executes exactly those parameters. Same agent, same task, same policy
+     version, or the call is refused.
 3. **Verify:** CEV canaries through the integration, checked against the independent observer.
 
 `GET /api/v1/sentinel/integrations` lists every integration, its declared capabilities and its status:
@@ -104,6 +107,8 @@ Point the MCP client at the proxy command instead of the server.
   tool result with `isError: true` and `_meta.qyrix` = `{verdict, rules, correlation_id, gate_evaluation_id,
   decision_proof_hash}`.
 - **Correlation id:** clients may supply one in `params._meta["qyrix/correlation_id"]`.
+- **Task context:** set with `--task-id`, or per call in `params._meta["qyrix/task_id"]`. It is sent to evaluate and to
+  redeem. It is caller-provided context, not a verified task identity.
 - **Timeouts:** a call that times out returns JSON-RPC error `-32001`, and its late reply is dropped.
 
 **Scope:**

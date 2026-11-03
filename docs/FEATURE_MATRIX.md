@@ -1,4 +1,4 @@
-# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-03)
+# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-03, updated after P1)
 
 Rule: **Built** = implemented and covered by automated tests in this repository. Anything else is labelled as such.
 Test counts are from the last full run, recorded in the commit that changed this file.
@@ -12,6 +12,10 @@ Test counts are from the last full run, recorded in the commit that changed this
 | RFC 3161 external timestamp anchoring | Partially built | Implemented and tested against a local TSA only; no public TSA verified |
 | Meta Llama / Baseten advisory classifier | Partially built | Failure paths tested; **live provider calls not verified** |
 | Single-use, expiring, digest-bound grants | Built | `tests/test_v12_controls.py`, `tests/test_persistence.py` |
+| Agent-bound grants (authenticated credential) | Built (v1.5 P1) | `tests/test_grant_binding.py`, `tests/test_grant_binding_pg.py`; memory + atomic SQL |
+| Task-bound grants (`task_id`) + optional `QYRIX_REQUIRE_TASK_ID` (R18) | Built (v1.5 P1) | **task_id is caller-provided context, not a verified task identity** (`docs/AUTHORIZATION_BINDING.md`) |
+| Policy-version-bound grants (canonical SHA-256 of all policy inputs) | Built (v1.5 P1) | one test per policy input (12) |
+| Migration 007 (additive) verified on real PostgreSQL with pre-existing data | Built (v1.5 P1) | `tests/test_grant_binding_pg.py` |
 | RBAC, tenants (RLS), API keys, sessions, MFA, invitations, password reset | Built | `tests/test_identity.py`, `tests/test_tenancy.py`, `tests/test_accounts.py`, `tests/test_db_privileges.py` |
 | Alerts engine, Prometheus metrics/rules | Built | `app/alerts.py`, `ops/prometheus/`, `tests/test_alerts.py` |
 | Proof export | Built | `GET /api/v1/sentinel/proofs/export` |
@@ -37,7 +41,7 @@ Test counts are from the last full run, recorded in the commit that changed this
 ## Still to do (master plan, in priority order)
 | Feature | Status |
 |---|---|
-| Task-bound authorization: agent_id, task_id, policy_version in the grant binding | Partially built: action, resource, argument hash, expiry and unique grant id are bound today; agent, task and policy version are not |
+| Trusted task identity (signed task tokens from a task issuer / orchestrator) | Proposed: today task_id is caller-provided context |
 | Meta Llama red-team case generator (offline; never authorizes) | Proposed |
 | Benchmark v2 (50–100+ cases, the 7 metrics, p50/p95/p99); AgentDojo / InjecAgent after license review | Proposed (today: 10 synthetic cases, preliminary) |
 | Browser-based proof bundle verifier | Proposed (offline CLI verifier is built) |

@@ -351,24 +351,33 @@ class PgPersistence:
     def save_evaluation(self, ev: Dict, grant: Optional[Dict] = None, approval_id: Optional[str] = None) -> None:
         """One transaction: evaluation (+ grant + approval consumption). Approval must be approved, unused, this tenant's."""
         def go(cur):
-            cur.execute("INSERT INTO gate_evaluations (tenant_id, id, verdict, rule_ids, params, params_digest, hop, host, created_at)"
-                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (self.t, ev["id"], ev["verdict"], ev["rules"], json.dumps(ev["params"]), ev["digest"], ev["hop"], ev["host"], _ts(ev["ts"])))
+            cur.execute("INSERT INTO gate_evaluations (tenant_id, id, verdict, rule_ids, params, params_digest, hop, host, created_at,"
+                        " agent_id, task_id, policy_version, correlation_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (self.t, ev["id"], ev["verdict"], ev["rules"], json.dumps(ev["params"]), ev["digest"], ev["hop"], ev["host"], _ts(ev["ts"]),
+                         ev.get("agent_id"), ev.get("task_id"), ev.get("policy_version"), ev.get("correlation_id")))
             if grant:
                 if approval_id:
                     cur.execute("UPDATE approvals SET used=true, updated_at=now() WHERE tenant_id=%s AND id=%s AND status='approved'"
                                 " AND used=false AND expires_at > now() RETURNING id", (self.t, approval_id))
                     if cur.fetchone() is None:
                         raise PersistenceConflict("approval already consumed or not valid")
-                cur.execute("INSERT INTO grants (tenant_id, id, gate_evaluation_id, params_digest, approval_id, created_at, expires_at)"
-                            " VALUES (%s,%s,%s,%s,%s,now(),%s)", (self.t, grant["id"], ev["id"], grant["digest"], approval_id, _ts(grant["exp"])))
+                cur.execute("INSERT INTO grants (tenant_id, id, gate_evaluation_id, params_digest, approval_id, created_at, expires_at,"
+                            " agent_id, task_id, policy_version) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s,%s)",
+                            (self.t, grant["id"], ev["id"], grant["digest"], approval_id, _ts(grant["exp"]),
+                             grant.get("agent_id"), grant.get("task_id"), grant.get("policy_version")))
         self._run(go)
 
-    def consume_grant(self, gid: str, eid: str, digest: str) -> bool:
-        """Atomic single use. False => already used, revoked, expired, unknown, other tenant or mismatched."""
+    def consume_grant(self, gid: str, eid: str, digest: str, agent_id: Optional[str] = None, task_id: Optional[str] = None,
+                      policy_version: Optional[str] = None) -> bool:
+        """Atomic single use. False => already used, revoked, expired, unknown, other tenant, mismatched digest, or a
+        binding (agent, task, policy version) that differs from the one recorded at issue time. NULL never equals a
+        value, so legacy unbound rows cannot be consumed by an authenticated caller (fail closed)."""
         def go(cur):
             cur.execute("UPDATE grants SET used_at=now() WHERE tenant_id=%s AND id=%s AND gate_evaluation_id=%s AND params_digest=%s"
-                        " AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() RETURNING id", (self.t, gid, eid, digest))
+                        " AND agent_id IS NOT DISTINCT FROM %s AND task_id IS NOT DISTINCT FROM %s"
+                        " AND policy_version IS NOT DISTINCT FROM %s"
+                        " AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() RETURNING id",
+                        (self.t, gid, eid, digest, agent_id, task_id, policy_version))
             return cur.fetchone() is not None
         return self._run(go)
 
@@ -388,9 +397,11 @@ class PgPersistence:
                         " FROM gate_evaluations WHERE tenant_id=%s ORDER BY created_at DESC LIMIT %s", (self.t, limit))
             evs = [{"id": str(r[0]), "verdict": r[1], "rules": list(r[2]), "params": r[3], "digest": r[4].strip(), "hop": r[5],
                     "host": r[6], "redirect_location": r[7], "ts": r[8].timestamp()} for r in cur.fetchall()][::-1]
-            cur.execute("SELECT id, gate_evaluation_id, params_digest, expires_at, used_at, revoked_at FROM grants WHERE tenant_id=%s", (self.t,))
+            cur.execute("SELECT id, gate_evaluation_id, params_digest, expires_at, used_at, revoked_at, agent_id, task_id, policy_version"
+                        " FROM grants WHERE tenant_id=%s", (self.t,))
             grants = [{"id": r[0], "gate_evaluation_id": str(r[1]), "digest": r[2].strip(), "exp": r[3].timestamp(), "expires_at": _iso(r[3]),
-                       "used": r[4] is not None, "revoked": r[5] is not None} for r in cur.fetchall()]
+                       "used": r[4] is not None, "revoked": r[5] is not None, "agent_id": r[6], "task_id": r[7],
+                       "policy_version": r[8].strip() if r[8] else None} for r in cur.fetchall()]
             return evs, grants
         return self._run(go)
 

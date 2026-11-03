@@ -74,7 +74,7 @@ def gate_ep(a: g.Action, p: Principal = Depends(require("gate.evaluate"))):
     if a.execute:
         raise HTTPException(400, "EXECUTE_MOVED: evaluate first, then POST /api/v1/tools/execute with gate_evaluation_id and grant_id")
     ctx = tenancy.ctx_for(p)
-    r = g.evaluate(a, ctx)
+    r = g.evaluate(a, ctx, p.cred_id)          # any grant is bound to THIS authenticated credential
     obs.inc("qyrix_gate_decisions_total", tenant=p.tenant, verdict=r["verdict"])
     for rule in r["rules"]:
         obs.inc("qyrix_gate_rule_hits_total", rule=rule)
@@ -91,7 +91,7 @@ async def execute_ep(request: Request, p: Principal = Depends(require("tools.exe
         raise HTTPException(400, "INVALID_JSON")
     ctx = tenancy.ctx_for(p)
     try:
-        x = g.execute_grant(body, ctx)
+        x = g.execute_grant(body, ctx, p.cred_id)
     except g.ExecRefused as e:
         obs.inc("qyrix_executions_total", tenant=p.tenant, outcome=e.code)
         obs.event("execution_refused", tenant=p.tenant, cred=p.cred_id, refusal=e.code)
@@ -126,7 +126,7 @@ async def redeem_ep(request: Request, p: Principal = Depends(require("tools.exec
     integ = x_qyrix_integration if x_qyrix_integration and _INTEGRATION_RE.match(x_qyrix_integration) else "external"
     ctx = tenancy.ctx_for(p)
     try:
-        r = g.redeem_grant(body, integ, ctx)
+        r = g.redeem_grant(body, integ, ctx, p.cred_id)
     except g.ExecRefused as e:
         obs.inc("qyrix_executions_total", tenant=p.tenant, outcome=e.code)
         obs.event("redemption_refused", tenant=p.tenant, cred=p.cred_id, refusal=e.code, scope=integ)

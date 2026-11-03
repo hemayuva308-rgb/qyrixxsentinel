@@ -74,26 +74,36 @@ class SentinelClient:
     def evaluate(self, action: Dict) -> Dict:
         return self._post("/api/v1/sentinel/gate/evaluate", action)
 
-    def redeem(self, d: Dict, correlation_id: str) -> Dict:
-        return self._post("/api/v1/tools/redeem", {"gate_evaluation_id": d["gate_evaluation_id"], "grant_id": d["grant_id"],
-                                                   "params_digest": d["params_digest"], "correlation_id": correlation_id},
-                          {"X-Qyrix-Integration": INTEGRATION})
+    def redeem(self, d: Dict, correlation_id: str, task_id: Optional[str] = None) -> Dict:
+        body = {"gate_evaluation_id": d["gate_evaluation_id"], "grant_id": d["grant_id"],
+                "params_digest": d["params_digest"], "correlation_id": correlation_id}
+        if task_id:
+            body["task_id"] = task_id                          # must equal the task the grant was issued for
+        return self._post("/api/v1/tools/redeem", body, {"X-Qyrix-Integration": INTEGRATION})
 
 
-def to_action(name: str, args: Dict, mapping: Dict[str, Dict], correlation_id: str) -> Dict:
+def to_action(name: str, args: Dict, mapping: Dict[str, Dict], correlation_id: str, task_id: Optional[str] = None) -> Dict:
     m = mapping.get(name)
     if m is None:
-        return {"tool": ("mcp:" + name)[:32], "method": "CALL", "dest": "", "data": canonical(args)[:65536],
-                "correlation_id": correlation_id}
-    dest = args.get(m.get("dest_arg", ""), "")
-    return {"tool": m["tool"], "method": str(m.get("method", "GET"))[:10], "dest": dest if isinstance(dest, str) else "",
-            "data": canonical(args)[:65536], "correlation_id": correlation_id}
+        a = {"tool": ("mcp:" + name)[:32], "method": "CALL", "dest": "", "data": canonical(args)[:65536],
+             "correlation_id": correlation_id}
+    else:
+        dest = args.get(m.get("dest_arg", ""), "")
+        a = {"tool": m["tool"], "method": str(m.get("method", "GET"))[:10], "dest": dest if isinstance(dest, str) else "",
+             "data": canonical(args)[:65536], "correlation_id": correlation_id}
+    if task_id:
+        a["task_id"] = task_id
+    return a
 
 
 class McpProxy:
     def __init__(self, sentinel: SentinelClient, server_cmd: List[str], mapping: Dict[str, Dict],
-                 write_client: Callable[[Dict], None], timeout: float = 30.0, env: Optional[Dict[str, str]] = None):
+                 write_client: Callable[[Dict], None], timeout: float = 30.0, env: Optional[Dict[str, str]] = None,
+                 task_id: Optional[str] = None):
         self.sentinel, self.cmd, self.mapping, self.write_client = sentinel, server_cmd, mapping, write_client
+        if task_id is not None and not _CORR.match(task_id):
+            raise ValueError("invalid task_id")
+        self.task_id = task_id                                # default task context; a call may override it
         self.timeout, self.env = timeout, env
         self._pending: Dict[Any, float] = {}
         self._timed_out: set = set()
@@ -186,22 +196,28 @@ class McpProxy:
         if not isinstance(name, str) or not isinstance(args, dict):
             self._emit({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "Invalid params"}})
             return
-        supplied = (params.get("_meta") or {}).get("qyrix/correlation_id") if isinstance(params.get("_meta"), dict) else None
+        meta_in = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        supplied = meta_in.get("qyrix/correlation_id")
         corr = supplied if isinstance(supplied, str) and _CORR.match(supplied) else "mcp_" + uuid.uuid4().hex
+        task = meta_in.get("qyrix/task_id", self.task_id)       # caller-provided context, NOT a verified task identity
+        if task is not None and not (isinstance(task, str) and _CORR.match(task)):
+            self._blocked(mid, "Blocked by Qyrix Sentinel: invalid task_id. correlation_id=%s" % corr,
+                          {"verdict": "BLOCK", "rules": ["TASK_ID_INVALID"], "correlation_id": corr})
+            return
         try:
-            d = self.sentinel.evaluate(to_action(name, args, self.mapping, corr))
+            d = self.sentinel.evaluate(to_action(name, args, self.mapping, corr, task))
         except SentinelError as e:
             self._blocked(mid, "Blocked by Qyrix Sentinel (fail closed): %s. correlation_id=%s" % (e, corr),
                           {"verdict": "BLOCK", "rules": ["PROXY_FAIL_CLOSED"], "reason": str(e), "correlation_id": corr})
             return
-        meta = {"verdict": d.get("verdict"), "rules": d.get("rules", []), "correlation_id": corr,
+        meta = {"verdict": d.get("verdict"), "rules": d.get("rules", []), "correlation_id": corr, "task_id": task,
                 "gate_evaluation_id": d.get("gate_evaluation_id"), "decision_proof_hash": (d.get("proof") or {}).get("hash")}
         if d.get("verdict") != "ALLOW" or not d.get("grant_id"):
             self._blocked(mid, "Blocked by Qyrix Sentinel before execution: %s. correlation_id=%s"
                           % (", ".join(d.get("rules") or ["UNKNOWN"]), corr), {**meta, "verdict": "BLOCK"})
             return
         try:
-            self.sentinel.redeem(d, corr)                      # single-use, exact params_digest, audited
+            self.sentinel.redeem(d, corr, task)                # single-use, exact params_digest, same agent + task
         except SentinelError as e:
             self._blocked(mid, "Blocked by Qyrix Sentinel: grant redemption refused (%s). correlation_id=%s" % (e, corr),
                           {**meta, "verdict": "BLOCK", "rules": ["GRANT_" + str(e)[:40]]})
@@ -249,6 +265,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Qyrix Sentinel MCP proxy (stdio)")
     ap.add_argument("--config", help="tools.json mapping MCP tools to Sentinel actions (unmapped => blocked)")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--task-id", help="default task context for every call (caller-provided, not verified)")
     ap.add_argument("server", nargs=argparse.REMAINDER, help="-- <MCP server command>")
     a = ap.parse_args(argv)
     cmd = a.server[1:] if a.server[:1] == ["--"] else a.server
@@ -268,7 +285,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.stdout.write(json.dumps(msg, separators=(",", ":")) + "\n")
             sys.stdout.flush()
 
-    proxy = McpProxy(SentinelClient(os.getenv("QYRIX_URL"), token), cmd, load_mapping(a.config), write, a.timeout).start()
+    proxy = McpProxy(SentinelClient(os.getenv("QYRIX_URL"), token), cmd, load_mapping(a.config), write, a.timeout,
+                     task_id=a.task_id).start()
     try:
         for line in sys.stdin:
             line = line.strip()
