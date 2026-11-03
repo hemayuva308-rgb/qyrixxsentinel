@@ -10,6 +10,7 @@ Configuration (all required unless noted; nothing is read from the backend):
   OBSERVER_CANARIES=1 (+ OBSERVER_CANARY_HTTP_PORT [loopback only], OBSERVER_CANARY_DIR, OBSERVER_CANARY_CREDENTIALS_FILE,
     OBSERVER_CANARY_P2_LIVE=1 + OBSERVER_CANARY_BACKEND_URL - live P2 is OFF by default)   (optional, C3)
   OBSERVER_READ_TOKENS_FILE  (optional, C4) tenant-scoped READ-ONLY keys for GET /v1/reconciliations, stored as SHA-256
+  OBSERVER_TLS_CERT_FILE, OBSERVER_TLS_KEY_FILE, OBSERVER_TLS_CLIENT_CA_FILE   mTLS (REQUIRED for any non-loopback bind)
   OBSERVER_BIND (default 127.0.0.1; the C5 deployment sets the container address), OBSERVER_PORT (default 9000)
 
 Start-up is fail closed: manifest signature, manifest rollback, runtime account privileges, schema version and the full
@@ -101,7 +102,10 @@ def main() -> int:
         read_tokens = json.load(open(os.environ["OBSERVER_READ_TOKENS_FILE"])).get("tokens", [])
     threading.Thread(target=monitor, args=(obs, obs.cfg.H, canaries), name="observer-monitor", daemon=True).start()
     import uvicorn
-    uvicorn.run(create_app(obs, tok, canaries, read_tokens), host=os.getenv("OBSERVER_BIND", "127.0.0.1"), port=int(os.getenv("OBSERVER_PORT", "9000")))
+    from observer.tls import server_settings
+    host = os.getenv("OBSERVER_BIND", "127.0.0.1")
+    tls = server_settings(os.environ, host)           # F2: non-loopback => mTLS or refuse to start
+    uvicorn.run(create_app(obs, tok, canaries, read_tokens), host=host, port=int(os.getenv("OBSERVER_PORT", "9000")), **tls)
     return 0
 
 

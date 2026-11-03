@@ -156,11 +156,10 @@ def observer_epoch_send(path: str, http=None) -> dict:
     from app.observer_feed import canonical
     env = json.load(open(path))
     if http is None:
-        import httpx
-        url = os.getenv("QYRIX_OBSERVER_URL", "").strip().rstrip("/")
-        if not url:
+        if not os.getenv("QYRIX_OBSERVER_URL", "").strip():
             raise SystemExit("QYRIX_OBSERVER_URL not set")
-        http = httpx.Client(base_url=url, timeout=10, trust_env=False)
+        from app.observer_feed import observer_client
+        http = observer_client(timeout=10)                # F2: mTLS (or loopback http)
     r = http.post("/v1/events", content=canonical(env), headers={"Content-Type": "application/json"})
     try:
         body = r.json()

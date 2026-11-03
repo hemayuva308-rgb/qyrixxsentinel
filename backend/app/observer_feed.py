@@ -31,6 +31,37 @@ def canonical(o: Any) -> bytes:
     return json.dumps(o, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
 
 
+def observer_client(base_url: Optional[str] = None, timeout: float = 5.0):
+    """httpx client to the observer (audit F2). https:// => pinned CA (QYRIX_OBSERVER_CA_FILE) + client certificate
+    (QYRIX_OBSERVER_CLIENT_CERT_FILE / _KEY_FILE): mutual TLS. Plain http:// is refused unless the host is loopback.
+    Raises RuntimeError on any misconfiguration (callers fail closed: nothing is sent)."""
+    import ipaddress
+    import ssl
+    from urllib.parse import urlsplit
+    import httpx
+    url = (base_url or os.getenv("QYRIX_OBSERVER_URL", "")).strip().rstrip("/")
+    p = urlsplit(url)
+    host = p.hostname or ""
+    try:
+        is_lo = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        is_lo = host == "localhost"
+    if p.scheme == "http":
+        if not is_lo:
+            raise RuntimeError("plain HTTP to a non-loopback observer is refused (use https:// with mTLS)")
+        return httpx.Client(base_url=url, timeout=timeout, trust_env=False)
+    if p.scheme != "https":
+        raise RuntimeError("QYRIX_OBSERVER_URL must be https:// (or http:// on loopback)")
+    ca, cert, key = (os.getenv("QYRIX_OBSERVER_CA_FILE", ""), os.getenv("QYRIX_OBSERVER_CLIENT_CERT_FILE", ""),
+                     os.getenv("QYRIX_OBSERVER_CLIENT_KEY_FILE", ""))
+    if not (ca and cert and key):
+        raise RuntimeError("mTLS to the observer needs QYRIX_OBSERVER_CA_FILE, _CLIENT_CERT_FILE and _CLIENT_KEY_FILE")
+    ctx = ssl.create_default_context(cafile=ca)       # verifies the observer's certificate and hostname
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(cert, key)
+    return httpx.Client(base_url=url, timeout=timeout, trust_env=False, verify=ctx)
+
+
 def enabled() -> bool:
     return bool(os.getenv("QYRIX_OBSERVER_URL", "").strip())
 
@@ -176,8 +207,7 @@ class Publisher:
         self.url = (url or os.getenv("QYRIX_OBSERVER_URL", "")).rstrip("/")
         self.hb_seconds = hb_seconds or heartbeat_seconds()
         if http is None:
-            import httpx
-            http = httpx.Client(base_url=self.url, timeout=5.0, trust_env=False)
+            http = observer_client(self.url)             # F2: mTLS (or loopback http); misconfig => raise
         self.http = http
         self._lock_conn = None
         self.backoff, self.next_try, self.last_hb = 0.0, 0.0, 0.0
@@ -355,8 +385,7 @@ class AdapterReporter:
         self.url, self.key, self.integration, self.tenant = url.rstrip("/"), key, integration, tenant
         self.producer = "adapter:" + integration
         if http is None:
-            import httpx
-            http = httpx.Client(base_url=self.url, timeout=3.0, trust_env=False)
+            http = observer_client(self.url, timeout=3.0)  # F2
         self.http = http
         self.stats = {"sent": 0, "failed": 0}
 
@@ -396,8 +425,7 @@ _REC_FIELDS = ("recon_id", "run_id", "version", "result", "reasons", "evidence_l
 
 
 def _read_http():
-    import httpx
-    return httpx.Client(base_url=os.getenv("QYRIX_OBSERVER_URL", "").strip().rstrip("/"), timeout=3.0, trust_env=False)
+    return observer_client(timeout=3.0)                  # F2: mTLS (or loopback http)
 
 
 def fetch_reconciliations(tenant: str, http=None) -> Dict:
