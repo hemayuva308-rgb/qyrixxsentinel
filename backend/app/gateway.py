@@ -541,7 +541,11 @@ def _binding_refusal(ctx: "GateContext", g: Dict, agent_id: Optional[str], task_
         return "GRANT_AGENT_MISMATCH"
     if g.get("task_id") != task_id:
         return "GRANT_TASK_MISMATCH"
-    if g.get("policy_version") != policy_version(ctx):
+    try:
+        current = policy_version(ctx)
+    except Exception:
+        return "POLICY_UNAVAILABLE"                          # cannot prove the policy is unchanged => refuse
+    if g.get("policy_version") != current:
         return "GRANT_POLICY_CHANGED"
     return None
 
@@ -556,7 +560,7 @@ def _task_from(body: Dict) -> Optional[str]:
 
 
 _REFUSAL_STATUS = {"GRANT_REPLAY": 409, "GRANT_EXPIRED": 409, "GRANT_REVOKED": 409, "GRANT_POLICY_CHANGED": 409,
-                   "PERSISTENCE_UNAVAILABLE": 503}
+                   "PERSISTENCE_UNAVAILABLE": 503, "POLICY_UNAVAILABLE": 503}
 
 
 def params_of(a: Action) -> Dict:
@@ -671,7 +675,10 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None, agent_id: Optional[st
         params = params_of(a)
         digest = params_digest(params)
         grant = None
-        pv = policy_version(ctx)
+        try:
+            pv = policy_version(ctx)
+        except Exception:                                    # policy source unavailable: fail closed, still recorded
+            pv, verdict, rules = None, "BLOCK", ["R0_FAIL_CLOSED"]
         ev = {"id": eval_id, "verdict": verdict, "rules": rules, "params": params, "digest": digest,
               "hop": hop, "host": host, "redirect_location": None, "ts": time.time(),
               "agent_id": agent_id, "task_id": a.task_id, "policy_version": pv, "correlation_id": a.correlation_id or eval_id}

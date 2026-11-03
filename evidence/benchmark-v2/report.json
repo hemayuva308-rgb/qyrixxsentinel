@@ -1,0 +1,384 @@
+{
+ "report_version": "qyrix-benchmark/2.0",
+ "generated_at": "2026-11-03T05:45:11.529976+00:00",
+ "environment": {
+  "generator_version": "redteam-gen/1.1",
+  "gate_engine": "gate-rules/2026-11-03.2",
+  "python": "3.13.18",
+  "platform": "Linux-6.18.44-fc-v230-x86_64-with-glibc2.39",
+  "commit": "b2d9e48",
+  "approved_hosts": [
+   "api.partner.example.com",
+   "docs.partner.example.com"
+  ],
+  "benchmark_version": "qyrix-benchmark/2.0",
+  "isolated_policy_version": "37242fb53180f033367a3399ec927af8d548da07bc1c96f0b7f50563a6de8c66",
+  "template_seed": 7,
+  "template_per_category": 7,
+  "prompt_version": "redteam-prompt/1.0",
+  "model_cases": "none (no reviewed model output in this release)"
+ },
+ "corpus": {
+  "template": {
+   "cases": 120,
+   "file": "template.cases.jsonl",
+   "sha256": "4161cf4d5ac88938ff6dc1912279f01b45dd49ae5ff77a67c825de3f18e36ebd"
+  },
+  "human": {
+   "cases": 10,
+   "file": "human.cases.jsonl",
+   "sha256": "9016d6ee8c93f7d378e6a22513ecb57267554d0ffd1891ae3e104728d348ad26"
+  },
+  "model": {
+   "cases": 0,
+   "file": "model.cases.jsonl",
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+ },
+ "repeats": 5,
+ "wall_seconds": 0.21,
+ "reproducibility": {
+  "result_digests": [
+   "582c48b807f569ecfc5480182a08585720e4301633695644ccadb990cd24b271",
+   "582c48b807f569ecfc5480182a08585720e4301633695644ccadb990cd24b271",
+   "582c48b807f569ecfc5480182a08585720e4301633695644ccadb990cd24b271",
+   "582c48b807f569ecfc5480182a08585720e4301633695644ccadb990cd24b271",
+   "582c48b807f569ecfc5480182a08585720e4301633695644ccadb990cd24b271"
+  ],
+  "identical_across_repeats": true,
+  "separate_run_digest": "582c48b807f569ecfc5480182a08585720e4301633695644ccadb990cd24b271",
+  "identical_across_runs": true
+ },
+ "overall": {
+  "cases": 130,
+  "attack_cases": 118,
+  "safe_controls": 12,
+  "attack_prevention_rate": 100.0,
+  "false_negative_rate": 0.0,
+  "false_positive_rate": 0.0,
+  "rule_mismatches": 0,
+  "expectation_reviews": 0,
+  "errors": 0,
+  "egress_calls": 0,
+  "groups": {
+   "prompt_injection": {
+    "cases": 28,
+    "stopped": 28,
+    "rate": 100.0
+   },
+   "unauthorized_tool_execution": {
+    "cases": 12,
+    "stopped": 12,
+    "rate": 100.0
+   },
+   "replay": {
+    "cases": 4,
+    "stopped": 4,
+    "rate": 100.0
+   },
+   "cross_agent": {
+    "cases": 5,
+    "stopped": 5,
+    "rate": 100.0
+   },
+   "cross_task": {
+    "cases": 7,
+    "stopped": 7,
+    "rate": 100.0
+   },
+   "policy_version": {
+    "cases": 4,
+    "stopped": 4,
+    "rate": 100.0
+   },
+   "tainted_state_change": {
+    "cases": 8,
+    "stopped": 8,
+    "rate": 100.0
+   },
+   "unicode_hostname_deception": {
+    "cases": 11,
+    "stopped": 11,
+    "rate": 100.0
+   },
+   "approval_misuse": {
+    "cases": 7,
+    "stopped": 7,
+    "rate": 100.0
+   },
+   "fail_closed_environment": {
+    "cases": 7,
+    "stopped": 7,
+    "rate": 100.0
+   },
+   "ssrf_and_destination": {
+    "cases": 7,
+    "stopped": 7,
+    "rate": 100.0
+   },
+   "data_exfiltration": {
+    "cases": 7,
+    "stopped": 7,
+    "rate": 100.0
+   },
+   "argument_tampering": {
+    "cases": 7,
+    "stopped": 7,
+    "rate": 100.0
+   }
+  },
+  "rules_observed": [
+   "GRANT_AGENT_MISMATCH",
+   "GRANT_POLICY_CHANGED",
+   "GRANT_REPLAY",
+   "GRANT_TASK_MISMATCH",
+   "LINEAGE_CYCLE_DETECTED",
+   "PARAMS_DIGEST_MISMATCH",
+   "R0_FAIL_CLOSED",
+   "R10_PATH_NOT_ALLOWED",
+   "R11_PROOF_DEGRADED",
+   "R12_SECRET_TO_EXTERNAL",
+   "R13_LINEAGE_MISSING",
+   "R14_APPROVAL_EXPIRED",
+   "R15_REDIRECT_LIMIT",
+   "R16_REDIRECT_INVALID",
+   "R17_PERSISTENCE_UNAVAILABLE",
+   "R18_TASK_ID_REQUIRED",
+   "R19_UNTRUSTED_STATE_CHANGE",
+   "R1_DEST_NOT_APPROVED",
+   "R20_DECEPTIVE_HOSTNAME",
+   "R2_SECRET_EXFIL",
+   "R3_UNTRUSTED_LINEAGE",
+   "R4_APPROVAL_SCOPE_MISMATCH",
+   "R5_COMMAND_INJECTION",
+   "R6_APPROVAL_REPLAY",
+   "R7_APPROVAL_REQUIRED",
+   "R8_UNSUPPORTED_TOOL",
+   "R9_SSRF_BLOCKED"
+  ],
+  "gate_rules_not_observed": [],
+  "by_category": {
+   "approval_misuse": {
+    "cases": 7,
+    "pass": 7
+   },
+   "argument_tampering": {
+    "cases": 7,
+    "pass": 7
+   },
+   "cross_task_grant_reuse": {
+    "cases": 7,
+    "pass": 7
+   },
+   "delayed_multistep": {
+    "cases": 7,
+    "pass": 7
+   },
+   "delegation_abuse": {
+    "cases": 5,
+    "pass": 5
+   },
+   "direct_injection": {
+    "cases": 6,
+    "pass": 6
+   },
+   "encoded_obfuscated": {
+    "cases": 7,
+    "pass": 7
+   },
+   "fail_closed_environment": {
+    "cases": 7,
+    "pass": 7
+   },
+   "gate_rule_bypass": {
+    "cases": 5,
+    "pass": 5
+   },
+   "indirect_injection": {
+    "cases": 8,
+    "pass": 8
+   },
+   "mcp_tool_manipulation": {
+    "cases": 4,
+    "pass": 4
+   },
+   "policy_change": {
+    "cases": 7,
+    "pass": 7
+   },
+   "redirect_abuse": {
+    "cases": 7,
+    "pass": 7
+   },
+   "safe_control": {
+    "cases": 12,
+    "pass": 12
+   },
+   "ssrf_destination": {
+    "cases": 7,
+    "pass": 7
+   },
+   "tool_misuse": {
+    "cases": 6,
+    "pass": 6
+   },
+   "unauthorized_data_transfer": {
+    "cases": 7,
+    "pass": 7
+   },
+   "unauthorized_file_access": {
+    "cases": 3,
+    "pass": 3
+   },
+   "unicode_manipulation": {
+    "cases": 11,
+    "pass": 11
+   }
+  }
+ },
+ "by_tier": {
+  "template": {
+   "cases": 120,
+   "attack_cases": 113,
+   "safe_controls": 7,
+   "attack_prevention_rate": 100.0,
+   "false_negative_rate": 0.0,
+   "false_positive_rate": 0.0,
+   "errors": 0
+  },
+  "human": {
+   "cases": 10,
+   "attack_cases": 5,
+   "safe_controls": 5,
+   "attack_prevention_rate": 100.0,
+   "false_negative_rate": 0.0,
+   "false_positive_rate": 0.0,
+   "errors": 0
+  },
+  "model": {
+   "cases": 0,
+   "attack_cases": 0,
+   "safe_controls": 0,
+   "attack_prevention_rate": null,
+   "false_negative_rate": null,
+   "false_positive_rate": null,
+   "errors": 0
+  }
+ },
+ "latency_ms": {
+  "samples": 650,
+  "p50": 0.189,
+  "p95": 0.326,
+  "p99": 0.729,
+  "note": "in-process Gate evaluation only (no network, no persistence); machine-dependent"
+ },
+ "system_checks": {
+  "proof_tamper": [
+   {
+    "check": "proof_tamper:modified_verdict",
+    "expected_detected": true,
+    "detected": true,
+    "pass": true,
+    "note": null
+   },
+   {
+    "check": "proof_tamper:deleted_middle_record",
+    "expected_detected": true,
+    "detected": true,
+    "pass": true,
+    "note": null
+   },
+   {
+    "check": "proof_tamper:reordered_records",
+    "expected_detected": true,
+    "detected": true,
+    "pass": true,
+    "note": null
+   },
+   {
+    "check": "proof_tamper:modified_hash",
+    "expected_detected": true,
+    "detected": true,
+    "pass": true,
+    "note": null
+   },
+   {
+    "check": "proof_tamper:truncated_tail",
+    "expected_detected": false,
+    "detected": false,
+    "pass": true,
+    "note": "hash chain alone cannot detect tail truncation (state witness / anchoring required)"
+   },
+   {
+    "check": "proof_tamper:untampered_chain_valid",
+    "expected_detected": false,
+    "detected": false,
+    "pass": true,
+    "note": null
+   }
+  ],
+  "proof_tamper_detection_rate": 100.0,
+  "cev": [
+   {
+    "check": "cev:honest_fixture:http",
+    "expected": "ENFORCEMENT_VERIFIED",
+    "result": "ENFORCEMENT_VERIFIED",
+    "pass": true
+   },
+   {
+    "check": "cev:broken_fixture:http",
+    "expected": "BYPASS_DETECTED",
+    "result": "BYPASS_DETECTED",
+    "pass": true
+   },
+   {
+    "check": "cev:honest_fixture:file",
+    "expected": "ENFORCEMENT_VERIFIED",
+    "result": "ENFORCEMENT_VERIFIED",
+    "pass": true
+   },
+   {
+    "check": "cev:broken_fixture:file",
+    "expected": "BYPASS_DETECTED",
+    "result": "BYPASS_DETECTED",
+    "pass": true
+   }
+  ],
+  "cev_pass_rate": 100.0,
+  "cev_inconclusive_rate": 0.0,
+  "cross_platform_consistency": {
+   "pairs": 27,
+   "consistent": 27,
+   "rate": 100.0,
+   "inconsistent": []
+  }
+ },
+ "comparison": {
+  "v1_legacy": {
+   "cases": 10,
+   "attacks": 7,
+   "attacks_blocked": 7,
+   "safe": 3,
+   "safe_allowed": 3,
+   "safe_blocked": 0
+  },
+  "phase_a_template_v1": {
+   "cases": 40,
+   "attack_cases": 37,
+   "safe_cases": 3,
+   "attacks_stopped": 37,
+   "false_negatives": 0,
+   "false_positives": 0,
+   "egress_calls": 0
+  }
+ },
+ "failures": [],
+ "unsupported": [
+  "Public benchmarks (AgentDojo: MIT, needs a live LLM agent; InjecAgent: no licence found) - not run",
+  "Live model-generated cases - none (no provider credentials)",
+  "Whole-script homograph detection (UTS #39 confusables) - not implemented; such hosts never match ASCII allowlists",
+  "Real egress, real persistence/PostgreSQL behaviour and multi-process races - covered by unit/integration tests, not this benchmark",
+  "Proof tail truncation - not detectable by the hash chain alone (state witness / anchoring cover it)"
+ ],
+ "disclaimer": "Synthetic, isolated corpus written for this project. Results describe this corpus only and are not a measure of general or real-world security."
+}

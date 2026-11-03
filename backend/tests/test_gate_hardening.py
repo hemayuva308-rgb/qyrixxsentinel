@@ -210,3 +210,30 @@ def test_whole_script_homograph_is_a_valid_idn_but_never_matches_an_ascii_allowl
     assert why is None and host.startswith("xn--")
     c = netguard.check_http_dest("https://%s/" % homograph, ("apple.example.com",))
     assert not c.ok and c.reason == "NOT_APPROVED" and c.host == host
+
+
+# ================= benchmark-v2 finding: policy source failure must fail closed AND be recorded =================
+def _broken_allowlist():
+    raise RuntimeError("allowlist store unavailable")
+
+
+def test_policy_source_failure_at_decision_time_is_a_recorded_r0_block(monkeypatch):
+    before = len(g.PROD.chain)
+    monkeypatch.setattr(g.PROD, "approved", _broken_allowlist)
+    r = ev(tool="http", method="GET", dest=APPROVED_URL)               # used to raise (500, no decision recorded)
+    assert r["verdict"] == "BLOCK" and r["rules"] == ["R0_FAIL_CLOSED"] and r["grant_id"] is None
+    assert len(g.PROD.chain) == before + 1 and r["proof"]["verdict"] == "BLOCK"
+
+
+@pytest.mark.parametrize("path", ["/api/v1/tools/redeem", "/api/v1/tools/execute"])
+def test_policy_source_failure_at_grant_use_refuses(path, monkeypatch):
+    r = ev(tool="http", method="GET", dest=APPROVED_URL)
+    assert r["verdict"] == "ALLOW"
+    monkeypatch.setattr(g.PROD, "approved", _broken_allowlist)
+    body = {"gate_evaluation_id": r["gate_evaluation_id"], "grant_id": r["grant_id"]}
+    if path.endswith("redeem"):
+        body["params_digest"] = r["params_digest"]
+    x = agent.post(path, json=body)
+    assert x.status_code == 503 and x.json()["detail"] == "POLICY_UNAVAILABLE"
+    monkeypatch.undo()                                                # source back: the unconsumed grant still works once
+    assert agent.post(path, json=body).status_code == 200

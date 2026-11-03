@@ -47,7 +47,8 @@ Test counts are from the last full run, recorded in the commit that changed this
 | Template red-team corpus (40 cases, 16 categories) + report | Built (preliminary, synthetic) | `evidence/redteam/`; 37/37 attacks stopped, 0 false positives after R19/R20 |
 | R19 untrusted state change (approved host is not authorization) | Built (v1.5) | `tests/test_gate_hardening.py` |
 | R20 strict hostname canonicalization (IDNA2008, invisible chars, look-alike dots, mixed scripts) | Built (v1.5) | `tests/test_gate_hardening.py`; whole-script homographs not detected (shown as A-label, never match ASCII allowlist) |
-| Benchmark v2 (50–100+ cases, the 7 metrics, p50/p95/p99); AgentDojo / InjecAgent after license review | Proposed (today: 10 synthetic cases, preliminary) |
+| Benchmark v2: 130 synthetic cases in tiers (template / human / model), all 22 Gate rules, system checks, reproducible digest | Built (v1.5 P2-B, synthetic) | `app/benchmark_v2.py`, `evidence/benchmark-v2/`, `tests/test_benchmark_v2.py` |
+| Public benchmarks (AgentDojo: MIT; InjecAgent: no licence found) | Not run | `docs/BENCHMARK_V2.md` §2 (licence review); AgentDojo needs a live LLM agent |
 | Browser-based proof bundle verifier | Proposed (offline CLI verifier is built) |
 | CLI, VS Code, n8n, GitHub, browser-agent integrations; Python/TypeScript SDKs | Roadmap |
 | Agent registry, incident investigation UI, team reports | Proposed |
