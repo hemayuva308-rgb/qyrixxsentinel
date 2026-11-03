@@ -1,12 +1,19 @@
 """Observer HTTP API (design §12), C1 subset: POST /v1/events, GET /v1/health, GET /v1/status.
 /v1/canaries/run, /v1/reconciliations and /v1/evidence/export belong to C3/C4/C7 and are not exposed."""
+import asyncio
 import hashlib
 import hmac
 import threading
+import time
+from collections import OrderedDict
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
+
+MAX_INFLIGHT = 32            # audit F3: bounded concurrent ingest work (threadpool), excess => 503
+RATE_BURST, RATE_PER_S, RATE_SOURCES = 200.0, 100.0, 4096   # audit F1: per-source token bucket, bounded LRU
 
 from observer.envelope import MAX_BYTES
 from observer.ingest import Observer
@@ -18,15 +25,38 @@ def create_app(obs: Observer, operator_token: Optional[str], canaries=None, read
     app = FastAPI(title="Qyrix Observer", version="c1", docs_url=None, redoc_url=None, openapi_url=None)
     want = hashlib.sha256(operator_token.encode()).digest() if operator_token else None
     lock = threading.Lock()
+    inflight = asyncio.Semaphore(MAX_INFLIGHT)
+    buckets: "OrderedDict[str, list]" = OrderedDict()
+    counters = {"rate_limited": 0, "busy": 0}
+
+    def allow(source: str) -> bool:
+        now = time.monotonic()
+        b = buckets.pop(source, None) or [RATE_BURST, now]
+        b[0] = min(RATE_BURST, b[0] + (now - b[1]) * RATE_PER_S)
+        b[1] = now
+        ok = b[0] >= 1.0
+        if ok:
+            b[0] -= 1.0
+        buckets[source] = b
+        while len(buckets) > RATE_SOURCES:
+            buckets.popitem(last=False)
+        return ok
 
     @app.post("/v1/events")
     async def events(request: Request):
+        if not allow(request.client.host if request.client else "unknown"):
+            counters["rate_limited"] += 1                # not ledgered: a flood cannot grow evidence (F1)
+            return JSONResponse({"error": "RATE_LIMITED"}, status_code=429)
         raw = b""
         async for chunk in request.stream():           # bounded read: never buffer more than the envelope limit
             raw += chunk
             if len(raw) > MAX_BYTES:
                 return JSONResponse({"error": "OVERSIZE"}, status_code=413)
-        status, body = obs.ingest(raw)
+        if inflight.locked():
+            counters["busy"] += 1
+            return JSONResponse({"error": "OBSERVER_BUSY"}, status_code=503)
+        async with inflight:                             # F3: DB, locks and signing run in the threadpool, not the loop
+            status, body = await run_in_threadpool(obs.ingest, raw)
         return JSONResponse(body, status_code=status)
 
     @app.get("/v1/health")
@@ -45,6 +75,7 @@ def create_app(obs: Observer, operator_token: Optional[str], canaries=None, read
         operator(authorization)
         with lock:
             out = obs.status()
+        out["ingest"] = dict(counters)
         if canaries is not None:
             out["canaries"] = {"http_sensor": canaries.http.counters if canaries.http else None,
                                "file_sensor": canaries.file.counters if canaries.file else None,

@@ -29,6 +29,7 @@ from observer.feed import Config, advance, feed_conditions
 from observer.manifest import Manifest
 
 ALWAYS_RECORD = {"EVENT_CONFLICT", "PRODUCER_REGRESSION", "SCOPE_DENIED"}     # security alerts: never throttled
+MAX_THROTTLE_KEYS = 1024                                                       # audit F1: bounded memory
 HEX64 = set("0123456789abcdef")
 
 
@@ -106,6 +107,11 @@ class Observer:
         except DbError:
             self._count("OBSERVER_DB_UNAVAILABLE")
             return 503, {"error": "OBSERVER_DB_UNAVAILABLE"}
+        except (ValueError, TypeError, OverflowError, RecursionError, AttributeError, KeyError):
+            # audit F7: any malformed value that slipped past the structural checks is a refusal, never a 500
+            self._count("MALFORMED")
+            self._record_refusal(Refused("MALFORMED", 400, "unparseable value"), None, now)
+            return 400, {"error": "MALFORMED"}
 
     def _count(self, code: str) -> None:
         self.counters[code] = self.counters.get(code, 0) + 1
@@ -121,6 +127,7 @@ class Observer:
             raise Refused("SIGNATURE_INVALID", 401, "key not listed for producer or not valid now")
         if not crypto.verify(key.public, env["sig"], signed_bytes(env)):
             raise Refused("SIGNATURE_INVALID", 401)
+        env["_authenticated"] = True                     # from here on, refusals concern a verified producer (F1)
         if env["type"] not in key.scopes:
             raise Refused("SCOPE_DENIED", 403, "%s not in key scope" % env["type"])
         if env["tenant"] is not None and not p.allows_tenant(env["tenant"]):
@@ -138,21 +145,31 @@ class Observer:
             raise Refused("CLOCK_SKEW", 400)
 
     def _record_refusal(self, r: Refused, env: Optional[Dict], now: float) -> None:
-        """Refusals go to the ledger; repeated identical ones (same code + producer) at most once per 60 s, except
-        security alerts. Unauthenticated content is never stored - only codes and the claimed producer id."""
-        pid = (env or {}).get("producer_id")
-        pid = pid[:128] if isinstance(pid, str) else None
+        """Refusals go to the ledger, throttled to one per 60 s per key (security alerts are never throttled).
+        Audit F1: for UNAUTHENTICATED input (no verified signature yet) the key is the code alone and NOTHING the sender
+        chose is stored (no claimed producer id, tenant or event id) - varying those cannot multiply ledger rows.
+        Authenticated keys are (code, producer) and therefore bounded by the manifest. The map itself is bounded."""
+        authenticated = bool((env or {}).get("_authenticated"))
+        pid = env["producer_id"] if authenticated else None
         if r.code not in ALWAYS_RECORD:
             k = (r.code, pid or "")
             with self._tlock:
-                if now - self._throttle.get(k, 0) < 60:
+                if now - self._throttle.get(k, -1e18) < 60:
+                    self._count("REFUSAL_THROTTLED")
                     return
+                if len(self._throttle) >= MAX_THROTTLE_KEYS:
+                    for kk in [kk for kk, t in self._throttle.items() if now - t >= 60]:
+                        del self._throttle[kk]
+                    if len(self._throttle) >= MAX_THROTTLE_KEYS:
+                        self._count("REFUSAL_THROTTLED")
+                        return
                 self._throttle[k] = now
+        e = env if authenticated else {}
         try:
             self.db.run(lambda cur: ledger.append(
                 cur, self.signer, now, "alert" if r.code in ALWAYS_RECORD else "refusal", r.code, producer_id=pid,
-                tenant_id=(env or {}).get("tenant"), ref=(env or {}).get("event_id"),
-                detail={"type": (env or {}).get("type"), "detail": r.detail}))
+                tenant_id=e.get("tenant"), ref=e.get("event_id"),
+                detail={"type": e.get("type"), "detail": r.detail, "authenticated": authenticated}))
         except (DbError, ledger.LedgerError):
             pass
 

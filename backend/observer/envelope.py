@@ -1,6 +1,7 @@
 """Event envelope (design §12): canonical JSON, sorted keys, UTF-8, at most 64 KiB, Ed25519 over canonical(envelope
 without sig). Structural validation only; authorization (producer, key, scope, tenant) is in observer/ingest.py."""
 import json
+import math
 import re
 import uuid
 from typing import Dict, Tuple
@@ -26,6 +27,17 @@ class Refused(Exception):
         self.code, self.status, self.detail = code, status, detail[:200]
 
 
+def _no_constant(name):
+    raise ValueError("non-finite number")           # NaN / Infinity / -Infinity are not JSON (audit F7)
+
+
+def _finite(s: str) -> float:
+    f = float(s)
+    if not math.isfinite(f):                         # e.g. 1e400 parses to inf
+        raise ValueError("non-finite number")
+    return f
+
+
 def _int(v, lo: int) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and lo <= v < 2 ** 63
 
@@ -34,8 +46,8 @@ def parse(raw: bytes) -> Dict:
     if len(raw) > MAX_BYTES:
         raise Refused("OVERSIZE", 413)
     try:
-        env = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+        env = json.loads(raw.decode("utf-8"), parse_constant=_no_constant, parse_float=_finite)
+    except (UnicodeDecodeError, ValueError, RecursionError):   # incl. >4300-digit integers and absurd nesting
         raise Refused("MALFORMED", 400, "not UTF-8 JSON") from None
     if not isinstance(env, dict) or set(env) != FIELDS:
         raise Refused("MALFORMED", 400, "envelope fields")
