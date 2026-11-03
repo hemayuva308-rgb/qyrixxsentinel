@@ -10,7 +10,7 @@ one contract:
                           integration executes it itself after redeeming the single-use grant
                           (POST /api/v1/tools/redeem with the exact params_digest it will execute).
   3. verify     Continuous Enforcement Verification (app/cev.py) sends must-block canaries through the integration and
-                checks an independent observer for side effects. The integration's own report is never trusted.
+                checks the CEV observer (separate from the Gate decision path; in-process in v1.5) for side effects. The integration's own report is never trusted.
 
 Each integration DECLARES its capabilities (what it can genuinely enforce and what CEV can observe). Status values are
 deliberately conservative: BUILT = implemented AND covered by automated tests in this repository; TEST_FIXTURE =

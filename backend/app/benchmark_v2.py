@@ -69,6 +69,9 @@ def build(out_dir: str) -> Dict:
                            "approved")
     for c in hum:
         c.reviewer = hsrc["reviewer"]
+    dup = sorted({c.test_id for c in tpl} & {c.test_id for c in hum})
+    if dup:
+        raise SystemExit("cases present in more than one tier (each case must belong to exactly one): %s" % dup)
     if any(r["reasons"] != ["DUPLICATE"] for r in rej_t + rej_h):
         raise SystemExit("corpus build rejected cases: %s" % [r for r in rej_t + rej_h if r["reasons"] != ["DUPLICATE"]])
     rt.save_cases(os.path.join(out_dir, "template.cases.jsonl"), tpl)
@@ -78,6 +81,26 @@ def build(out_dir: str) -> Dict:
         open(model, "w").close()                         # tier exists, deliberately empty (no reviewed model cases)
     return {"template": len(tpl), "template_duplicates_dropped": len(rej_t), "human": len(hum),
             "model": sum(1 for _ in open(model) if _.strip())}
+
+
+def corpus_totals(corpus_dir: str) -> Dict:
+    """Counted directly from the corpus files (raw JSON lines), independent of the runner. Every case has exactly one
+    primary `category` (schema-enforced); `safe_control` cases are the false-positive controls, all others are attacks."""
+    out, total = {}, {"cases": 0, "attack_cases": 0, "safe_controls": 0}
+    for t in TIERS:
+        p = os.path.join(corpus_dir, "%s.cases.jsonl" % t)
+        rows = [json.loads(l) for l in open(p) if l.strip()] if os.path.exists(p) else []
+        if t == "model":
+            rows = [r for r in rows if r.get("repro", {}).get("generator") == "llama"]
+        cats: Dict[str, int] = {}
+        for r in rows:
+            cats[r["category"]] = cats.get(r["category"], 0) + 1
+        safe = cats.get("safe_control", 0)
+        out[t] = {"cases": len(rows), "attack_cases": len(rows) - safe, "safe_controls": safe, "by_category": dict(sorted(cats.items()))}
+        for k in total:
+            total[k] += out[t][k]
+    out["overall"] = total
+    return out
 
 
 def load_tiers(corpus_dir: str) -> Dict[str, List[rt.RedTeamCase]]:
@@ -121,7 +144,19 @@ def proof_tamper_checks() -> List[Dict]:
         expected = name != "truncated_tail"
         out.append({"check": "proof_tamper:" + name, "expected_detected": expected, "detected": detected,
                     "pass": detected == expected,
-                    "note": "hash chain alone cannot detect tail truncation (state witness / anchoring required)" if not expected else None})
+                    "note": "a bare hash chain cannot detect tail truncation; the state witness and DB mirror detect it in durable "
+                            "mode only (not active in this benchmark)" if not expected else None})
+    # Structural anchor coverage (app/proof.evaluate_anchors). A real anchor is an RFC 3161 token stored OUTSIDE the
+    # chain; its token verification is tested in tests/test_anchor.py against a local TSA. Here only coverage is shown:
+    # truncation below an anchored record is detected; records after the latest anchor are NOT covered.
+    anchor = [{"id": "bench-anchor", "n": 4, "head_hash": base[3]["hash"]}]
+    below = copy.deepcopy(base)[:3]
+    after = copy.deepcopy(base)[:4]
+    for name, chain, want in (("truncated_below_anchor", below, True), ("truncated_after_latest_anchor", after, False)):
+        detected = proof.evaluate_anchors(chain, anchor).get("anchor_status") == "ANCHOR_MISMATCH"
+        out.append({"check": "proof_anchor:" + name, "expected_detected": want, "detected": detected, "pass": detected == want,
+                    "note": "structural coverage only; anchoring is optional and off unless a TSA is configured"
+                    if want else "records after the latest anchor are not covered by anchoring"})
     out.append({"check": "proof_tamper:untampered_chain_valid", "expected_detected": False,
                 "detected": not proof.verify_records(base)["valid"], "pass": proof.verify_records(base)["valid"], "note": None})
     return out
@@ -205,12 +240,40 @@ def metrics(rows: List[Dict], cases: Dict[str, rt.RedTeamCase]) -> Dict:
             "rule_mismatches": sum(r["status"] == "RULE_MISMATCH" for r in rows),
             "expectation_reviews": sum(r["status"] == "EXPECTATION_REVIEW" for r in rows),
             "errors": sum(r["status"].startswith("ERROR") for r in rows), "egress_calls": sum(r["egress_calls"] for r in rows),
-            "groups": groups, "rules_observed": sorted(observed),
+            "attack_categories": {c: {"cases": sum(r["category"] == c for r in att), "stopped": sum(r["category"] == c and stopped(r) for r in att)}
+                                  for c in sorted({r["category"] for r in att})},
+            "cross_cutting_views": groups,
+            "cross_cutting_note": "Views overlap and are not exhaustive: a case may belong to several views or none, so view "
+                                  "counts do not sum to the attack total. attack_categories (one primary category per case) does.",
+            "rules_observed": sorted(observed),
             "gate_rules_not_observed": [x for x in rt.GATE_RULES if x not in observed],
             "by_category": {c: {"cases": sum(r["category"] == c for r in rows),
                                 "pass": sum(r["category"] == c and r["status"] == "PASS" for r in rows)}
                             for c in sorted({r["category"] for r in rows})},
             "failures": [r for r in rows if r["status"] != "PASS"]}
+
+
+def config_for_digest(corpus_dir: str) -> Dict:
+    """Configuration that determines results. Deliberately excludes the git commit, timestamps and repeat count."""
+    from app import gateway as g
+    return {"benchmark_version": BENCHMARK_VERSION, "gate_engine": g.POLICY_ENGINE_VERSION, "isolated_policy_version": g.policy_version(_ctx()),
+            "generator_version": rt.GENERATOR_VERSION, "prompt_version": rt.PROMPT_VERSION, "template_seed": TEMPLATE_SEED,
+            "template_per_category": TEMPLATE_PER_CATEGORY,
+            "corpus_sha256": {t: _sha_file(os.path.join(corpus_dir, "%s.cases.jsonl" % t)) for t in TIERS
+                              if os.path.exists(os.path.join(corpus_dir, "%s.cases.jsonl" % t))}}
+
+
+def full_digest(config: Dict, rows: List[Dict], system: Dict, v1: Dict) -> str:
+    """SHA-256 over configuration + every case's id/tier/category/decision/rules/enforcement/status (attacks AND safe
+    controls) + system-check outcomes + the v1 legacy results."""
+    body = {"config": config,
+            "cases": sorted([r["tier"], r["test_id"], r["category"], r["actual"]["decision"], list(r["actual"]["rules"]),
+                             r["actual"]["enforcement"], r["status"]] for r in rows),
+            "proof": [[x["check"], x["detected"], x["pass"]] for x in system["proof_tamper"]],
+            "cev": [[x["check"], x["result"], x["pass"]] for x in system["cev"]],
+            "consistency": [system["cross_platform_consistency"]["pairs"], system["cross_platform_consistency"]["consistent"]],
+            "v1": [[x["name"], x["verdict"], list(x["rules"]), x["ok"]] for x in v1["rows"]]}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
 
 
 def result_digest(rows: List[Dict]) -> str:
@@ -234,6 +297,8 @@ def run(corpus_dir: str, repeats: int = 3, phase_a_corpus: Optional[str] = None)
     prod_before = len(g.PROD.chain)
     tiers = load_tiers(corpus_dir)
     by_id = {c.test_id: c for cs in tiers.values() for c in cs}
+    if len(by_id) != sum(len(cs) for cs in tiers.values()):
+        raise RuntimeError("a case id appears more than once across tiers; totals would double-count")
     ws = tempfile.mkdtemp(prefix="qyrix-bv2-ws-")
     digests, all_rows, lat = [], [], []
     try:
@@ -263,6 +328,12 @@ def run(corpus_dir: str, repeats: int = 3, phase_a_corpus: Optional[str] = None)
         pa = rt.run_suite(rt.load_cases(phase_a_corpus))["summary"]
         phase_a = {k: pa[k] for k in ("cases", "attack_cases", "safe_cases", "attacks_stopped", "false_negatives", "false_positives", "egress_calls")}
     v1 = legacy_v1()
+    totals = corpus_totals(corpus_dir)
+    m_all = metrics(all_rows, by_id)
+    if (totals["overall"]["cases"], totals["overall"]["attack_cases"], totals["overall"]["safe_controls"]) != \
+            (m_all["cases"], m_all["attack_cases"], m_all["safe_controls"]) or \
+            sum(v["cases"] for v in m_all["attack_categories"].values()) != m_all["attack_cases"]:
+        raise RuntimeError("benchmark totals do not reconcile with the corpus files")
     if len(g.PROD.chain) != prod_before:
         raise RuntimeError("benchmark touched the production proof chain")
     cev_runs = [x for x in cevr]
@@ -272,7 +343,8 @@ def run(corpus_dir: str, repeats: int = 3, phase_a_corpus: Optional[str] = None)
                        "sha256": _sha_file(os.path.join(corpus_dir, "%s.cases.jsonl" % t)) if os.path.exists(os.path.join(corpus_dir, "%s.cases.jsonl" % t)) else None}
                    for t, cs in tiers.items()},
         "repeats": max(1, repeats), "wall_seconds": wall,
-        "reproducibility": {"result_digests": digests, "identical_across_repeats": len(set(digests)) == 1},
+        "corpus_totals": totals,
+        "reproducibility": {"case_digests_per_repeat": digests, "identical_across_repeats": len(set(digests)) == 1},
         "overall": {k: v for k, v in metrics(all_rows, by_id).items() if k != "failures"},
         "by_tier": {t: {k: v for k, v in metrics([r for r in all_rows if r["tier"] == t], by_id).items()
                         if k in ("cases", "attack_cases", "safe_controls", "attack_prevention_rate", "false_negative_rate",
@@ -287,42 +359,95 @@ def run(corpus_dir: str, repeats: int = 3, phase_a_corpus: Optional[str] = None)
             "cross_platform_consistency": consistency},
         "comparison": {"v1_legacy": {k: v1[k] for k in ("cases", "attacks", "attacks_blocked", "safe", "safe_allowed", "safe_blocked")},
                        "phase_a_template_v1": phase_a},
-        "failures": metrics(all_rows, by_id)["failures"],
+        "failures": m_all["failures"],
         "unsupported": [
             "Public benchmarks (AgentDojo: MIT, needs a live LLM agent; InjecAgent: no licence found) - not run",
             "Live model-generated cases - none (no provider credentials)",
             "Whole-script homograph detection (UTS #39 confusables) - not implemented; such hosts never match ASCII allowlists",
             "Real egress, real persistence/PostgreSQL behaviour and multi-process races - covered by unit/integration tests, not this benchmark",
-            "Proof tail truncation - not detectable by the hash chain alone (state witness / anchoring cover it)"],
+            "Proof tail truncation - not detectable by a bare hash chain; the state witness and DB mirror detect it in durable "
+            "mode only and are not exercised here (see report section 'Proof-chain truncation')",
+            "Compromise of the backend process itself - the CEV observer currently runs in that process (Phase C)"],
         "disclaimer": "Synthetic, isolated corpus written for this project. Results describe this corpus only and are not a "
                       "measure of general or real-world security.",
     }
+    report["config"] = config_for_digest(corpus_dir)
+    report["reproducibility"]["digest"] = full_digest(report["config"], all_rows, report["system_checks"], v1)
+    report["reproducibility"]["digest_covers"] = ("benchmark configuration and corpus hashes; every case id, tier, category, "
+                                                  "decision, rule codes, enforcement and status (attacks and safe controls); "
+                                                  "proof-tamper, anchor, CEV and consistency outcomes; v1 legacy results")
+    report["comparison"]["v1_legacy"]["rows"] = v1["rows"]
     return report
 
 
+TRUNCATION_STATUS = [
+    ("Bare SHA-256 hash chain", "cannot detect removal of the newest records", "this benchmark (check proof_tamper:truncated_tail)"),
+    ("State witness (HMAC high-water mark, separate volume)", "implemented: app/integrity.py; durable mode only (PostgreSQL + "
+     "witness configured), checked when persistence attaches (startup / recovery) -> PROOF_CHAIN_REGRESSED, Gate blocks",
+     "tests/test_integrity.py::test_partial_loss_truncated_chain_and_deleted_db_rows"),
+    ("PostgreSQL proof mirror cross-check", "implemented: gateway._sync_proof_mirror; durable mode only -> PROOF_MIRROR_MISMATCH",
+     "tests/test_persistence.py::test_truncated_chain_file_vs_mirror_degrades_gate"),
+    ("RFC 3161 anchoring", "implemented, optional, off by default; local TSA tested only; detects truncation below an "
+     "anchored record, does not cover records after the latest anchor", "tests/test_anchor.py, tests/test_truncation_status.py"),
+]
+CEV_SCOPE = ("The CEV observer currently runs inside the backend process (own thread and loopback socket). The CEV checks show "
+             "detection of a misbehaving adapter; they do NOT show protection against a compromise of the backend process "
+             "itself. A separate observer service is Phase C work.")
+
+
 def markdown(rep: Dict) -> str:
-    o, s = rep["overall"], rep["system_checks"]
+    o, s, t = rep["overall"], rep["system_checks"], rep["corpus_totals"]
     L = ["# Benchmark v2 report (%s)" % rep["report_version"], "", "> " + rep["disclaimer"], "",
-         "Generated %s, commit `%s`, engine `%s`, isolated policy `%s`." % (rep["generated_at"], rep["environment"]["commit"],
-                                                                            rep["environment"]["gate_engine"], rep["environment"]["isolated_policy_version"][:16]), "",
-         "| Tier | Cases | Attack cases | Prevention | False negatives | Safe controls | False positives |", "|---|---|---|---|---|---|---|"]
-    for t, m in rep["by_tier"].items():
-        L.append("| %s | %d | %d | %s | %s | %d | %s |" % (t, m["cases"], m["attack_cases"], m["attack_prevention_rate"],
-                                                          m["false_negative_rate"], m["safe_controls"], m["false_positive_rate"]))
-    L += ["| **overall** | %d | %d | %s%% | %s%% | %d | %s%% |" % (o["cases"], o["attack_cases"], o["attack_prevention_rate"],
-                                                                   o["false_negative_rate"], o["safe_controls"], o["false_positive_rate"]), "",
-          "| Group | Cases | Stopped |", "|---|---|---|"]
-    L += ["| %s | %d | %d |" % (k, v["cases"], v["stopped"]) for k, v in o["groups"].items()]
-    L += ["", "System checks: proof tamper detection %s%% (tail truncation not detectable by hash chain, listed); CEV pass %s%%, "
-          "INCONCLUSIVE %s%%; cross-platform consistency %s/%s." % (s["proof_tamper_detection_rate"], s["cev_pass_rate"],
-                                                                  s["cev_inconclusive_rate"], s["cross_platform_consistency"]["consistent"],
-                                                                  s["cross_platform_consistency"]["pairs"]),
-          "", "Latency (ms, %d samples): p50 %s, p95 %s, p99 %s - %s." % (rep["latency_ms"]["samples"], rep["latency_ms"]["p50"],
-                                                                         rep["latency_ms"]["p95"], rep["latency_ms"]["p99"], rep["latency_ms"]["note"]),
-          "", "Reproducible: %s across %d repeats (digest `%s`)." % (rep["reproducibility"]["identical_across_repeats"], rep["repeats"],
-                                                                     rep["reproducibility"]["result_digests"][0][:16]),
+         "Generated %s, commit `%s`, engine `%s`, isolated policy `%s`, digest `%s`." % (
+             rep["generated_at"], rep["environment"]["commit"], rep["environment"]["gate_engine"],
+             rep["environment"]["isolated_policy_version"][:16], rep["reproducibility"]["digest"][:16]), "",
+         "## Totals (counted directly from the corpus files; each case has exactly one primary category)", "",
+         "| Tier | Cases | Attack cases | Attacks stopped | Safe controls | Safe controls allowed |", "|---|---|---|---|---|---|"]
+    for tier in TIERS:
+        m, c = rep["by_tier"][tier], t[tier]
+        stop = round((m["attack_prevention_rate"] or 0) * m["attack_cases"] / 100)
+        allow = m["safe_controls"] - round((m["false_positive_rate"] or 0) * m["safe_controls"] / 100)
+        L.append("| %s | %d | %d | %d | %d | %d |" % (tier, c["cases"], c["attack_cases"], stop, c["safe_controls"], allow))
+    stop = sum(v["stopped"] for v in o["attack_categories"].values())
+    L += ["| **overall** | **%d** | **%d** | **%d** | **%d** | **%d** |" % (t["overall"]["cases"], t["overall"]["attack_cases"], stop,
+          t["overall"]["safe_controls"], t["overall"]["safe_controls"] - round((o["false_positive_rate"] or 0) * o["safe_controls"] / 100)), "",
+          "Rates: attack prevention %s%%, false negatives %s%%, false positives %s%% (safe controls only)." % (
+              o["attack_prevention_rate"], o["false_negative_rate"], o["false_positive_rate"]), "",
+          "### Attacks by primary category (sums to %d)" % o["attack_cases"], "", "| Category | Cases | Stopped |", "|---|---|---|"]
+    L += ["| %s | %d | %d |" % (k, v["cases"], v["stopped"]) for k, v in o["attack_categories"].items()]
+    L += ["| **total** | **%d** | **%d** |" % (sum(v["cases"] for v in o["attack_categories"].values()), stop), "",
+          "### Cross-cutting views (overlapping; do NOT sum to the total)", "", o["cross_cutting_note"], "",
+          "| View | Cases | Stopped |", "|---|---|---|"]
+    L += ["| %s | %d | %d |" % (k, v["cases"], v["stopped"]) for k, v in o["cross_cutting_views"].items()]
+    pt = [x for x in s["proof_tamper"] if x["check"].startswith("proof_tamper:") and x["expected_detected"]]
+    L += ["", "## System checks", "",
+          "- Proof tampering (modified field, deleted record, reordered records, modified hash): %d/%d detected." % (
+              sum(x["detected"] for x in pt), len(pt)),
+          "- Tail truncation with a bare hash chain: **not detected** (expected and reported). Anchor coverage: truncation "
+          "below an anchored record detected; after the latest anchor not covered.",
+          "- CEV (honest and broken fixtures, HTTP and file): %s%% as expected, %s%% INCONCLUSIVE. %s" % (
+              s["cev_pass_rate"], s["cev_inconclusive_rate"], CEV_SCOPE),
+          "- Cross-platform consistency (direct vs MCP mapping): %d/%d identical." % (
+              s["cross_platform_consistency"]["consistent"], s["cross_platform_consistency"]["pairs"]),
+          "", "## Proof-chain truncation: implementation status", "", "| Mechanism | Status | Evidence |", "|---|---|---|"]
+    L += ["| %s | %s | %s |" % x for x in TRUNCATION_STATUS]
+    L += ["", "## Latency and reproducibility", "",
+          "Latency (ms, %d samples): p50 %s, p95 %s, p99 %s - %s." % (rep["latency_ms"]["samples"], rep["latency_ms"]["p50"],
+                                                                    rep["latency_ms"]["p95"], rep["latency_ms"]["p99"], rep["latency_ms"]["note"]),
+          "", "Digest `%s` covers %s. Identical across %d repeats: %s; across a separate run: %s." % (
+              rep["reproducibility"]["digest"], rep["reproducibility"]["digest_covers"], rep["repeats"],
+              rep["reproducibility"]["identical_across_repeats"], rep["reproducibility"].get("identical_across_runs", "not checked")),
           "", "Rules observed: %d of %d Gate rules; not observed: %s." % (len([r for r in o["rules_observed"] if r in rt.GATE_RULES]),
                                                                         len(rt.GATE_RULES), ", ".join(o["gate_rules_not_observed"]) or "none"),
+          "", "## Comparison", "", "| Benchmark | Cases | Attacks stopped | Safe allowed |", "|---|---|---|---|",
+          "| v1 (unchanged, isolated) | %d | %d/%d | %d/%d |" % tuple(rep["comparison"]["v1_legacy"][k] for k in
+                                                                   ("cases", "attacks_blocked", "attacks", "safe_allowed", "safe"))]
+    pa = rep["comparison"].get("phase_a_template_v1")
+    if pa:
+        L.append("| Phase A corpus (re-run) | %d | %d/%d | %d/%d |" % (pa["cases"], pa["attacks_stopped"], pa["attack_cases"],
+                                                                     pa["safe_cases"] - pa["false_positives"], pa["safe_cases"]))
+    L += ["| **v2** | %d | %d/%d | %d/%d |" % (t["overall"]["cases"], stop, o["attack_cases"],
+                                               o["safe_controls"] - round((o["false_positive_rate"] or 0) * o["safe_controls"] / 100), o["safe_controls"]),
           "", "Not covered: " + "; ".join(rep["unsupported"]) + ".", ""]
     return "\n".join(L)
 
@@ -345,8 +470,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     rep = run(a.corpus, a.repeats, a.phase_a_corpus)
     if a.check_reproducible:
         again = run(a.corpus, 1, None)
-        rep["reproducibility"]["separate_run_digest"] = again["reproducibility"]["result_digests"][0]
-        rep["reproducibility"]["identical_across_runs"] = again["reproducibility"]["result_digests"][0] == rep["reproducibility"]["result_digests"][0]
+        rep["reproducibility"]["separate_run_digest"] = again["reproducibility"]["digest"]
+        rep["reproducibility"]["identical_across_runs"] = again["reproducibility"]["digest"] == rep["reproducibility"]["digest"]
     with open(a.report, "w") as f:
         json.dump(rep, f, indent=1, ensure_ascii=True)
     with open(os.path.splitext(a.report)[0] + ".md", "w") as f:

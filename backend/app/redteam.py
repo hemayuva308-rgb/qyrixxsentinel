@@ -473,7 +473,8 @@ def template_cases(seed: int = 7, per_category: int = 3) -> Tuple[List[Dict], Di
             d["category"] = cat
             out.append(d)
     src = hashlib.sha256(json.dumps(out, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
-    return out, {"generator": "template", "seed": seed, "source_sha256": src, "created_at": _now()}
+    # fixed timestamp: template output is a pure function of (generator version, seed, per_category) -> byte-identical rebuilds
+    return out, {"generator": "template", "seed": seed, "source_sha256": src, "created_at": "2026-11-03T00:00:00Z"}
 
 
 # ---------------- Llama generator (live or replayed) ----------------

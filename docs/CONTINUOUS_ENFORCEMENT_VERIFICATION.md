@@ -1,7 +1,14 @@
 # Continuous Enforcement Verification, universal adapters and the MCP proxy (v1.5)
 
 A security decision only says what *should* happen. Continuous Enforcement Verification (CEV) checks what *did* happen,
-using evidence that comes neither from the Gate nor from the integration that was told to enforce the decision.
+using evidence that comes neither from the Gate's decision path nor from the integration that was told to enforce
+the decision.
+
+> **Independence today (v1.5): the observer runs inside the backend process.** It has its own thread and loopback
+> socket and never consults the Gate, so it catches an integration (adapter) that ignores a decision. It does **not**
+> protect against a compromise of the backend process itself: an attacker controlling that process controls the
+> observer too. No current CEV test demonstrates otherwise. A separate observer service with its own lifecycle and
+> authenticated event ingestion is planned work (Phase C).
 
 ## 1. Components (all in `backend/app/`)
 
@@ -67,7 +74,8 @@ The two adapters are **controlled test fixtures**, enabled only when `QYRIX_CEV_
 Afterwards the chain verifies. It contains both decisions, with their correlation ids, and both reconciliations.
 
 Hash-chain integrity shows the records were not altered after they were written. It does **not** by itself prove an
-event happened. That independent evidence comes from the observer, whose own limits are listed in section 7.
+event happened. That evidence comes from the observer. It is separate from the Gate's decision path, but still inside
+the backend process; its limits are listed in section 7.
 
 ## 5. Universal adapter contract (`qyrix-adapter-contract/v1`)
 
@@ -80,7 +88,8 @@ event happened. That independent evidence comes from the observer, whose own lim
      grant (`POST /api/v1/tools/redeem` with `{gate_evaluation_id, grant_id, params_digest, correlation_id, task_id}` and the
      header `X-Qyrix-Integration`) and only then executes exactly those parameters. Same agent, same task, same policy
      version, or the call is refused.
-3. **Verify:** CEV canaries through the integration, checked against the independent observer.
+3. **Verify:** CEV canaries through the integration, checked against the observer. The observer is separate from the
+   integration and the Gate's decision path; in v1.5 it runs in the backend process.
 
 `GET /api/v1/sentinel/integrations` lists every integration, its declared capabilities and its status:
 

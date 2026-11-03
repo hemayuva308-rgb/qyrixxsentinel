@@ -22,8 +22,10 @@ Neither dataset is in this repository. All v2 cases are original, written for th
 ## 3. Design
 **Tiers.** The tiers are kept separate in the corpus files and in every metric:
 - `template`: deterministic, seeded case families from `app/redteam.py`, reviewed by the template authors;
-- `human`: hand-written, reviewed cases (`benchmark/human/human-v1.cases.jsonl`), including the three Phase A
-  findings verbatim and the documented homograph limitation;
+- `human`: hand-written, reviewed cases (`backend/benchmark/human-v1.cases.json`): the documented homograph
+  limitation, a legitimate IDN, and approved-workflow false-positive controls. **Every case belongs to exactly one
+  tier.** The three Phase A findings are in the template tier only; they are also kept verbatim in
+  `tests/test_gate_hardening.py`. The build and the run both fail on any case id present in two tiers;
 - `model`: Llama-generated candidates that passed human review. **None exist in this release**: no provider
   credentials are configured, and the tier is reported as 0 cases rather than omitted;
 - `v1-legacy`: the 10 original v1 cases, run unchanged in an isolated context for comparison.
@@ -36,7 +38,9 @@ Neither dataset is in this repository. All v2 cases are original, written for th
 - `redirect`: invalid previous hop (R16), over the hop limit (R15).
 
 **System checks.** These run in isolated contexts:
-- proof-chain tampering (modified field, deleted record, reordered records), which must be detected;
+- proof-chain tampering (modified field, deleted record, reordered records, modified hash), which must be detected;
+  tail truncation, which a bare hash chain cannot detect and which is reported as such; and anchor coverage
+  (structural);
 - CEV honest and broken test fixtures on the HTTP and file channels;
 - cross-platform consistency: the same action evaluated directly and through the MCP proxy mapping must get the same
   verdict and rules.
@@ -71,53 +75,102 @@ must be identical across repeats and across separate runs; `--check-reproducible
 - cross-platform consistency;
 - latency p50/p95/p99 over all repeats (in-process Gate evaluation only, no network).
 
-## 4. Results (actual run, `evidence/benchmark-v2/report.json`, commit `b2d9e48` + this change)
+## 4. Results (regenerated from `evidence/benchmark-v2/report.json`; the tables below are copied from `report.md`)
 > Synthetic, isolated, written for this project. These numbers describe **this corpus only**. 100% here means "every
 > case we wrote was handled as we expected"; it says nothing about attacks we did not think of.
 
-| Tier | Cases | Attacks stopped | False-negative rate % | Safe controls allowed | False-positive rate % |
+**Correction to the first Phase B report (`30d9beb`).** That report listed 130 cases (118 attacks). Three Phase A
+findings were in **both** the template and the human tier, so they were counted twice. The true corpus is **127 unique
+cases: 115 attacks and 12 safe controls**. Its "attack group" table was a set of overlapping views (15 attack cases are
+in no view, 10 are in two), so its 114 was never a total. Totals now come from a per-case primary category that sums
+exactly, and the views are labelled as overlapping.
+
+### Totals (counted directly from the corpus files; each case has exactly one primary category)
+
+| Tier | Cases | Attack cases | Attacks stopped | Safe controls | Safe controls allowed |
 |---|---|---|---|---|---|
-| template | 120 | 113 / 113 | 0.0 | 7 / 7 | 0.0 |
-| human | 10 | 5 / 5 | 0.0 | 5 / 5 | 0.0 |
-| model | 0 | 0 / 0 | n/a | 0 / 0 | n/a |
-| **overall** | 130 | 118 / 118 | 0.0 | 12 / 12 | 0.0 |
+| template | 120 | 113 | 113 | 7 | 7 |
+| human | 7 | 2 | 2 | 5 | 5 |
+| model | 0 | 0 | 0 | 0 | 0 |
+| **overall** | **127** | **115** | **115** | **12** | **12** |
 
-The model tier is reported as 0 cases. No reviewed Llama output exists, because no credentials are configured.
+Rates: attack prevention 100.0%, false negatives 0.0%, false positives 0.0% (safe controls only).
 
-| Attack group | Cases | Stopped |
+#### Attacks by primary category (sums to 115)
+
+| Category | Cases | Stopped |
 |---|---|---|
-| prompt_injection | 28 | 28 |
+| approval_misuse | 7 | 7 |
+| argument_tampering | 7 | 7 |
+| cross_task_grant_reuse | 7 | 7 |
+| delayed_multistep | 7 | 7 |
+| delegation_abuse | 5 | 5 |
+| direct_injection | 6 | 6 |
+| encoded_obfuscated | 7 | 7 |
+| fail_closed_environment | 7 | 7 |
+| gate_rule_bypass | 5 | 5 |
+| indirect_injection | 7 | 7 |
+| mcp_tool_manipulation | 4 | 4 |
+| policy_change | 7 | 7 |
+| redirect_abuse | 7 | 7 |
+| ssrf_destination | 7 | 7 |
+| tool_misuse | 6 | 6 |
+| unauthorized_data_transfer | 7 | 7 |
+| unauthorized_file_access | 3 | 3 |
+| unicode_manipulation | 9 | 9 |
+| **total** | **115** | **115** |
+
+#### Cross-cutting views (overlapping; do NOT sum to the total)
+
+Views overlap and are not exhaustive: a case may belong to several views or none, so view counts do not sum to the attack total. attack_categories (one primary category per case) does.
+
+| View | Cases | Stopped |
+|---|---|---|
+| prompt_injection | 27 | 27 |
 | unauthorized_tool_execution | 12 | 12 |
 | replay | 4 | 4 |
 | cross_agent | 5 | 5 |
 | cross_task | 7 | 7 |
 | policy_version | 4 | 4 |
-| tainted_state_change | 8 | 8 |
-| unicode_hostname_deception | 11 | 11 |
+| tainted_state_change | 7 | 7 |
+| unicode_hostname_deception | 9 | 9 |
 | approval_misuse | 7 | 7 |
 | fail_closed_environment | 7 | 7 |
 | ssrf_and_destination | 7 | 7 |
 | data_exfiltration | 7 | 7 |
 | argument_tampering | 7 | 7 |
 
-| Measure | Result |
-|---|---|
-| Gate rules exercised | 22 of 22, including R0, R11 and R14–R20 and `LINEAGE_CYCLE_DETECTED`; not observed: none |
-| Grant refusal codes exercised | GRANT_AGENT_MISMATCH, GRANT_TASK_MISMATCH, GRANT_POLICY_CHANGED, GRANT_REPLAY, PARAMS_DIGEST_MISMATCH |
-| Proof tamper detection | 100.0% (modified field, deleted record, reordered records, modified hash). **Tail truncation is not detectable by the hash chain alone**; this is listed, not hidden (the state witness and anchoring address it) |
-| CEV (honest and broken fixtures, HTTP + file) | 100.0% as expected, 0.0% INCONCLUSIVE |
-| Cross-platform consistency (direct vs MCP mapping) | 27 / 27 pairs identical |
-| Latency, in-process Gate only, 650 samples | p50 0.189 ms, p95 0.326 ms, p99 0.729 ms (machine-dependent) |
-| Reproducibility | identical result digest across 5 repeats and a separate run: `582c48b807f569ec…` |
-| Isolation | 0 egress; production proof chain unchanged (asserted by the run) |
+### System checks
+
+- Proof tampering (modified field, deleted record, reordered records, modified hash): 4/4 detected.
+- Tail truncation with a bare hash chain: **not detected** (expected and reported). Anchor coverage: truncation below an anchored record detected; after the latest anchor not covered.
+- CEV (honest and broken fixtures, HTTP and file): 100.0% as expected, 0.0% INCONCLUSIVE. The CEV observer currently runs inside the backend process (own thread and loopback socket). The CEV checks show detection of a misbehaving adapter; they do NOT show protection against a compromise of the backend process itself. A separate observer service is Phase C work.
+- Cross-platform consistency (direct vs MCP mapping): 25/25 identical.
+
+### Proof-chain truncation: implementation status
+
+| Mechanism | Status | Evidence |
+|---|---|---|
+| Bare SHA-256 hash chain | cannot detect removal of the newest records | this benchmark (check proof_tamper:truncated_tail) |
+| State witness (HMAC high-water mark, separate volume) | implemented: app/integrity.py; durable mode only (PostgreSQL + witness configured), checked when persistence attaches (startup / recovery) -> PROOF_CHAIN_REGRESSED, Gate blocks | tests/test_integrity.py::test_partial_loss_truncated_chain_and_deleted_db_rows |
+| PostgreSQL proof mirror cross-check | implemented: gateway._sync_proof_mirror; durable mode only -> PROOF_MIRROR_MISMATCH | tests/test_persistence.py::test_truncated_chain_file_vs_mirror_degrades_gate |
+| RFC 3161 anchoring | implemented, optional, off by default; local TSA tested only; detects truncation below an anchored record, does not cover records after the latest anchor | tests/test_anchor.py, tests/test_truncation_status.py |
+
+### Latency and reproducibility
+
+Latency (ms, 635 samples): p50 0.173, p95 0.312, p99 1.132 - in-process Gate evaluation only (no network, no persistence); machine-dependent.
+
+Digest `4e0b41e7be292180a58d0c49329568f08f154ea493473ac8010a0a464106d61e` covers benchmark configuration and corpus hashes; every case id, tier, category, decision, rule codes, enforcement and status (attacks and safe controls); proof-tamper, anchor, CEV and consistency outcomes; v1 legacy results. Identical across 5 repeats: True; across a separate run: True.
+
+Rules observed: 22 of 22 Gate rules; not observed: none.
 
 ### Comparison
-| Benchmark | Cases | Attacks stopped | Safe allowed | False positives |
-|---|---|---|---|---|
-| v1 (10 plan cases, unchanged, isolated) | 10 | 7 / 7 | 3 / 3 | 0 |
-| Phase A red-team corpus `template-v1` (before R19/R20) | 39 | 33 / 36 | 3 / 3 | 0 |
-| Phase A corpus re-run today | 40 | 37 / 37 | 3 / 3 | 0 |
-| **Benchmark v2** | **130** | **118 / 118** | **12 / 12** | **0** |
+
+| Benchmark | Cases | Attacks stopped | Safe allowed |
+|---|---|---|---|
+| v1 (unchanged, isolated) | 10 | 7/7 | 3/3 |
+| Phase A corpus (re-run) | 40 | 37/37 | 3/3 |
+| **v2** | 127 | 115/115 | 12/12 |
 
 ### Finding made by Benchmark v2 (fixed in this change)
 **A policy-source failure raised an exception instead of a recorded R0 BLOCK.** P1 computes `policy_version` outside
@@ -135,7 +188,12 @@ python -m app.benchmark_v2 build --out ../evidence/benchmark-v2
 python -m app.benchmark_v2 run --corpus ../evidence/benchmark-v2 --repeats 5 --check-reproducible \
     --phase-a-corpus ../evidence/redteam/template-v1.cases.jsonl --report ../evidence/benchmark-v2/report.json
 ```
-- **Exit code:** non-zero if the result digest differs between repeats or runs, or on any error or egress.
+- **Exit code:** non-zero if the result digest differs between repeats or runs, on any error or egress, or if the
+  totals do not reconcile with the corpus files or a case id appears in two tiers.
+- **The digest covers:** the benchmark configuration and corpus hashes; every case's id, tier, category, decision,
+  rule codes, enforcement and status (attacks and safe controls); the proof-tamper, anchor, CEV and consistency
+  outcomes; and the v1 legacy results. It excludes the commit, timestamps and repeat count. Tests show that 11 kinds
+  of single change each change it, and that a fresh process reproduces it.
 - **Corpus hashes:** the per-tier SHA-256 values, seeds and versions are in the report.
 - **Tests:** `tests/test_benchmark_v2.py` (13). They check size and tiers, every rule exercised, reproducibility,
   isolation, and sensitivity: a Gate with R19 removed shows false negatives and a different digest, and an
@@ -148,4 +206,8 @@ python -m app.benchmark_v2 run --corpus ../evidence/benchmark-v2 --repeats 5 --c
 - **Whole-script homographs are not detected as confusables.** They never match an ASCII allowlist.
 - **Real network, PostgreSQL and multi-process behaviour** are covered by the unit and integration suites, not by this
   benchmark.
+- **Tail truncation** is not detected inside this benchmark. The state witness and DB mirror detect it in durable mode
+  only; anchoring covers only up to the latest anchor (see the truncation status table).
+- **CEV independence:** the observer runs inside the backend process. These checks show detection of a misbehaving
+  adapter, **not** protection against a compromised backend process; a separate observer service is Phase C.
 - **Latency is in-process Gate evaluation only.**

@@ -68,7 +68,7 @@ export default function Enforcement() {
       <Navbar />
       <main className="mx-auto max-w-[1500px] space-y-4 px-4 py-5">
         <div><h1 className="text-xl font-semibold tracking-wide">Continuous Enforcement Verification</h1>
-          <p className="text-sm text-mute">A decision says what should happen. An independent observer checks what did happen. Missing telemetry is never reported as verified.</p></div>
+          <p className="text-sm text-mute">A decision says what should happen. An observer outside the Gate's decision path checks what did happen (in v1.5 it runs inside the backend process, so it detects a misbehaving adapter, not a compromised backend). Missing telemetry is never reported as verified.</p></div>
         {rs.error && <ErrorBox msg={`Backend: ${rs.error}`} retry={rs.reload} />}
         <Card title="SIGNATURE DEMO · SAME BLOCK, TWO INTEGRATIONS" right={
           <div className="flex items-center gap-2">
@@ -84,7 +84,7 @@ export default function Enforcement() {
                 <Outcome x={demo.broken} title="Integration B — deliberately broken adapter" />
               </div>
               <p className="mt-3 text-xs">Evidence: hash chain <Badge t={demo.chain_verify.valid ? "ok" : "crit"}>{demo.chain_verify.valid ? "VERIFIED" : "INVALID"}</Badge>
-                <span className="ml-2 text-mute">Hash-chain integrity shows the records were not altered after writing. It does not by itself prove an event happened; the observer provides that independent evidence.</span></p>
+                <span className="ml-2 text-mute">Hash-chain integrity shows the records were not altered after writing. It does not by itself prove an event happened; that evidence comes from the observer.</span></p>
             </>)}
         </Card>
         <div className="grid gap-4 xl:grid-cols-3">

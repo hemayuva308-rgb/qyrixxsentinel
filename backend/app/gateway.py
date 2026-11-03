@@ -492,7 +492,7 @@ class Action(BaseModel):
     execute: bool = False                       # v1.1 field: execution moved to POST /api/v1/tools/execute
     approval_id: Optional[str] = Field(None, max_length=64)
     redirect_of: Optional[str] = Field(None, max_length=64)   # gate_evaluation_id of the hop that returned a redirect
-    # v1.5 (CEV): caller-chosen id that links this decision to independently observed side effects. Recorded in the proof
+    # v1.5 (CEV): caller-chosen id that links this decision to side effects recorded by the CEV observer. Recorded in the proof
     # record; NOT part of the parameter digest, so it never changes what a grant authorises. Default: gate_evaluation_id.
     correlation_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_.:-]{1,64}$")
     # v1.5 P1: task / execution context the grant is bound to. CALLER-PROVIDED CONTEXT, not a verified task identity:
