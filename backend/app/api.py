@@ -187,6 +187,12 @@ def cev_demo_ep(b: CevDemoReq = CevDemoReq(), p: Principal = Depends(require("ce
             "note": "Both adapters are controlled test fixtures; the broken one touches only an isolated canary."}
 
 
+@sentinel.get("/observer/reconciliations")
+def observer_reconciliations_ep(p: Principal = Depends(require("read"))):
+    """C4: the independent observer's canary reconciliations for the CALLER'S tenant (read-only relay)."""
+    return observer_feed.fetch_reconciliations(p.tenant)
+
+
 @sentinel.get("/cev/results")
 def cev_results_ep(p: Principal = Depends(require("read"))):
     from app import cev

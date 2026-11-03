@@ -15,6 +15,45 @@ type Cev = {
 type Demo = { channel: string; honest: Cev; broken: Cev; chain_verify: { valid: boolean; length?: number; anchor_status?: string } };
 type Conf = Record<string, { runs: number; ENFORCEMENT_VERIFIED: number; BYPASS_DETECTED: number; UNAUTHORIZED_EXECUTION: number; INCONCLUSIVE: number; conformance_rate: number | null }>;
 type Integ = { id: string; label: string; status: string; notes: string; capabilities: Record<string, boolean | string[]> | null };
+type ObsRec = {
+  recon_id: string; run_id: string; version: number; result: string; reasons: string[]; evidence_level: string; decided_at: string;
+  ledger: { n: number; hash: string } | null; channel: string; run_created_at: string; expected_condition: string; expected_basis: string;
+};
+type ObsResp = { configured: boolean; available: boolean; error?: string; tenant?: string; source: string; verified_possible: boolean;
+  note?: string; reconciliations: ObsRec[] };
+
+function ObserverReconciliations() {
+  const o = usePoll(() => api<ObsResp>(`${S}/observer/reconciliations`), 10000);
+  const d = o.data;
+  const counts = (d?.reconciliations ?? []).reduce<Record<string, number>>((a, r) => ({ ...a, [r.result]: (a[r.result] ?? 0) + 1 }), {});
+  return (
+    <Card title="INDEPENDENT OBSERVER · CANARY RECONCILIATIONS (PHASE C4)" right={d?.available ? (
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <Badge t="crit">{(counts.BYPASS_DETECTED ?? 0) + (counts.UNAUTHORIZED_EXECUTION ?? 0)} bypass / unauthorized</Badge>
+        <Badge t="warn">{counts.INCONCLUSIVE ?? 0} inconclusive</Badge>
+      </div>) : undefined}>
+      {o.error && <ErrorBox msg={`Backend: ${o.error}`} retry={o.reload} />}
+      {!d ? <Empty text="Loading observer reconciliations" /> : !d.configured ? (
+        <Empty text="Observer read access is not configured on this server (QYRIX_OBSERVER_URL + QYRIX_OBSERVER_READ_TOKEN_FILE)" />
+      ) : !d.available ? (
+        <p className="text-xs text-warn">Observer unavailable ({d.error ?? "unknown"}). No result is shown rather than a stale or assumed one.</p>
+      ) : !d.reconciliations.length ? <Empty text="No canary runs reconciled by the observer yet" /> : (
+        <div className="max-h-[360px] overflow-auto"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-card text-mute">
+          <tr><th className="py-1">Decided</th><th>Channel</th><th>Expected (basis)</th><th>Result</th><th>Evidence</th><th>Reasons</th><th>Ver.</th><th>Ledger</th></tr></thead>
+          <tbody>{d.reconciliations.map((r) => (
+            <tr key={r.recon_id} className="border-t border-white/5 align-top">
+              <td className="py-1.5"><Mono>{r.decided_at.slice(0, 19).replace("T", " ")}</Mono></td><td>{r.channel}</td>
+              <td><Badge t="mute">{r.expected_condition}</Badge> <span className="text-mute">({r.expected_basis})</span></td>
+              <td><Badge t={res(r.result).t}>{r.result}</Badge></td>
+              <td><Mono>{r.evidence_level === "E3" ? "E3 observer" : "none"}</Mono></td>
+              <td><Mono>{r.reasons.length ? r.reasons.join(" ") : "-"}</Mono></td>
+              <td>{r.version}</td><td><Mono>{r.ledger ? `#${r.ledger.n} ${short(r.ledger.hash)}` : "-"}</Mono></td></tr>))}</tbody></table></div>)}
+      <p className="mt-2 text-[11px] text-mute">
+        Results come from the separate Observer Service (canary runs only). ENFORCEMENT_VERIFIED is not possible yet: it needs a coverage
+        attestation of the network path (Phase C5), so an absent observation is shown as INCONCLUSIVE. &quot;Expected&quot; is a test expectation
+        chosen by construction, not a signed policy check. {d?.source ? `Source: ${d.source}.` : ""}</p>
+    </Card>);
+}
 
 const RESULT = {
   ENFORCEMENT_VERIFIED: { t: "ok" as const, icon: CheckCircle2, text: "Decision enforced: no side effect observed" },
@@ -105,6 +144,7 @@ export default function Enforcement() {
                     <td><Badge t={res(r.result).t}>{r.result}</Badge></td><td><Mono>{r.correlation_id.slice(0, 18)}…</Mono></td></tr>))}</tbody></table></div>)}
           </Card>
         </div>
+        <ObserverReconciliations />
         <Card title="UNIVERSAL ADAPTER REGISTRY (qyrix-adapter-contract/v1)">
           {!ig.data ? <Empty text="Loading integrations" /> : (
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">{ig.data.integrations.map((i) => (

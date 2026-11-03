@@ -433,8 +433,9 @@ def test_http_api(obs, keys):
     s = c.get("/v1/status", headers={"Authorization": "Bearer op-token-for-tests-only"}).json()
     assert s["coverage"]["mediated"] is False and s["ledger"]["n"] == 2
     assert "ENFORCEMENT_VERIFIED" in s["evidence"] and "no result can be" in s["evidence"]
-    for path in ("/v1/reconciliations", "/v1/evidence/export", "/v1/canaries/run"):
-        assert c.get(path).status_code in (404, 405)                    # C3/C4/C7 endpoints do not exist
+    for path in ("/v1/evidence/export", "/v1/canaries/run"):
+        assert c.get(path).status_code in (404, 405)                    # C7 export absent; canaries/run is POST-only
+    assert c.get("/v1/reconciliations?tenant=default").status_code == 401          # C4 read API: authentication required
     assert TestClient(create_app(obs, None)).get("/v1/status").status_code == 503
 
 

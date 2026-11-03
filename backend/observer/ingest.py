@@ -402,6 +402,15 @@ class Observer:
         current = cur.fetchone()[0]
         if b["new_epoch"] != current + 1:
             return self._refuse_tx(cur, now, env, "EPOCH_INVALID", 409, {"current_epoch": current})
+        # audit F9: compare the operator's "last trusted" numbers with what the observer actually holds
+        ahead = []
+        for t, last in sorted(b["last_trusted_seq_per_tenant"].items()):
+            cur.execute("SELECT contiguous_seq FROM watermarks WHERE producer_id=%s AND epoch=%s AND tenant_id=%s",
+                        (pid, current, t))
+            r = cur.fetchone()
+            held = r[0] if r else 0
+            if last > held:
+                ahead.append({"tenant": t, "last_trusted_seq": last, "observer_contiguous_seq": held})
         cur.execute("INSERT INTO streams (producer_id, epoch) VALUES (%s,%s) ON CONFLICT DO NOTHING", (pid, current))
         cur.execute("UPDATE streams SET status='closed', reason='EPOCH_CHANGED' WHERE producer_id=%s AND epoch=%s"
                     " AND status='active'", (pid, current))
@@ -412,7 +421,10 @@ class Observer:
                                                        digest, json.dumps(clean)))
         self._alert(cur, now, "EPOCH_CHANGED", env, {"from": current, "to": b["new_epoch"],
                                                      "last_trusted_seq_per_tenant": b["last_trusted_seq_per_tenant"],
-                                                     "reason": b["reason"], "recovery_key_id": env["key_id"]})
+                                                     "reason": b["reason"], "recovery_key_id": env["key_id"],
+                                                     "last_trusted_ahead": ahead})
+        if ahead:                                  # recorded, not trusted: windows of the old epoch stay INCONCLUSIVE
+            self._alert(cur, now, "EPOCH_LAST_TRUSTED_AHEAD", env, {"from": current, "tenants": ahead})
         return 200, {"status": "accepted", "epoch": b["new_epoch"]}
 
     # ---------------- liveness monitor (§5.5) ----------------

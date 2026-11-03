@@ -9,6 +9,7 @@ Configuration (all required unless noted; nothing is read from the backend):
   OBSERVER_HEARTBEAT_SECONDS, OBSERVER_GRACE_SECONDS, OBSERVER_MAX_SKEW_SECONDS   (optional; defaults 10 / 30 / 120)
   OBSERVER_CANARIES=1 (+ OBSERVER_CANARY_HTTP_PORT [loopback only], OBSERVER_CANARY_DIR, OBSERVER_CANARY_CREDENTIALS_FILE,
     OBSERVER_CANARY_P2_LIVE=1 + OBSERVER_CANARY_BACKEND_URL - live P2 is OFF by default)   (optional, C3)
+  OBSERVER_READ_TOKENS_FILE  (optional, C4) tenant-scoped READ-ONLY keys for GET /v1/reconciliations, stored as SHA-256
   OBSERVER_BIND (default 127.0.0.1; the C5 deployment sets the container address), OBSERVER_PORT (default 9000)
 
 Start-up is fail closed: manifest signature, manifest rollback, runtime account privileges, schema version and the full
@@ -95,9 +96,12 @@ def main() -> int:
     if os.getenv("OBSERVER_OPERATOR_TOKEN_FILE"):
         tok = open(os.environ["OBSERVER_OPERATOR_TOKEN_FILE"]).read().strip() or None
     canaries = build_canaries(obs)
+    read_tokens = []
+    if os.getenv("OBSERVER_READ_TOKENS_FILE"):         # [{"sha256": hex(sha256(token)), "tenants": [...]}]; hashes only
+        read_tokens = json.load(open(os.environ["OBSERVER_READ_TOKENS_FILE"])).get("tokens", [])
     threading.Thread(target=monitor, args=(obs, obs.cfg.H, canaries), name="observer-monitor", daemon=True).start()
     import uvicorn
-    uvicorn.run(create_app(obs, tok, canaries), host=os.getenv("OBSERVER_BIND", "127.0.0.1"), port=int(os.getenv("OBSERVER_PORT", "9000")))
+    uvicorn.run(create_app(obs, tok, canaries, read_tokens), host=os.getenv("OBSERVER_BIND", "127.0.0.1"), port=int(os.getenv("OBSERVER_PORT", "9000")))
     return 0
 
 

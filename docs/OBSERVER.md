@@ -1,4 +1,4 @@
-# Observer Service: Phase C1–C3 implementation
+# Observer Service: Phase C1–C4 implementation
 
 Design: `docs/PHASE_C_OBSERVER_DESIGN.md` (revision 3, approved at `fd76a80`). This document records what slices
 **C1–C2** implement, how to run them, the resolutions taken where the design was silent or inconsistent, and the
@@ -105,6 +105,28 @@ three ways:
 - **Defect found and fixed during C3.** `observer/main.py` re-fetched the applied-migration list once per expected
   migration. With O002 present, a migrated database was wrongly refused at startup. This was a C1 defect; it is now
   fetched once.
+
+### 1.4 C4 (minimal, owner-approved): canary reconciliation, read API, dashboard panel
+| Feature | Design § | Code | Tests |
+|---|---|---|---|
+| **Audit F4:** a revocation (operator, or compensation after a failed proof write) writes a `grant kind=revoked` claim **in the same transaction**. A reversed ALLOW also writes a superseding decision claim with `reversed_from: ALLOW`. If the claim cannot be written, the revocation still happens (safety beats telemetry) and a critical event is raised | §10, §12 | `app/gateway.py`, `app/persistence.py::revoke_grant`, `app/observer_feed.py::revocation_events` | `test_observer_c4_fixes_pg.py::test_f4_*` |
+| **Audit F9:** an epoch change whose `last_trusted_seq` exceeds the observer's contiguous watermark is accepted (it is operator-signed) but alerted as `EPOCH_LAST_TRUSTED_AHEAD`. Runs touching an epoch change are INCONCLUSIVE | §5.4 | `observer/ingest.py` | `test_f9_*` |
+| **Audit F13:** the publisher sends a heartbeat right after any batch that delivered events. Runs whose window touches an epoch change are INCONCLUSIVE (`EPOCH_BOUNDARY`) | §5.3, §5.4 | `app/observer_feed.py::publish_once` | `test_f13_*`, `test_every_missing_precondition_is_inconclusive[epoch]` |
+| Canary-only reconciler (pure): BYPASS_DETECTED / UNAUTHORIZED_EXECUTION only when **every** precondition holds; otherwise INCONCLUSIVE with reasons. ENFORCEMENT_VERIFIED is **not producible** (needs a C5 coverage attestation) | §11 | `observer/reconcile.py` | `test_observer_reconcile.py` (exhaustive grid, more than 50,000 cases) |
+| Facts from observer data only. E3 observations and run lifecycle; the signed claim is used only to classify an observed effect, and must come from an active, current-epoch gate stream, in time and unreversed. A closing heartbeat reached by the watermark is required for UNAUTHORIZED. Backend-reported heads are never an input | §5.6, §11 | `observer/canary.py::_facts` | `test_observer_reconcile_pg.py` |
+| O003 `reconciliations` (observer-db only): versioned (`supersedes`), append-only, RLS by tenant, runtime SELECT/INSERT only. **ENFORCEMENT_VERIFIED is not an allowed value.** A definite result requires E3 and has no reasons; INCONCLUSIVE requires reasons. Each version is also signed into the ledger. Late data creates a new version; INCONCLUSIVE→definite raises `RESULT_ESCALATED` | §11, §12, §13 | `observer/migrations/O003_reconciliations.sql`, `CanaryService.reconcile_all` | `test_o003_*`, `test_unauthorized_needs_closing_heartbeat_then_supersedes` |
+| Read API `GET /v1/reconciliations?tenant=&since=&limit=`. Accepts the operator token (all tenants) or **tenant-scoped read-only keys** (`OBSERVER_READ_TOKENS_FILE`, stored as SHA-256, constant-time compare). Read keys cannot start canaries or read status | §12 | `observer/app.py` | `test_read_api_tenant_scoped_tokens` |
+| C3-3: at most 100 stored observations per run (the rest counted) and at most one `CANARY_TOKEN_OBSERVED` ledger alert per run per minute. C3-4: file-sensor scans serialized; per-run memory pruned on cleanup. C3-1/C3-2: an unknown submission and claims from quarantined or closed streams are INCONCLUSIVE | — | `observer/canary.py` | `test_c3_3_*`, `test_c3_4_*` |
+| Dashboard: `GET /api/v1/sentinel/observer/reconciliations` (read permission, **caller's tenant only**) relays the observer read API with a read-only key (`QYRIX_OBSERVER_READ_TOKEN_FILE`). Allow-listed fields; an unexpected result value becomes INCONCLUSIVE. The response is labelled *relayed by the backend, not independent of it*. Panel "Independent Observer · Canary Reconciliations" on the Enforcement page, in the existing theme | §4 step 6 | `app/observer_feed.py::fetch_reconciliations`, `app/api.py`, `frontend/src/app/(app)/enforcement/page.tsx` | `test_observer_relay_pg.py`; browser end-to-end check (report) |
+
+**C4 limitations:**
+- **No ENFORCEMENT_VERIFIED, by design.** Absence of an observation is INCONCLUSIVE (`COVERAGE_UNATTESTED`) until C5 provides coverage attestation.
+- **Canary runs only.** Real traffic is not reconciled; that needs proxy observations (C5).
+- **C3 limits still apply.** Sensors are loopback / observer-directory only, and live P2 is off by default and untested live. BYPASS / UNAUTHORIZED results have so far come only from **test fixtures**: a deliberately broken integration.
+- **The dashboard view is relayed by the backend.** A compromised backend could misreport it. Independent verification is the observer API and its signed ledger.
+- **F13 residual.** The loss window shrinks to delivery-plus-heartbeat latency but is not zero.
+- **Interrupted runs.** These, and runs whose positive control could not be evaluated, are always INCONCLUSIVE, even when the token was seen.
+- **F1, F2, F3 and F7 remain open** and block C5.
 
 ## 2. Configuration
 

@@ -308,8 +308,9 @@ def test_publisher_delivers_and_heartbeat_attests(bk, enabled, keys, observer):
     assert pub.heartbeat_once() == "accepted"
     assert oq(observer, "SELECT contiguous_seq, max_seq, attested_seq FROM watermarks") == [(3, 3, 3)]
     head = ctx.chain[-1]
-    assert oq(observer, "SELECT label, evidence_level, proof_n, proof_head FROM producer_claims") == [
-        ("backend_reported_head", "E0", head["n"], head["hash"])]
+    claims = oq(observer, "SELECT label, evidence_level, proof_n, proof_head FROM producer_claims ORDER BY id")
+    assert len(claims) == 2                                                # one after delivery (F13) + the explicit one
+    assert claims[-1] == ("backend_reported_head", "E0", head["n"], head["hash"])
     s = observer["obs"].status()["streams"][0]
     assert s["conditions"] == [] and s["status"] == "active"
     assert observer["obs"].status()["coverage"]["mediated"] is False                   # claims only; nothing VERIFIED
@@ -325,7 +326,7 @@ def test_heartbeats_never_consume_seq(bk, enabled, keys, observer):
     block(ctx)
     pub.publish_once()
     assert [r[1] for r in outbox(bk)] == [1, 2]
-    assert oq(observer, "SELECT max(hb_seq) FROM heartbeats") == [(3,)]
+    assert oq(observer, "SELECT max(hb_seq) FROM heartbeats") == [(4,)]          # 3 timed + 1 after delivery (F13)
     assert oq(observer, "SELECT contiguous_seq FROM watermarks") == [(2,)]
 
 

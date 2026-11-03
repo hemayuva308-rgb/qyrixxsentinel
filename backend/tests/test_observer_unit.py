@@ -222,14 +222,16 @@ def test_exhaustive_no_sensor_window_is_never_closed():
 
 
 def test_observer_package_has_no_verification_result_path():
-    """C1-C2 contain no reconciler: no observer module holds a VERIFIED/BYPASS/UNAUTHORIZED result value."""
+    """No observer module holds ENFORCEMENT_VERIFIED as a value (C5 coverage does not exist). The definite C4 results
+    BYPASS_DETECTED / UNAUTHORIZED_EXECUTION exist ONLY in the canary reconciler (observer/reconcile.py)."""
     import ast
     import pathlib
     root = pathlib.Path(__file__).resolve().parents[1] / "observer"
-    results = {"ENFORCEMENT_VERIFIED", "BYPASS_DETECTED", "UNAUTHORIZED_EXECUTION"}
     for f in root.glob("*.py"):
         consts = {n.value for n in ast.walk(ast.parse(f.read_text())) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
-        assert not (consts & results), (f.name, consts & results)
+        assert "ENFORCEMENT_VERIFIED" not in consts, f.name
+        if f.name != "reconcile.py":
+            assert not (consts & {"BYPASS_DETECTED", "UNAUTHORIZED_EXECUTION"}), (f.name, consts)
 
 
 def test_observer_imports_nothing_from_backend():

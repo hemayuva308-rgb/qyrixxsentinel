@@ -1,8 +1,8 @@
 # Phase C: Independent Observer Service (architecture design, revision 3, for review; NOT implemented)
 
-Status: **slices C1–C3 implemented** (see `docs/OBSERVER.md`, including the resolutions recorded in its §4 and the
+Status: **slices C1–C4 implemented** (C4 = canary-only reconciliation, no ENFORCEMENT_VERIFIED until C5) (see `docs/OBSERVER.md`, including the resolutions recorded in its §4 and the
 owner's amended C3 decisions in its §1.3; C3 records canary observations and lifecycle only, with no reconciliation
-and test-only sensor reach); **C4–C7 are not implemented** and remain proposals. Every "will" below that belongs to C3–C7 is a proposal for review.
+and test-only sensor reach); **C5–C7 are not implemented** and remain proposals. Every "will" below that belongs to C3–C7 is a proposal for review.
 
 **Approved amendment (C2, CONNECT header).** The backend keeps its SSRF IP pinning: the proxy is asked to
 `CONNECT <pinned-ip>:<port>`, and the hostname travels as `X-Qyrix-Host` next to `X-Qyrix-Execution`. TLS SNI is the

@@ -416,7 +416,8 @@ def test_o002_upgrade_preserves_o001_data_and_failed_migration_rolls_back(cluste
     assert q(admin, "SELECT to_regclass('canary_runs')") == [(None,)]
     # recovery: the real O002 then applies, O001 evidence intact, idempotent
     monkeypatch.setattr(omigrate, "MIGRATIONS", real)
-    assert omigrate.migrate(admin) == ["O002_canaries.sql"]
+    applied = omigrate.migrate(admin)
+    assert applied[0] == "O002_canaries.sql" and all(m > "O002" for m in applied[1:])   # later migrations may follow
     assert omigrate.migrate(admin) == []
     assert q(admin, "SELECT n, hash FROM ledger ORDER BY n") == before
     assert make_observer(url, keys, Clock()).verify_ledger()["valid"]
@@ -435,7 +436,7 @@ def test_o002_runtime_privileges_and_append_only(env):
             with pytest.raises(psycopg.Error):
                 c.execute(sql)
     for sql in ("UPDATE canary_runs SET adapter='x'", "DELETE FROM canary_run_events", "TRUNCATE observations",
-                "TRUNCATE canary_runs, canary_run_events, observations"):
+                "TRUNCATE canary_runs, canary_run_events, observations, reconciliations"):
         with pytest.raises(psycopg.Error, match="append-only"):
             q(env["admin"], sql)
     q(env["admin"], "GRANT observer_lookup TO observer_runtime")

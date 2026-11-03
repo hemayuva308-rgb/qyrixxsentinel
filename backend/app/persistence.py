@@ -434,11 +434,16 @@ class PgPersistence:
             return r is not None
         return self._run(go)
 
-    def revoke_grant(self, gid: str, who: str) -> bool:
+    def revoke_grant(self, gid: str, who: str, events: Optional[List[Dict]] = None) -> bool:
+        """Revocation + (Phase C4, F4) its observer claims in ONE transaction: they commit or fail together."""
         def go(cur):
             cur.execute("UPDATE grants SET revoked_at=now(), revoked_by=%s WHERE tenant_id=%s AND id=%s AND used_at IS NULL"
                         " AND revoked_at IS NULL RETURNING id", (who, self.t, gid))
-            return cur.fetchone() is not None
+            ok = cur.fetchone() is not None
+            if ok:
+                for e in events or ():
+                    self._emit(cur, e)
+            return ok
         return self._run(go)
 
     def set_redirect(self, eid: str, location: str) -> None:

@@ -129,6 +129,22 @@ def grant_event(pid: str, eval_id: str, g: Dict, kind: str, integration: Optiona
         "agent_id": g.get("agent_id"), "task_id": g.get("task_id"), "proof": None}}
 
 
+def revocation_events(ctx, g: Dict, reason: str, reversed_ev: Optional[Dict] = None) -> List[Dict]:
+    """C4 / audit F4: claims for a revoked grant (`grant` kind=revoked, refusal_code=<reason>) and, when the Gate reversed
+    an ALLOW it had already written (proof write failed), a superseding decision claim with `reversed_from: ALLOW`.
+    The reconciler never treats a reversed decision as a clean claim. [] when the feed is disabled / memory mode."""
+    if not enabled() or ctx.db is None:
+        return []
+    pid = producer_id(ctx.db)
+    out = []
+    if reversed_ev is not None:
+        d = decision_events(ctx, dict(reversed_ev, verdict="BLOCK", rules=["R0_FAIL_CLOSED"]))[0]
+        d["body"]["reversed_from"] = "ALLOW"
+        out.append(d)
+    out.append(grant_event(pid, g["gate_evaluation_id"], g, "revoked", refusal_code=reason))
+    return out
+
+
 def consume_event(ctx, eval_id: str, g: Dict, kind: str, integration: Optional[str] = None) -> Optional[Dict]:
     if not enabled() or ctx.db is None:
         return None
@@ -218,6 +234,7 @@ class Publisher:
         self.stats["outbox_depth"] = sum(f["unsent"] for f in feed)
         self.stats["stale_epoch_unsent"] = sum(f["stale_unsent"] for f in feed)
         from app import observability as obs
+        delivered = 0
         for f in feed:
             if not f["unsent"]:
                 continue
@@ -231,6 +248,7 @@ class Publisher:
                     db.outbox_mark(f["epoch"], row["seq"], True)
                     self.stats["duplicates" if code == "duplicate" else "sent"] += 1
                     self.backoff = 0.0
+                    delivered += 1
                     continue
                 db.outbox_mark(f["epoch"], row["seq"], False)
                 if status is None or status >= 500 or code in RETRY_LATER:
@@ -240,6 +258,10 @@ class Publisher:
                     self._fail(code or "HTTP_%s" % status)
                     obs.event("observer_feed_refused", severity="critical", code=code or str(status), tenant=f["tenant"])
                 break
+        if delivered:
+            # audit F13: attest the new allocation immediately (not only on the H timer), shrinking the window in which
+            # allocated-but-unattested numbers could vanish in a restore without any regression signal
+            self.heartbeat_once()
         return self.stats
 
     def heartbeat_once(self) -> Optional[str]:
@@ -365,3 +387,54 @@ class AdapterReporter:
             return None
         return cls(url, load_key(path), os.getenv("QYRIX_OBSERVER_ADAPTER_ID", "mcp_proxy"),
                    os.getenv("QYRIX_OBSERVER_TENANT", "default"))
+
+
+# ---------------- C4: dashboard read path (observer -> backend -> UI), READ-ONLY ----------------
+RESULTS = ("BYPASS_DETECTED", "UNAUTHORIZED_EXECUTION", "INCONCLUSIVE")
+_REC_FIELDS = ("recon_id", "run_id", "version", "result", "reasons", "evidence_level", "decided_at", "ledger", "channel",
+               "run_created_at", "expected_condition", "expected_basis", "scope")
+
+
+def _read_http():
+    import httpx
+    return httpx.Client(base_url=os.getenv("QYRIX_OBSERVER_URL", "").strip().rstrip("/"), timeout=3.0, trust_env=False)
+
+
+def fetch_reconciliations(tenant: str, http=None) -> Dict:
+    """GET the observer's canary reconciliations for ONE tenant (the caller's) with a tenant-scoped READ-ONLY key
+    (QYRIX_OBSERVER_READ_TOKEN_FILE). Only allow-listed fields are relayed; anything unexpected becomes INCONCLUSIVE.
+    The relay passes through the backend, so the UI view is NOT independent of the backend (stated in `source`)."""
+    base = {"source": "observer, relayed by the Sentinel backend (not independent of the backend; verify against the "
+                      "observer API / signed ledger)", "verified_possible": False}
+    path = os.getenv("QYRIX_OBSERVER_READ_TOKEN_FILE", "").strip()
+    if not enabled() or not path:
+        return {**base, "configured": False, "available": False, "reconciliations": []}
+    try:
+        with open(path) as f:
+            token = f.read().strip()
+    except OSError:
+        return {**base, "configured": True, "available": False, "error": "READ_TOKEN_UNREADABLE", "reconciliations": []}
+    try:
+        r = (http or _read_http()).get("/v1/reconciliations", params={"tenant": tenant, "limit": 100},
+                                       headers={"Authorization": "Bearer " + token})
+    except Exception as e:
+        return {**base, "configured": True, "available": False, "error": "OBSERVER_UNREACHABLE:" + type(e).__name__,
+                "reconciliations": []}
+    try:
+        j = r.json()
+    except ValueError:
+        j = {}
+    if r.status_code != 200 or not isinstance(j, dict) or not isinstance(j.get("reconciliations"), list):
+        return {**base, "configured": True, "available": False, "error": "OBSERVER_HTTP_%d" % r.status_code,
+                "reconciliations": []}
+    rows = []
+    for x in j["reconciliations"][:100]:
+        if not isinstance(x, dict):
+            continue
+        y = {k: x.get(k) for k in _REC_FIELDS}
+        if y["result"] not in RESULTS:                   # defensive: the UI can never be fed ENFORCEMENT_VERIFIED
+            y["reasons"], y["result"] = ["UNEXPECTED_RESULT_VALUE"], "INCONCLUSIVE"
+        y["reasons"] = [str(z)[:64] for z in (y.get("reasons") or [])][:20]
+        rows.append(y)
+    return {**base, "configured": True, "available": True, "tenant": tenant, "scope": "canary", "reconciliations": rows,
+            "note": str(j.get("note", ""))[:300]}

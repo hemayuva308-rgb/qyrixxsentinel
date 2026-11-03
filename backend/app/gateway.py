@@ -718,9 +718,14 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None, agent_id: Optional[st
                 ctx.grants.pop(grant["id"], None)
                 if ctx.db is not None:                        # best-effort compensation; a grant without an ALLOW
                     try:                                      # proof record is never loaded after a restart anyway
-                        ctx.db.revoke_grant(grant["id"], "system:proof-write-failed")
+                        evs = observer_feed.revocation_events(ctx, grant, "PROOF_WRITE_FAILED", ev)   # F4: claims follow
+                        ctx.db.revoke_grant(grant["id"], "system:proof-write-failed", evs)
                     except Exception:
-                        pass
+                        try:                                  # safety first: revoke even if the claims cannot be written
+                            ctx.db.revoke_grant(grant["id"], "system:proof-write-failed")
+                            obs.event("observer_feed_revocation_unrecorded", severity="critical", reason="PROOF_WRITE_FAILED")
+                        except Exception:
+                            pass
                 grant = None
             if ap is not None and verdict == "ALLOW":
                 ap["used"] = False
@@ -938,7 +943,12 @@ def revoke_grant(gid: str, who: str, ctx: Optional[GateContext] = None) -> Dict:
             raise ExecRefused("GRANT_NOT_REVOCABLE", 409)
         if ctx.db is not None:
             try:
-                if not ctx.db.revoke_grant(gid, who):
+                try:                                      # C4 / F4: the revocation and its claim commit together
+                    ok = ctx.db.revoke_grant(gid, who, observer_feed.revocation_events(ctx, g, "REVOKED_BY_OPERATOR"))
+                except Exception:                         # claims not writable: revoke anyway (safety beats telemetry);
+                    ok = ctx.db.revoke_grant(gid, who)    # a real DB outage fails again here => 503 below
+                    obs.event("observer_feed_revocation_unrecorded", severity="critical", reason="REVOKED_BY_OPERATOR")
+                if not ok:
                     raise ExecRefused("GRANT_NOT_REVOCABLE", 409)
             except ExecRefused:
                 raise

@@ -38,6 +38,9 @@ from observer.envelope import TENANT_RE
 
 MAX_BODY = 4096
 TOKEN_PATH = "/c/"
+MAX_OBSERVATIONS_PER_RUN = 100      # C3-3: a token holder (e.g. the backend after submission) cannot flood evidence
+ALERT_EVERY_SECONDS = 60.0          # C3-3: at most one CANARY_TOKEN_OBSERVED ledger alert per run per minute
+RECONCILE_HORIZON_SECONDS = 3600.0  # ended runs are re-reconciled for this long (late data => new version)
 
 
 def mint() -> str:
@@ -128,6 +131,7 @@ class FileCanarySensor:
             raise CanaryError("canary directory must be a real directory with mode 0700")
         self.record, self.root, self.interval = record, os.path.realpath(root), interval
         self._seen: Dict[str, tuple] = {}
+        self._lock = threading.Lock()                    # C3-4: poller and cleanup never scan concurrently
         self._stop = threading.Event()
         self.counters = {"matched": 0, "ignored": 0, "unrecorded": 0}
         threading.Thread(target=self._loop, name="observer-canary-file", daemon=True).start()
@@ -140,6 +144,9 @@ class FileCanarySensor:
 
     def cleanup(self, run_id: str) -> None:
         d = os.path.join(self.root, run_id)
+        with self._lock:                                 # C3-4: forget the run's files (bounded memory)
+            for k in [k for k in self._seen if k.startswith(d + os.sep)]:
+                del self._seen[k]
         if not os.path.isdir(d) or os.path.islink(d):
             return
         for f in os.listdir(d):
@@ -149,6 +156,10 @@ class FileCanarySensor:
         os.rmdir(d)
 
     def scan(self) -> None:
+        with self._lock:
+            self._scan()
+
+    def _scan(self) -> None:
         for run in os.listdir(self.root):
             d = os.path.join(self.root, run)
             if os.path.islink(d) or not os.path.isdir(d):
@@ -237,6 +248,9 @@ class CanaryService:
         self.p2 = p2 or P2Client({})
         self.clock = clock or observer.clock
         self.unrecorded = 0
+        self.suppressed = 0
+        self._alerted: Dict[str, float] = {}
+        self._alock = threading.Lock()
 
     # -- helpers
     def _event(self, cur, run_id, tenant, kind, detail=None, now=None):
@@ -263,6 +277,10 @@ class CanaryService:
                 return False                             # a token is valid on its own channel only
             timing = "in_window" if created <= now <= wend else "late"
             set_tenant(cur, tenant)
+            cur.execute("SELECT count(*) FROM observations WHERE run_id=%s", (run_id,))
+            if cur.fetchone()[0] >= MAX_OBSERVATIONS_PER_RUN:
+                self.suppressed += 1                     # counted, not stored (C3-3)
+                return True
             oid = str(uuid.uuid4())
             cur.execute("INSERT INTO observations (observation_id, run_id, tenant_id, sensor, purpose, timing, observed_at,"
                         " token_sha256, method, path_sha256, body_sha256, bytes_in, peer)"
@@ -273,9 +291,16 @@ class CanaryService:
             if purpose == "canary":
                 self._event(cur, run_id, tenant, "TOKEN_OBSERVED", {"observation_id": oid, "timing": timing,
                                                                      "sensor": sensor, "evidence_level": "E3"}, now)
-                self._alert(cur, "CANARY_TOKEN_OBSERVED", run_id, tenant,
-                            {"observation_id": oid, "timing": timing, "sensor": sensor,
-                             "note": "observation only; no verdict in C3"}, now)
+                with self._alock:
+                    due = now - self._alerted.get(run_id, -1e18) >= ALERT_EVERY_SECONDS
+                    if due:
+                        self._alerted[run_id] = now
+                        for k in [k for k, v in self._alerted.items() if now - v > RECONCILE_HORIZON_SECONDS]:
+                            del self._alerted[k]
+                if due:
+                    self._alert(cur, "CANARY_TOKEN_OBSERVED", run_id, tenant,
+                                {"observation_id": oid, "timing": timing, "sensor": sensor,
+                                 "note": "observation; the reconciliation record carries the result"}, now)
             return True
         try:
             return self.db.run(go)
@@ -360,7 +385,140 @@ class CanaryService:
         for run in self._open_runs(due_before=now):
             self._finish(run, now)
             done.append(run["run_id"])
+        self.reconcile_all(now)
         return done
+
+    # ---------------- C4: canary reconciliation (observer/reconcile.py) ----------------
+    def _ended_runs(self, since: float) -> List[Dict]:
+        def go(cur):
+            cur.execute("SELECT DISTINCT tenant_id FROM ledger WHERE code='CANARY_RUN_CREATED'")
+            out = []
+            for (t,) in cur.fetchall():
+                set_tenant(cur, t)
+                cur.execute("SELECT r.run_id, r.tenant_id, r.correlation_id, r.created_at, r.due_at, r.decision_seconds"
+                            " FROM canary_runs r WHERE r.created_at >= %s AND EXISTS (SELECT 1 FROM canary_run_events e"
+                            " WHERE e.run_id = r.run_id AND e.kind IN ('WINDOW_ENDED', 'INTERRUPTED'))", (_dt(since),))
+                out += [{"run_id": str(r[0]), "tenant": r[1], "corr": r[2], "created": r[3], "due": r[4],
+                         "t_decision": r[5]} for r in cur.fetchall()]
+            return out
+        return self.db.run(go, lock=False)
+
+    def _facts(self, cur, run: Dict):
+        from observer.reconcile import Claim, Facts
+        rid, t = run["run_id"], run["tenant"]
+        set_tenant(cur, t)
+        cur.execute("SELECT kind FROM canary_run_events WHERE run_id=%s", (rid,))
+        kinds = {k for (k,) in cur.fetchall()}
+        status = "interrupted" if "INTERRUPTED" in kinds else "ended" if "WINDOW_ENDED" in kinds else "open"
+        submission = ("submitted" if "SUBMITTED" in kinds else "disabled" if "SUBMISSION_DISABLED" in kinds
+                      else "failed" if "SUBMISSION_FAILED" in kinds else "unknown")          # C3-1: unknown != failed
+        cur.execute("SELECT count(*) FILTER (WHERE purpose='canary' AND timing='in_window'),"
+                    " count(*) FILTER (WHERE purpose='canary' AND timing='late') FROM observations WHERE run_id=%s", (rid,))
+        tin, tlate = cur.fetchone()
+        # the signed decision claim(s) carrying the observer-minted correlation id (E0)
+        cur.execute("SELECT producer_id, epoch, envelope->'body'->>'verdict', envelope->'body'->>'gate_evaluation_id',"
+                    " received_at, envelope->'body'->>'reversed_from' FROM events WHERE tenant_id=%s AND type='decision'"
+                    " AND envelope->'body'->>'correlation_id'=%s ORDER BY received_at", (t, run["corr"]))
+        rows = cur.fetchall()
+        claim = None
+        if rows:
+            pid, ep, verdict, geid, rec_at, _ = rows[0]
+            # audit F4: a later claim for the same evaluation that reverses it (or any reversal marker) taints the claim
+            reversed_ = any(r[5] for r in rows) or any(r[3] == geid and r[2] != verdict for r in rows[1:])
+            if not reversed_ and geid:
+                cur.execute("SELECT 1 FROM events WHERE tenant_id=%s AND type='decision' AND"
+                            " envelope->'body'->>'gate_evaluation_id'=%s AND envelope->'body'->>'reversed_from' IS NOT NULL",
+                            (t, geid))
+                reversed_ = cur.fetchone() is not None
+            cur.execute("SELECT s.status, p.current_epoch FROM streams s JOIN producers p USING (producer_id)"
+                        " WHERE s.producer_id=%s AND s.epoch=%s", (pid, ep))
+            st = cur.fetchone() or ("closed", -1)
+            claim = Claim(verdict=verdict, in_time=rec_at.timestamp() <= run["created"].timestamp() + run["t_decision"],
+                          stream_status=st[0], current_epoch=st[1] == ep, reversed=reversed_, gate_producer=pid.startswith("gate:"))
+        cur.execute("SELECT count(*) FROM epoch_changes WHERE received_at >= %s", (run["created"],))
+        boundary = cur.fetchone()[0] > 0
+        # every current gate stream must be quarantine-free and attested-complete for this tenant (§5.6 condition 2)
+        cur.execute("SELECT s.producer_id, s.epoch, s.status FROM streams s JOIN producers p ON p.producer_id = s.producer_id"
+                    " AND p.current_epoch = s.epoch WHERE s.producer_id LIKE 'gate:%%'")
+        streams = cur.fetchall()
+        quarantined = any(x[2] == "quarantined" for x in streams)
+        complete = bool(streams)
+        for pid, ep, stt in streams:
+            cur.execute("SELECT envelope->'body'->'tenants'->%s->>'allocated_through_seq' FROM heartbeats WHERE producer_id=%s"
+                        " AND epoch=%s AND status='accepted' AND issued_at > %s AND received_at > %s ORDER BY hb_seq DESC LIMIT 1",
+                        (t, pid, ep, run["due"], run["due"]))
+            hb = cur.fetchone()
+            if stt != "active" or hb is None:
+                complete = False
+                continue
+            alloc = int(hb[0]) if hb[0] is not None else 0
+            cur.execute("SELECT contiguous_seq FROM watermarks WHERE producer_id=%s AND epoch=%s AND tenant_id=%s", (pid, ep, t))
+            w = cur.fetchone()
+            if (w[0] if w else 0) < alloc:
+                complete = False
+        return Facts(status=status, submission=submission, positive_control="POSITIVE_CONTROL_PASSED" in kinds,
+                     token_in_window=tin, token_late=tlate, epoch_boundary=boundary, feed_complete=complete,
+                     producers_quarantined=quarantined, claim=claim, coverage=None)
+
+    def reconcile_all(self, now: Optional[float] = None) -> List[Dict]:
+        """(Re)reconcile ended runs within the horizon. A changed outcome is a NEW version superseding the last one;
+        INCONCLUSIVE -> BYPASS/UNAUTHORIZED raises a critical ledger alert."""
+        from observer.canonical import canonical, sha256_hex
+        from observer.reconcile import INCONCLUSIVE, reconcile
+        now = self.clock() if now is None else now
+        written = []
+        for run in self._ended_runs(now - RECONCILE_HORIZON_SECONDS):
+            def go(cur, run=run):
+                f = self._facts(cur, run)
+                out = reconcile(f)
+                if out is None:
+                    return None
+                result, reasons = out
+                set_tenant(cur, run["tenant"])
+                cur.execute("SELECT recon_id, version, result, reasons FROM reconciliations WHERE run_id=%s"
+                            " ORDER BY version DESC LIMIT 1", (run["run_id"],))
+                last = cur.fetchone()
+                if last and last[2] == result and list(last[3]) == reasons:
+                    return None
+                facts = f.as_dict()
+                rid, version = str(uuid.uuid4()), (last[1] + 1 if last else 1)
+                led = ledger.append(cur, self.obs.signer, now, "reconciliation", result, None, run["tenant"], rid,
+                                    {"run_id": run["run_id"], "version": version, "reasons": reasons, "scope": "canary",
+                                     "facts_sha256": sha256_hex(canonical(facts))})
+                cur.execute("INSERT INTO reconciliations (recon_id, run_id, tenant_id, version, supersedes, result, reasons,"
+                            " evidence_level, facts, decided_at, ledger_n, ledger_hash) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                            (rid, run["run_id"], run["tenant"], version, str(last[0]) if last else None, result, reasons,
+                             "none" if result == INCONCLUSIVE else "E3", json.dumps(facts), _dt(now), led["n"], led["hash"]))
+                if last:
+                    code = ("RESULT_ESCALATED" if last[2] == INCONCLUSIVE and result != INCONCLUSIVE
+                            else "RECONCILIATION_SUPERSEDED")
+                    self._alert(cur, code, run["run_id"], run["tenant"],
+                                {"from": last[2], "to": result, "version": version}, now)
+                if result != INCONCLUSIVE:
+                    self._alert(cur, result, run["run_id"], run["tenant"], {"recon_id": rid, "scope": "canary"}, now)
+                return {"run_id": run["run_id"], "version": version, "result": result, "reasons": reasons}
+            r = self.db.run(go)
+            if r:
+                written.append(r)
+        return written
+
+    def list_reconciliations(self, tenant: str, since: Optional[float] = None, limit: int = 100) -> List[Dict]:
+        """Latest version per run for ONE tenant (RLS-scoped), newest first."""
+        def go(cur):
+            set_tenant(cur, tenant)
+            cur.execute("SELECT DISTINCT ON (x.run_id) x.recon_id, x.run_id, x.version, x.result, x.reasons, x.evidence_level,"
+                        " x.decided_at, x.ledger_n, x.ledger_hash, r.channel, r.created_at, r.expected_condition,"
+                        " r.expected_basis FROM reconciliations x JOIN canary_runs r ON r.run_id = x.run_id"
+                        " WHERE (%s::timestamptz IS NULL OR x.decided_at >= %s::timestamptz)"
+                        " ORDER BY x.run_id, x.version DESC", (cut, cut))
+            rows = [{"recon_id": str(a), "run_id": str(b), "version": v, "result": res, "reasons": list(rs),
+                     "evidence_level": el, "decided_at": d.isoformat(), "ledger": {"n": n, "hash": hh.strip()},
+                     "channel": ch, "run_created_at": ca.isoformat(), "expected_condition": ec, "expected_basis": eb,
+                     "scope": "canary"}
+                    for a, b, v, res, rs, el, d, n, hh, ch, ca, ec, eb in cur.fetchall()]
+            return sorted(rows, key=lambda r: r["decided_at"], reverse=True)[:limit]
+        cut = _dt(since) if since is not None else None
+        return self.db.run(go, lock=False)
 
     def _open_runs(self, due_before: Optional[float] = None) -> List[Dict]:
         """Runs without WINDOW_ENDED / INTERRUPTED. Iterates tenants explicitly (RLS): tenant list from the ledger."""
