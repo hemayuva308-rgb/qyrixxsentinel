@@ -470,6 +470,7 @@ def _prove(a: "Action", verdict: str, rules: List[str], dest: Optional[str], lin
                          "blocked_dest": _redact(dest or a.dest or a.cmd) if verdict == "BLOCK" else None,
                          "lineage": ["%s:%s" % (s["id"], s["label"]) for s in lin],
                          "data": "[REDACTED len=%d]" % len(a.data) if a.data else None,
+                         "correlation_id": a.correlation_id or evaluation_id,
                          "ext_calls": ctx.ext["calls"]})
 
 
@@ -488,6 +489,9 @@ class Action(BaseModel):
     execute: bool = False                       # v1.1 field: execution moved to POST /api/v1/tools/execute
     approval_id: Optional[str] = Field(None, max_length=64)
     redirect_of: Optional[str] = Field(None, max_length=64)   # gate_evaluation_id of the hop that returned a redirect
+    # v1.5 (CEV): caller-chosen id that links this decision to independently observed side effects. Recorded in the proof
+    # record; NOT part of the parameter digest, so it never changes what a grant authorises. Default: gate_evaluation_id.
+    correlation_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
 def params_of(a: Action) -> Dict:
@@ -649,6 +653,7 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
                 "lineage": ["%s:%s" % (s["id"], s["label"]) for s in lin], "latency_ms": round(ms, 3),
                 "external_calls": ctx.ext["calls"], "executed": False, "exec_status": None, "proof": rec,
                 "gate_evaluation_id": eval_id, "params_digest": digest, "redirect_hop": hop,
+                "correlation_id": a.correlation_id or eval_id,
                 "grant_id": grant["id"] if grant else None, "grant_expires_at": grant["expires_at"] if grant else None}
 
 
@@ -739,6 +744,66 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
         return {"executed": ok, "tool": params["tool"], "gate_evaluation_id": eid, "result": result,
                 "adapter": getattr(run, "name", "unknown"), "external_calls": ctx.ext["calls"],
                 "proof_start": start, "proof_result": done}
+
+
+def redeem_grant(body: Any, integration: str, ctx: Optional[GateContext] = None) -> Dict:
+    """Delegated execution (v1.5, platform adapters such as the MCP proxy): the INTEGRATION performs the action itself,
+    so Sentinel never runs an adapter here. The grant is checked exactly like /tools/execute (evaluation match, ALLOW,
+    not revoked, not used, not expired, digest unchanged, current policy re-check) and consumed atomically, single-use.
+    The caller must present the params_digest it will execute: any argument change after the decision is refused.
+    Body: exactly {gate_evaluation_id, grant_id, params_digest[, correlation_id]}."""
+    ctx = ctx or PROD
+    allowed = {"gate_evaluation_id", "grant_id", "params_digest", "correlation_id"}
+    if not isinstance(body, dict) or set(body) - allowed:
+        raise ExecRefused("CLIENT_PARAMS_NOT_ALLOWED", 400)
+    eid, gid, dg, corr = body.get("gate_evaluation_id"), body.get("grant_id"), body.get("params_digest"), body.get("correlation_id")
+    if not all(isinstance(x, str) and 0 < len(x) <= 64 for x in (eid, gid, dg)) or (corr is not None and not (isinstance(corr, str) and len(corr) <= 64)):
+        raise ExecRefused("GATE_EVALUATION_GRANT_AND_DIGEST_REQUIRED", 400)
+    with ctx.lock:
+        ev, g = ctx.evals.get(eid), ctx.grants.get(gid)
+        code = None
+        if ctx.state["degraded"]:
+            code = "PROOF_DEGRADED"
+        elif not ev or not g or g["gate_evaluation_id"] != eid or ev["verdict"] != "ALLOW":
+            code = "GRANT_INVALID"
+        elif g.get("revoked"):
+            code = "GRANT_REVOKED"
+        elif g["used"]:
+            code = "GRANT_REPLAY"
+        elif time.time() > g["exp"]:
+            code = "GRANT_EXPIRED"
+        elif not (params_digest(ev["params"]) == ev["digest"] == g["digest"] == dg):
+            code = "PARAMS_DIGEST_MISMATCH"
+        elif not _revalidate(ctx, ev["params"]):
+            code = "REVALIDATION_FAILED"
+        elif ctx.db is not None:
+            if _persistence_down(ctx):
+                code = "PERSISTENCE_UNAVAILABLE"
+            else:
+                try:
+                    if not ctx.db.consume_grant(gid, eid, g["digest"]):
+                        code = "GRANT_REPLAY"
+                except Exception:
+                    _db_down(ctx, "GRANT_CONSUME_FAILED")
+                    code = "PERSISTENCE_UNAVAILABLE"
+        if code:
+            try:
+                _record(ctx, {"kind": "execution", "verdict": "REDEMPTION_REFUSED", "gate_evaluation_id": eid,
+                              "tool": ev["params"]["tool"] if ev else None, "rule_ids": [code], "integration": integration[:64],
+                              "correlation_id": corr, "ext_calls": ctx.ext["calls"]})
+            except Exception:
+                pass
+            raise ExecRefused(code, 409 if code in ("GRANT_REPLAY", "GRANT_EXPIRED", "GRANT_REVOKED") else 503 if code == "PERSISTENCE_UNAVAILABLE" else 403)
+        g["used"] = True                                   # consumed before the integration is told to proceed
+        try:
+            rec = _record(ctx, {"kind": "execution", "verdict": "EXECUTION_DELEGATED", "gate_evaluation_id": eid,
+                                "tool": ev["params"]["tool"], "method": ev["params"]["method"], "params_digest": ev["digest"],
+                                "integration": integration[:64], "correlation_id": corr or eid, "rule_ids": [],
+                                "ext_calls": ctx.ext["calls"]})
+        except Exception:
+            raise ExecRefused("PROOF_WRITE_FAILED", 503)   # no evidence => integration must not execute
+        return {"redeemed": True, "gate_evaluation_id": eid, "params_digest": ev["digest"], "correlation_id": corr or eid,
+                "proof": rec}
 
 
 def _revalidate(ctx: GateContext, p: Dict) -> bool:

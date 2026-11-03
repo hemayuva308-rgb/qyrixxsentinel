@@ -34,6 +34,13 @@ Start with `docs/PRODUCTION_READINESS.md` (production-readiness classification),
 | Tests | 302 passed, 1 skipped · typecheck + clean no-cache production builds · Docker Compose validated (30/30 live E2E, total-loss + encrypted restore drill) |
 | Meta Llama | integrated, advisory only, failure paths tested on real sockets — **NOT LIVE VERIFIED** (no credentials / provider blocked here) |
 
+## Continuous Enforcement Verification (v1.5, new)
+A decision says what *should* happen; CEV checks what *did* happen. An independent canary observer (loopback HTTP
+listener + canary files) records side effects, and a deterministic reconciler correlates them with the Gate decision
+(`ENFORCEMENT_VERIFIED`, `BYPASS_DETECTED`, `UNAUTHORIZED_EXECUTION`, `INCONCLUSIVE`; missing telemetry is never
+verified). Dashboard: **/enforcement**. The first platform integration is a stdio **MCP proxy** (`python -m app.mcp_proxy`).
+Details, limits and tests: `docs/CONTINUOUS_ENFORCEMENT_VERIFICATION.md`. What is built vs proposed: `docs/FEATURE_MATRIX.md`.
+
 ## Run with Docker Compose
 ```bash
 cp .env.example .env      # replace both CHANGE_ME tokens:  openssl rand -hex 32

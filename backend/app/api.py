@@ -111,6 +111,89 @@ def revoke_ep(gid: str, p: Principal = Depends(require("grant.revoke"))):
     return r
 
 
+_INTEGRATION_RE = __import__("re").compile(r"^[a-z0-9_-]{1,64}$")
+
+
+@tools.post("/redeem")
+async def redeem_ep(request: Request, p: Principal = Depends(require("tools.execute")),
+                    x_qyrix_integration: Optional[str] = Header(None)):
+    """v1.5 delegated execution for platform adapters (e.g. the MCP proxy): consume the single-use grant for the exact
+    params_digest the integration will execute. Sentinel performs no tool call here."""
+    try:
+        body = json.loads(await request.body() or b"null")
+    except ValueError:
+        raise HTTPException(400, "INVALID_JSON")
+    integ = x_qyrix_integration if x_qyrix_integration and _INTEGRATION_RE.match(x_qyrix_integration) else "external"
+    ctx = tenancy.ctx_for(p)
+    try:
+        r = g.redeem_grant(body, integ, ctx)
+    except g.ExecRefused as e:
+        obs.inc("qyrix_executions_total", tenant=p.tenant, outcome=e.code)
+        obs.event("redemption_refused", tenant=p.tenant, cred=p.cred_id, refusal=e.code, scope=integ)
+        raise HTTPException(e.status, e.code)
+    obs.inc("qyrix_executions_total", tenant=p.tenant, outcome="DELEGATED")
+    obs.event("execution_delegated", tenant=p.tenant, cred=p.cred_id, evaluation=r["gate_evaluation_id"], scope=integ)
+    return r
+
+
+# ---------------- universal adapters + Continuous Enforcement Verification (v1.5) ----------------
+class CanaryReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    adapter: str = Field(..., max_length=64)
+    channel: str = Field("http", pattern="^(http|file)$")
+
+
+class CevDemoReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel: str = Field("http", pattern="^(http|file)$")
+
+
+def _fixtures_enabled() -> bool:
+    return os.getenv("QYRIX_CEV_TEST_FIXTURES") == "1" or g._demo_enabled()
+
+
+def _cev_adapter(adapter_id: str):
+    from app import integrations
+    ad = integrations.ADAPTERS.get(adapter_id)
+    if ad is None:
+        raise HTTPException(404, "UNKNOWN_ADAPTER")
+    if adapter_id in integrations.FIXTURES and not _fixtures_enabled():
+        raise HTTPException(403, "TEST_FIXTURES_DISABLED: set QYRIX_CEV_TEST_FIXTURES=1 (evaluation environments only)")
+    return ad
+
+
+@sentinel.get("/integrations")
+def integrations_ep(p: Principal = Depends(require("read"))):
+    from app import integrations
+    return {"contract": "qyrix-adapter-contract/v1", "integrations": integrations.listing(),
+            "test_fixtures_enabled": _fixtures_enabled()}
+
+
+@sentinel.post("/cev/canary")
+def cev_canary_ep(b: CanaryReq, p: Principal = Depends(require("cev.run"))):
+    from app import cev
+    ad = _cev_adapter(b.adapter)
+    return cev.run_canary(tenancy.ctx_for(p), ad, b.channel)
+
+
+@sentinel.post("/cev/demo")
+def cev_demo_ep(b: CevDemoReq = CevDemoReq(), p: Principal = Depends(require("cev.run"))):
+    """Signature demonstration: the SAME must-block canary through an honest and a deliberately broken TEST FIXTURE."""
+    from app import cev
+    ctx = tenancy.ctx_for(p)
+    honest = cev.run_canary(ctx, _cev_adapter("honest_fixture"), b.channel)
+    broken = cev.run_canary(ctx, _cev_adapter("broken_fixture"), b.channel)
+    return {"channel": b.channel, "honest": honest, "broken": broken, "chain_verify": g.verify_chain(ctx),
+            "note": "Both adapters are controlled test fixtures; the broken one touches only an isolated canary."}
+
+
+@sentinel.get("/cev/results")
+def cev_results_ep(p: Principal = Depends(require("read"))):
+    from app import cev
+    ctx = tenancy.ctx_for(p)
+    return {"results": cev.results(ctx, 100), "conformance": cev.conformance(ctx), "window_ms": int(cev.window_seconds() * 1000)}
+
+
 # ---------------- proof ----------------
 @sentinel.get("/proofs")
 def proofs_ep(p: Principal = Depends(require("read"))):
