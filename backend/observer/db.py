@@ -101,7 +101,9 @@ RUNTIME_CHECK = """
 SELECT r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication,
        (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE n.nspname = 'public' AND c.relowner = r.oid),
-       (SELECT d.datdba = r.oid FROM pg_database d WHERE d.datname = current_database())
+       (SELECT d.datdba = r.oid FROM pg_database d WHERE d.datname = current_database()),
+       (SELECT count(*) FROM pg_roles x WHERE x.oid <> r.oid AND x.rolname = 'observer_lookup'
+                                   AND pg_has_role(r.oid, x.oid, 'MEMBER'))
   FROM pg_roles r WHERE r.rolname = current_user
 """
 
@@ -114,4 +116,6 @@ def runtime_problems(cur):
         out.append("owns objects")
     if r[6]:
         out.append("owns the database")
+    if r[7]:
+        out.append("member of observer_lookup")
     return out

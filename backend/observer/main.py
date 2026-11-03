@@ -7,6 +7,8 @@ Configuration (all required unless noted; nothing is read from the backend):
   OBSERVER_SIGNING_KEY_FILE      observer signing key (PEM); must be listed and valid in the manifest
   OBSERVER_OPERATOR_TOKEN_FILE   (optional) bearer token for GET /v1/status; without it /v1/status is disabled
   OBSERVER_HEARTBEAT_SECONDS, OBSERVER_GRACE_SECONDS, OBSERVER_MAX_SKEW_SECONDS   (optional; defaults 10 / 30 / 120)
+  OBSERVER_CANARIES=1 (+ OBSERVER_CANARY_HTTP_PORT [loopback only], OBSERVER_CANARY_DIR, OBSERVER_CANARY_CREDENTIALS_FILE,
+    OBSERVER_CANARY_P2_LIVE=1 + OBSERVER_CANARY_BACKEND_URL - live P2 is OFF by default)   (optional, C3)
   OBSERVER_BIND (default 127.0.0.1; the C5 deployment sets the container address), OBSERVER_PORT (default 9000)
 
 Start-up is fail closed: manifest signature, manifest rollback, runtime account privileges, schema version and the full
@@ -35,7 +37,8 @@ def build(env=os.environ) -> Observer:
     def check(cur):
         p = runtime_problems(cur)
         cur.execute("SELECT name FROM schema_migrations")
-        return p, [m for m in expected() if m not in {r[0] for r in cur.fetchall()}]
+        done = {r[0] for r in cur.fetchall()}            # fetch ONCE (C1 bug: re-fetched per migration, found by C3)
+        return p, [m for m in expected() if m not in done]
     problems, missing = db.run(check, lock=False)
     if problems:
         raise SystemExit("observer runtime account is over-privileged: " + ", ".join(problems))
@@ -52,13 +55,38 @@ def build(env=os.environ) -> Observer:
     return obs
 
 
-def monitor(obs: Observer, interval: float) -> None:
+def build_canaries(obs: Observer, env=os.environ):
+    """C3 canaries (optional). Sensors are loopback-only; live P2 submission stays OFF unless
+    OBSERVER_CANARY_P2_LIVE=1 is set explicitly (D4: connectivity and security are validated in the deployment phase)."""
+    from observer.canary import CanaryService, FileCanarySensor, HttpCanarySensor, P2Client
+    if env.get("OBSERVER_CANARIES", "") != "1":
+        return None
+    svc = CanaryService(obs)
+    if env.get("OBSERVER_CANARY_HTTP_PORT"):
+        svc.http = HttpCanarySensor(svc.record, env.get("OBSERVER_CANARY_HTTP_HOST", "127.0.0.1"),
+                                    int(env["OBSERVER_CANARY_HTTP_PORT"]))
+    if env.get("OBSERVER_CANARY_DIR"):
+        svc.file = FileCanarySensor(svc.record, env["OBSERVER_CANARY_DIR"])
+    creds = json.load(open(env["OBSERVER_CANARY_CREDENTIALS_FILE"])) if env.get("OBSERVER_CANARY_CREDENTIALS_FILE") else {}
+    live = env.get("OBSERVER_CANARY_P2_LIVE") == "1" and bool(env.get("OBSERVER_CANARY_BACKEND_URL"))
+    http = None
+    if live:
+        import httpx
+        http = httpx.Client(base_url=env["OBSERVER_CANARY_BACKEND_URL"], timeout=5.0, trust_env=False)
+    svc.p2 = P2Client(creds.get("tenants", {}), http, live)
+    svc.recover()                                     # runs left open by a previous process => INTERRUPTED
+    return svc
+
+
+def monitor(obs: Observer, interval: float, canaries=None) -> None:
     while True:
         try:
             obs.tick()
+            if canaries is not None:
+                canaries.tick()
         except Exception:
             pass                                      # monitor failures are visible as missing alerts / stale status
-        time.sleep(interval)
+        time.sleep(min(interval, 1.0) if canaries is not None else interval)
 
 
 def main() -> int:
@@ -66,9 +94,10 @@ def main() -> int:
     tok = None
     if os.getenv("OBSERVER_OPERATOR_TOKEN_FILE"):
         tok = open(os.environ["OBSERVER_OPERATOR_TOKEN_FILE"]).read().strip() or None
-    threading.Thread(target=monitor, args=(obs, obs.cfg.H), name="observer-monitor", daemon=True).start()
+    canaries = build_canaries(obs)
+    threading.Thread(target=monitor, args=(obs, obs.cfg.H, canaries), name="observer-monitor", daemon=True).start()
     import uvicorn
-    uvicorn.run(create_app(obs, tok), host=os.getenv("OBSERVER_BIND", "127.0.0.1"), port=int(os.getenv("OBSERVER_PORT", "9000")))
+    uvicorn.run(create_app(obs, tok, canaries), host=os.getenv("OBSERVER_BIND", "127.0.0.1"), port=int(os.getenv("OBSERVER_PORT", "9000")))
     return 0
 
 

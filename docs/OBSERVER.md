@@ -1,4 +1,4 @@
-# Observer Service: Phase C1–C2 implementation
+# Observer Service: Phase C1–C3 implementation
 
 Design: `docs/PHASE_C_OBSERVER_DESIGN.md` (revision 3, approved at `fd76a80`). This document records what slices
 **C1–C2** implement, how to run them, the resolutions taken where the design was silent or inconsistent, and the
@@ -57,6 +57,55 @@ Manifest rules enforced by `observer/manifest.py`:
 | MCP proxy adapter reports (E1, signed, fire-and-forget) | §12 | `app/observer_feed.py::AdapterReporter`, `app/mcp_proxy.py` | `test_egress_tagging.py::test_mcp_proxy_*`, `test_adapter_report_*` |
 | Colocated CEV labelled `evidence_level: colocated` | §10 | `app/api.py` | `test_colocated_cev_results_are_labelled` |
 
+### 1.3 C3: observer canaries (owner decisions D1–D5, amended)
+| Feature | Design § / decision | Code | Tests |
+|---|---|---|---|
+| Tokens: 128-bit CSPRNG (`secrets.token_bytes(16)`) for the canary token, the positive-control token and the correlation id. All are minted in the observer; **only SHA-256 hashes are stored** | §6 | `observer/canary.py::mint` | `test_tokens_are_csprng_and_unique`, `test_run_is_recorded_before_submission_and_only_hashes_are_stored` |
+| Run record, `CREATED` event and ledger record written **before** any submission; DB down ⇒ nothing submitted | §6 | `CanaryService.start` | same; `test_database_unavailable_nothing_submitted_and_hits_not_silent` |
+| Expectation recorded only as a **test condition**: `expected_condition=BLOCK`, `expected_basis=construction`. The REST response, the signed claim (or its absence) and every discrepancy are recorded separately; nothing is assumed | D2 | `CanaryService._finish` | `test_signed_block_claim_matches_expectation_without_any_verdict`, `test_discrepancies_are_recorded_not_concluded`, `test_rest_response_is_never_treated_as_a_claim` |
+| `DECISION_MISSING`: no signed decision claim (C2 feed, E0) with the observer-minted `correlation_id` within `T_decision` | §6, §5.5 | `_finish` | `test_decision_missing_and_late_claim` |
+| P2 client: **only** `POST /api/v1/sentinel/gate/evaluate`, observer-held canary key (secret read from file at use, never stored; key id recorded); **live submission OFF by default** (`SUBMISSION_DISABLED`); no execute/redeem path | D4 | `P2Client` | `test_live_p2_is_disabled_by_default`, `test_p2_client_only_ever_calls_evaluate`, `test_backend_unavailable` |
+| HTTP canary sensor: stdlib, **loopback only** (non-loopback bind refused), bounded concurrency and body, unknown tokens counted not stored, no request logging | D3 | `HttpCanarySensor` | `test_http_sensor_is_loopback_only`, `test_forged_and_invalid_observations_are_not_recorded` |
+| File canary sensor: polling an **observer-owned** directory (mode 0700), regular files only, no symlinks | D3, D4 | `FileCanarySensor` | `test_file_channel_observation_and_cleanup`, `test_file_sensor_ignores_symlinks_and_requires_private_dir` |
+| E3 observations (canary + positive control), `in_window` / `late`; repeated hits are separate observations; a token counts only on its own channel | §6, §12 | `CanaryService.record` | `test_token_observation_is_e3_and_produces_no_verdict`, `test_repeated_and_late_observations` |
+| Positive controls: the observer stimulates its own sensor with the control token in every run; missing ⇒ `POSITIVE_CONTROL_FAILED` alert | §5.6, §14 | `_positive_control`, `_finish` | `test_positive_control_failure_alerts`, `test_positive_control_outside_window_fails` |
+| Expiry and cleanup: lifecycle ends at `max(W, T_decision)`; canary files removed; evidence never deleted; hits after the window are `late` | §6 | `_finish`, `_cleanup` | `test_repeated_and_late_observations`, `test_file_channel_observation_and_cleanup` |
+| Restart: runs left open become `INTERRUPTED` (alert `CANARY_RUN_INTERRUPTED`), are never "finished", and later hits are still recorded as `late` | §14 | `CanaryService.recover` | `test_restart_interrupts_open_runs_and_late_hits_still_recorded` |
+| O002 (observer-db only): `canary_runs`, `canary_run_events`, `observations`; append-only, RLS by tenant, runtime SELECT/INSERT only; closed event vocabulary (no verdict value can be stored) | D5, §13 | `observer/migrations/O002_canaries.sql` | `test_o002_upgrade_preserves_o001_data_and_failed_migration_rolls_back`, `test_o002_runtime_privileges_and_append_only`, `test_runtime_cannot_insert_non_e3_or_verdict_rows`, `test_tenant_isolation` |
+| API (operator token): `POST /v1/canaries/run`, `GET /v1/canaries/{tenant}/{run_id}`; canary counters in `/v1/status` | §12 | `observer/app.py` | `test_canary_api_requires_operator` |
+
+**Alerts (ledger):** `CANARY_RUN_CREATED` (record), `CANARY_TOKEN_OBSERVED`, `DECISION_MISSING`, `DECISION_DISCREPANCY`,
+`POSITIVE_CONTROL_FAILED`, `CANARY_RUN_INTERRUPTED`.
+
+**No verdicts:** C3 generates no `ENFORCEMENT_VERIFIED`, `BYPASS_DETECTED` or `UNAUTHORIZED_EXECUTION`. This is enforced
+three ways:
+- the `canary_run_events.kind` CHECK constraint;
+- an AST test over `observer/*.py`;
+- a scan of every stored event and ledger record in the tests.
+
+`WINDOW_ENDED` carries `result: null`. C4 will consume these records.
+
+**C3 limitations (honest scope):**
+- **Not reachable by the deployed backend.** Sensors are loopback / observer-directory only (D3). Backend writes
+  through a shared volume and the DNS resolver zone are C5. **No claim is made that the deployed backend or any
+  integration can reach a sensor.**
+- **Live P2 coverage is not claimed.** Live P2 submission is disabled by default (D4) and was tested only with fixture
+  transports. There is no observer→backend network route, and none was created. The P1 MCP harness is deferred.
+- **The expectation is not validated by policy.** `expected_basis: construction` describes how the expectation was
+  chosen. It is not validated by a signed policy bundle (C6), and the Gate is never assumed or forced to BLOCK.
+- **No protection against an adaptive backend (§6).** An adaptive compromised backend can recognise the canary
+  credential or the observer-owned destinations and behave honestly only for them. Canaries test the integration and
+  non-adversarial faults, and exercise the decision feed; they do **not** detect every compromised-backend scenario.
+- **Restarts lose sensor continuity.** Hits that arrive while the observer is down are not observed, which is why such
+  runs are `INTERRUPTED`.
+- **Unrecorded hits.** A sensor hit that cannot be recorded (observer DB down) is counted as `unrecorded`, not stored.
+- **The canary listener accepts unauthenticated traffic.** It was built not to repeat F1/F3: synchronous handlers,
+  bounded concurrency and body, unknown tokens counted rather than stored. F1/F3 themselves (`/v1/events`) remain
+  open.
+- **Defect found and fixed during C3.** `observer/main.py` re-fetched the applied-migration list once per expected
+  migration. With O002 present, a migrated database was wrongly refused at startup. This was a C1 defect; it is now
+  fetched once.
+
 ## 2. Configuration
 
 **Backend** (the feed is inactive unless `QYRIX_OBSERVER_URL` is set; durable mode only):
@@ -74,6 +123,14 @@ Manifest rules enforced by `observer/manifest.py`:
 The feed needs the installation identity, which is created by the state witness (`app/integrity.py`). With
 `QYRIX_STATE_WITNESS=disabled` and no `installation` row, an enabled feed **fails closed**: every evaluation is
 blocked with R17. In that case enable the witness, or create the identity with `python -m app.recovery accept`.
+
+**Observer canaries (C3, optional):**
+- `OBSERVER_CANARIES=1` enables canaries.
+- `OBSERVER_CANARY_HTTP_PORT` sets the HTTP sensor port (loopback only).
+- `OBSERVER_CANARY_DIR` is the observer-owned directory for file canaries (mode 0700).
+- `OBSERVER_CANARY_CREDENTIALS_FILE` maps each tenant to its credential: `{"tenants": {t: {"key_id", "token_file"}}}`.
+- Live P2 runs only with **both** `OBSERVER_CANARY_P2_LIVE=1` and `OBSERVER_CANARY_BACKEND_URL`. It is off by default
+  and must not be enabled before the deployment phase validates the route (D4).
 
 **Observer**: all settings are listed in the docstring of `backend/observer/main.py` and include:
 - `OBSERVER_DATABASE_URL` (or `OBSERVER_DB_*`);

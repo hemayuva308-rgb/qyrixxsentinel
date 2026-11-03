@@ -1,4 +1,4 @@
-# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-03, updated after Phase C1–C2)
+# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-03, updated after Phase C3)
 
 Rule: **Built** = implemented and covered by automated tests in this repository. Anything else is labelled as such.
 Test counts are from the last full run, recorded in the commit that changed this file.
@@ -39,7 +39,8 @@ Test counts are from the last full run, recorded in the commit that changed this
 | Observer Service C1: signed ingest, root-signed key manifest, gap-free watermarks, heartbeats, epochs/quarantine, window closure, signed hash-chained ledger, separate observer-db (O001) | Built (Phase C1) | `backend/observer/`, `tests/test_observer_unit.py`, `tests/test_observer_pg.py`; claims only (E0/E1): **no sensors, nothing can be ENFORCEMENT_VERIFIED** (`docs/OBSERVER.md`) |
 | Observer feed C2: migration 008, same-transaction outbox, publisher + heartbeats, operator-signed epoch change, `execution_id`, CONNECT execution header (pinned IP), MCP adapter reports | Built (Phase C2) | `app/observer_feed.py`, `tests/test_observer_feed_pg.py`, `tests/test_egress_tagging.py` |
 | Observer deployed as a separate container / host (compose overlay, egress chokepoint, host attestor) | Proposed (C5) | not deployed; no isolation claimed yet |
-| Observer canaries, sensors, reconciler v2, evidence levels, policy bundle, anchoring/export (C3, C4, C6, C7) | Proposed | |
+| Observer canaries C3: CSPRNG tokens (hash-only storage), run-before-submission, loopback HTTP + observer-owned file sensors (E3), positive controls, DECISION_MISSING, discrepancies, restart/expiry, O002 | Built (Phase C3; test-only reach) | `observer/canary.py`, `tests/test_observer_canary_pg.py`; **live P2 disabled, no deployed reachability, no verdicts** (`docs/OBSERVER.md` §1.3) |
+| Reconciler v2, evidence levels, policy bundle, anchoring/export (C4, C6, C7) | Proposed | |
 
 ## Still to do (master plan, in priority order)
 | Feature | Status |
