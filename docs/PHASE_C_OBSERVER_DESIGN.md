@@ -1,4 +1,4 @@
-# Phase C: Independent Observer Service (architecture design, revision 2, for review; NOT implemented)
+# Phase C: Independent Observer Service (architecture design, revision 3, for review; NOT implemented)
 
 Status: **design only.** Nothing in this document is implemented. It changes no code, schema, migration or runtime
 behaviour. Every "will" below is a proposal for review.
@@ -10,6 +10,12 @@ behaviour. Every "will" below is a proposal for review.
 - the trusted policy source (§8);
 - observer compromise (§9);
 - plus the delivery guarantees of migration 008 (§10).
+
+**Revision 3** adds four explicit resolutions:
+- the host-level egress mechanism, and attestation of the *deployed* backend namespace (§7.1–7.3);
+- established CONNECT tunnels and BLOCK windows (§7.5);
+- heartbeat and sequence semantics, concurrency and restore (§5.1–5.4);
+- the labelling of cross-witnessed heads as claims (§9).
 
 R21 (strict "require observer" mode) is **out of scope**.
 
@@ -107,39 +113,98 @@ look healthy. Where a channel is not mediated, results stay INCONCLUSIVE by desi
 6. **Consumption.** The dashboard pulls from the observer read API. The observer never writes into the backend DB.
 
 ## 5. Event suppression, heartbeats, watermarks and window closure (review Q1)
-**Signed heartbeat** (type `heartbeat`, same sequence space as the producer's events):
+**Principle.** Heartbeats and sequence numbers are **signed producer claims (E0)**, not independent evidence. They
+control liveness and *when* a window may close. They are a **necessary but never sufficient** condition for VERIFIED:
+- a lying heartbeat can make a window close early or late;
+- it cannot create the E3 observation, coverage attestation and positive control that VERIFIED also requires (§11);
+- it cannot hide a mediated side effect.
+
+### 5.1 Two counters, two purposes
+| Counter | Scope | Allocated by | Gap-free? | Used for |
+|---|---|---|---|---|
+| **Event `seq`** | per `(producer_id, epoch, tenant)` | `UPDATE observer_seq SET n = n + 1 WHERE tenant_id = $t AND epoch = $e RETURNING n`, inside the **same transaction** that writes the decision/grant and its outbox row (§10) | **Yes** (a rolled-back transaction rolls back its increment) | gap and tail detection |
+| **Heartbeat `hb_seq`** | per `(producer_id, epoch)`, all tenants | separate monotonic counter `observer_hb_seq`, incremented per heartbeat, **outside** event transactions | No (gaps allowed and expected) | heartbeat ordering and replay protection only |
+
+- **Heartbeats do NOT consume event sequence numbers.** Consuming them would put heartbeat traffic into event
+  transactions and turn missed heartbeats into false gap alarms.
+- **Producer identity:** `producer_id = gate:<installation.install_id>`, reusing the existing insert-once
+  installation identity in `app/integrity.py`, so it is stable across restarts. `key_id` names the signing key.
+- **`epoch`:** a small integer, starting at 1. It changes only through the signed recovery procedure in §5.4.
+
+### 5.2 Heartbeat content
+Signed with the GATE key; type `heartbeat`. It is a claim, E0:
 ```json
-{"type": "heartbeat", "body": {"published_through_seq": 1041, "outbox_depth": 0, "gate_clock": "…",
- "tenants": {"default": {"proof_n": 8812, "proof_head": "<sha256>", "last_decision_seq": 1040}}}}
+{"type": "heartbeat", "epoch": 1, "hb_seq": 90311, "body": {"gate_clock": "…", "outbox_depth": 0,
+ "tenants": {"default": {"allocated_through_seq": 1041, "proof_n": 8812, "proof_head": "<sha256>"}}}}
 ```
+`allocated_through_seq` is the counter value `n`: the highest event seq **committed**, whether or not it has been
+delivered yet.
 
-**Watermarks kept by the observer per (producer, tenant):**
-- `contiguous_seq`: the highest *n* such that all of 1…*n* have been received;
-- `attested_seq`: `published_through_seq` from the newest valid heartbeat;
-- `last_heartbeat_at`: observer clock time.
+### 5.3 Concurrency, ordering and arrival
+**Concurrent writers.**
+- The `observer_seq` row lock serializes allocation per tenant, across threads and processes, so values are unique
+  and gap-free.
+- The existing rule (one backend process per database) still applies; the row lock is defence in depth, not a reason
+  to run several.
 
-**Rules:**
+**One active publisher per producer.**
+- Each publisher must hold `pg_try_advisory_lock(hash(producer_id))` before sending.
+- A second instance stays idle and retries the lock every `H`.
+- The active publisher sends events in `(tenant, seq)` order and heartbeats on its own timer.
+
+**Out-of-order arrival at the observer.**
+- **Storage:** events are stored by `(producer_id, epoch, tenant, seq)`.
+- **Watermarks:** `contiguous_seq` advances only when the next number arrives. Events beyond a hole are **held**: they
+  are stored, but no window that depends on them can close.
+- **Heartbeat before its events:** `attested_seq` (the largest `allocated_through_seq` seen) may run ahead of
+  `contiguous_seq`. The observer waits grace `G`; if the hole is still open, the result is `DECISION_FEED_GAP`.
+- **Old or out-of-order heartbeats:** a heartbeat whose `hb_seq` ≤ the newest already accepted never lowers a
+  watermark. It is stored for audit and counted as `HEARTBEAT_OUT_OF_ORDER`.
+- **Replays:** a duplicate `hb_seq` with identical bytes is ignored. A duplicate with different content raises
+  `EVENT_CONFLICT`.
+
+### 5.4 Restore from backup and epochs
+- **What a restore looks like:** restoring the backend DB to an earlier point moves `observer_seq` back, so new events
+  reuse numbers the observer already holds with **different content**. The observer detects
+  `(producer, epoch, tenant, seq)` with a different `event_id` or bytes, which gives `PRODUCER_REGRESSION`.
+- **Quarantine:** that stream (producer, epoch) is quarantined. Nothing further is reconciled, windows depending on it
+  are INCONCLUSIVE, and a security alert is raised.
+- **Recovery:**
+  1. the operator runs the existing recovery procedure (`python -m app.recovery accept`, extended in C2);
+  2. that tool emits an **epoch change record**, signed with the **operator recovery key**: offline or operator-held,
+     **not** the GATE key;
+  3. the record states the new epoch, the last trusted seq of the old epoch, and the reason;
+  4. the observer accepts a new epoch only with this operator signature;
+  5. sequence numbers restart at 1 within the new epoch.
+
+  Because the observer requires the operator key, a compromised backend cannot reset its counters to hide a
+  suppression.
+- **Windows spanning the regression** stay INCONCLUSIVE permanently, recorded through a supersession record.
+
+### 5.5 Suppression rules
 | Situation | Detection | Outcome |
 |---|---|---|
-| Gap inside the stream | `contiguous_seq` < a received seq | `DECISION_FEED_GAP`; affected windows INCONCLUSIVE; alert |
-| **Tail suppression** (events withheld but heartbeats continue) | `attested_seq` > `contiguous_seq` for longer than grace `G` | `DECISION_FEED_GAP` (tail); windows INCONCLUSIVE; alert |
-| **Publisher stopped or partitioned** | no valid heartbeat for 3×`H` | `PRODUCER_SILENT`; every open window INCONCLUSIVE; alert. Any effect seen meanwhile → UNAUTHORIZED_EXECUTION |
-| Heartbeat says the proof chain moved backwards (`proof_n` lower or `proof_head` diverged at the same `n`) | comparison with the previous heartbeat | `PRODUCER_REGRESSION` (security alert) |
+| Hole inside the stream | `contiguous_seq` < a received seq | `DECISION_FEED_GAP` after `G`; affected windows INCONCLUSIVE; alert |
+| **Tail suppression** (heartbeats continue, events withheld) | `attested_seq` > `contiguous_seq` for > `G` | `DECISION_FEED_GAP` (tail); INCONCLUSIVE; alert |
+| **Publisher stopped / partitioned** | no accepted heartbeat for 3×`H` | `PRODUCER_SILENT`; every open window INCONCLUSIVE; any mediated effect meanwhile → UNAUTHORIZED_EXECUTION |
+| Proof head regresses between heartbeats | `proof_n` lower, or a different `proof_head` at the same `n` | `PRODUCER_REGRESSION` (claim-level alert; not evidence) |
 | Heartbeat clock skew > `S` | `gate_clock` vs observer clock | heartbeat refused; counts as missing |
-| **Consistent liar** (omits events *and* their sequence numbers, heartbeats agree) | **Not detectable from the feed alone** | Detected only through observer-originated stimuli: a canary with no decision within `T_decision` gives `DECISION_MISSING` (§6), and a mediated effect with no claim gives UNAUTHORIZED (§7) |
+| **Consistent liar** (omits events and their numbers; heartbeats agree) | **Not detectable from the feed** | Only via observer stimuli: canary with no decision in `T_decision` → `DECISION_MISSING` (§6); mediated effect with no claim → UNAUTHORIZED (§7) |
 
-**Window closure** (for a correlation or canary run). A window opens at observer time `t0`, when the observer submits
-a canary or receives the first claim or observation. It is **closed** only when all of these hold:
-1. observer time > `t0 + W` (W = observation window);
-2. a valid heartbeat issued after `t0 + W` has been received, with `contiguous_seq ≥ published_through_seq` at that
-   heartbeat (the producer has reported everything up to after the window);
-3. every sensor relevant to the channel reported healthy and the positive control passed inside `[t0, t0 + W]`.
+### 5.6 Window closure
+A window opens at observer time `t0`, when a canary is submitted or the first claim or observation arrives. It is
+**closed** only when all of these hold:
+1. observer time > `t0 + W`;
+2. an accepted heartbeat with `issued_at > t0 + W` has arrived, and `contiguous_seq ≥ allocated_through_seq` of that
+   heartbeat;
+3. every sensor for the channel was healthy and the positive control passed inside `[t0, t0 + W]`;
+4. no relevant tunnel overlapping the window is still open (§7.5).
 
-If conditions 2–3 do not hold by `t0 + W + G`, the result is **INCONCLUSIVE** (`WINDOW_NOT_CLOSABLE`), never VERIFIED.
+If these do not hold by `t0 + W + G`, the result is **INCONCLUSIVE** (`WINDOW_NOT_CLOSABLE`). Closure is still only a
+precondition: VERIFIED also needs §11.
 
-**Late data.** Results are **append-only and versioned.** An event or observation that arrives after closure triggers
-re-reconciliation. A *new* ledger record supersedes the old one, which is never edited. VERIFIED → BYPASS raises a
-critical alert.
+**Late data:** results are append-only and versioned. A late event or observation produces a *superseding* record,
+never an edit. VERIFIED → BYPASS raises a critical alert.
 
 **Defaults** (configurable): `H` = 10 s, `G` = 30 s, `W` = 2 s (canaries), `T_decision` = 10 s, `S` = 120 s.
 
@@ -181,46 +246,134 @@ critical alert.
   arrives, `DECISION_MISSING` (suppression signal, alert);
 - any observation of `token` at the listener, resolver or proxy means `BYPASS_DETECTED`.
 
-## 7. Egress coverage and what HTTPS metadata proves (review Q3)
-**Enforcement by network topology (Docker daemon, boundary D), not by backend code.** A compromised application cannot
-change its own network attachments or capabilities:
+## 7. Egress coverage, enforcement mechanism and HTTPS limits (review Q3)
+### 7.1 The enforcement mechanism (kernel and host firewall; not backend code)
+Under the observer overlay, the backend container is attached **only** to `internal: true` networks (`internal`,
+`observer_ingest`, `egress_in`). Docker implements an internal network as follows, and this is what stops direct
+egress:
+- **Routing:** the container gets **no default route**. Its routing table holds only the connected subnet routes of
+  its attached bridges, so the kernel returns `ENETUNREACH` for any other IPv4 destination. Adding a route needs
+  `CAP_NET_ADMIN`, which `cap_drop: [ALL]` already removes; raw sockets need `CAP_NET_RAW`, also removed.
+- **Forwarding:** Docker installs `DOCKER-ISOLATION` / `FORWARD` rules that drop traffic from an internal bridge to
+  any other interface. Even a packet sent to the bridge gateway address is not forwarded.
+- **IPv6:** no backend-side network sets `enable_ipv6`, so the container has no global IPv6 address or route
+  (link-local only). The backend also gets `sysctls: net.ipv6.conf.all.disable_ipv6=1`.
+- **DNS:** the backend uses `dns: [<observer resolver IP on egress_in>]`. Docker's embedded resolver (127.0.0.11)
+  forwards external names to that resolver. Whether the embedded resolver's upstream queries leave from the
+  container's namespace (and so hit the observer) or from the daemon's must be **validated in C5**. If it is the
+  daemon, the DNS channel is **`unmediated`**, and DNS-channel BLOCKs stay INCONCLUSIVE.
+- **Host firewall, belt and braces:** independently of Docker's semantics, the operator installs `DOCKER-USER` rules
+  for IPv4 and IPv6 (`iptables` and `ip6tables`). They are evaluated before Docker's own rules:
+  - **drop** anything entering from the backend-side bridges whose destination is not the observer's address on that
+    bridge;
+  - **drop** anything leaving those bridges toward the host's uplink interfaces;
+  - bridge names are fixed by `driver_opts: com.docker.network.bridge.name: qyrix-int` (and similar) so rules cannot
+    drift.
 
-| Bypass attempt | Control | Verified by the coverage prober (probe sidecar) |
+  Docker's iptables management must stay enabled (`"iptables": true`, the default).
+- **Only the observer** is attached to both `egress_in` and `egress`, and only its proxy and resolver forward.
+
+This rests on boundary D: an attacker who controls the application **cannot** change network attachments,
+capabilities, sysctls or host firewall rules. One who controls the host or Docker daemon can, and that is out of
+scope.
+
+### 7.2 Why a probe container is not proof, and what is
+A sidecar with *similar* attachments tests the network, **not** the deployed backend's actual namespace. Neither is a
+self-test run by backend code, because a compromised backend can skip the bypass attempts and report clean.
+The sidecar is therefore kept only as a **continuous network-policy check**, labelled as such. It never counts as
+coverage proof for the backend.
+
+### 7.3 Deployment attestation of the actual backend namespace
+A host-side **attestor** runs as root on the Docker host (boundary D), **not inside the backend**. It can be a
+systemd timer or a CI job on the host. It signs its report with an **attestor key** registered in the observer key
+manifest (§9). It runs:
+- at deployment;
+- whenever the backend container ID or init PID changes (container events);
+- every hour.
+
+**Checks:**
+1. **`docker inspect` of the running backend container:**
+   - exact set of networks;
+   - `NetworkMode` is not `host` and not `container:*`;
+   - not privileged;
+   - `CapAdd` empty, `CapDrop` = ALL;
+   - IPv6 sysctl disabled;
+   - `Dns` = the observer resolver;
+   - image digest recorded.
+2. **Inside the backend's own network namespace**, via `nsenter --net=/proc/<backend-pid>/ns/net` and **host**
+   binaries (no backend code involved):
+   - `ip -4 route`: no default route;
+   - `ip -6 addr` / `ip -6 route`: no global address or route;
+   - connection attempts to an **observer-controlled external sink** (reachable only via `egress`), each with a unique
+     token: direct IPv4 TCP, IPv6 TCP, UDP/TCP 53 to a public resolver IP, DoH to an IP, ICMP, and a CONNECT with
+     mismatched SNI.
+3. **Evidence is read from the receiving side.** The **observer's sink and proxy logs** decide, not the attempts' exit
+   codes:
+   - each direct-path token must be **absent** at the sink;
+   - a **positive-control** token sent through the proxy from the same namespace must be **present** and recorded as
+     mediated. This proves the attempts really ran in that namespace.
+4. **Host firewall:** `iptables -S DOCKER-USER` and `ip6tables -S DOCKER-USER` contain the expected rules for the
+   fixed bridge names.
+
+**Result:**
+- a coverage attestation bound to `(container_id, image_digest, attested_at)`, valid for 1 h, or until the container
+  changes;
+- if the container ID reported in the backend's heartbeat (a claim) differs from the attested one, the attestation is
+  treated as **stale** and coverage is unmediated until re-attested;
+- any failure gives `COVERAGE_GAP` (critical alert), and every BLOCK on that channel is INCONCLUSIVE.
+
+### 7.4 Bypass matrix (every row is checked by 7.3 inside the real namespace)
+| Bypass attempt | Control | Pass condition (observer-side) |
 |---|---|---|
-| Direct TCP/UDP to an internet IP | Backend and integrations attach **only** to `internal: true` networks (no default route); only the observer proxy/resolver attach to `egress` | Connect to an observer-controlled external sink IP **must fail** |
-| IPv6 | No `enable_ipv6` on any backend-side network; `sysctls: net.ipv6.conf.all.disable_ipv6=1` in backend containers | IPv6 literal connect to the sink **must fail** |
-| DNS tunnelling or exfiltration | Backend containers use `dns: [<observer resolver>]`. The resolver answers only canary and allowlisted names and logs every query (a sensor). Recursion to the internet happens only in the observer | Query to a public resolver (UDP/TCP 53, DoT 853, DoH to an IP) **must fail**; query for a random external name must be **logged and refused** |
-| Docker embedded DNS forwarding | The embedded resolver (127.0.0.11) forwards external names to the configured `dns:`, which is the observer | Validated in C5: a random-name query must appear at the observer resolver and nowhere else. **If validation fails, DNS coverage is `unmediated` and DNS-channel BLOCKs stay INCONCLUSIVE** |
-| Alternate interfaces, host networking | `network_mode: host` forbidden (compose lint in CI); no other networks attached; `cap_drop: [ALL]` already removes NET_RAW/NET_ADMIN (no raw sockets, no route changes) | Raw socket and ICMP to the sink **must fail** |
-| HTTP proxy env bypass | Irrelevant: without a route, a non-proxied connection fails | covered by the direct-connect probe |
-| Domain fronting / SNI mismatch | The proxy peeks the TLS ClientHello: SNI must equal the CONNECT authority; ECH is refused | Mismatched-SNI CONNECT **must be refused and logged** |
-| Side channels without network (shared volumes, timing) | **Not mediated** | Out of scope; stated |
+| Direct IPv4 TCP/UDP to an internet IP | no default route; DOCKER-ISOLATION + DOCKER-USER drop | sink never sees the token |
+| IPv6 | no global v6; sysctl disabled; ip6tables DOCKER-USER drop | sink never sees the token |
+| Public DNS / DoT / DoH | no route; `dns:` points to the observer | sink and public resolver unreachable; random-name queries appear only at the observer resolver |
+| Docker embedded DNS forwarding | validated in C5 | random name logged at the observer resolver; else DNS channel `unmediated` |
+| Raw sockets / ICMP | `cap_drop: [ALL]` (no NET_RAW) | socket creation fails; sink sees nothing |
+| Route manipulation | no NET_ADMIN | attestor sees an unchanged routing table |
+| Host networking / shared namespace | compose lint + `docker inspect` | attestor refuses |
+| Domain fronting / SNI ≠ CONNECT host; ECH | proxy peeks the ClientHello | refused and logged |
+| Non-network side channels (shared volumes, timing) | **not mediated** | out of scope; stated |
 
-**Probe sidecar.**
-- A minimal container with the **same network attachments and restrictions** as the backend. It runs only the probe
-  commands the observer sends it, on its own `observer_probe` network.
-- It tests the network policy, **not** the backend container's own namespace. That is sound only under boundary D
-  (the attacker cannot change Docker config).
-- A probe success means `COVERAGE_GAP`: every BLOCK on that channel is INCONCLUSIVE, plus a **critical alert**.
-- A coverage attestation is valid for 1 h and is re-run after every observer or backend restart.
+### 7.5 Established CONNECT tunnels, reuse and window boundaries
+Without TLS termination the proxy cannot see requests inside a tunnel. These rules make that limit explicit:
+- **One tunnel, one execution.**
+  - Under the overlay, Sentinel's HTTP adapter opens a **new tunnel per execution**, with no connection pooling, and
+    closes it after the single request.
+  - The proxy binds a tunnel to the `X-Qyrix-Execution` id on its CONNECT request.
+  - An execution id seen on more than one CONNECT gives `EXECUTION_ID_REUSE`, which is UNAUTHORIZED_EXECUTION.
+- **Bounded tunnel life:** the proxy closes tunnels after `T_tunnel` (default 30 s) and records open and close times,
+  so a tunnel cannot stay open indefinitely across many decisions.
+- **Overlap:** a tunnel to host `H` is *relevant* to a BLOCK window on `H` if its lifetime `[opened, closed]` overlaps
+  `[t0, t0 + W]`. That includes tunnels opened **before** the BLOCK decision and still open during the window, and
+  tunnels still open when the window ends (they delay closure, §5.6 condition 4).
+- **BLOCK on host `H`:**
 
-**What HTTPS metadata can and cannot prove (no TLS termination):**
+  | Relevant tunnels to `H` in the window | Result |
+  |---|---|
+  | none (and coverage, positive control, closure all hold) | **ENFORCEMENT_VERIFIED** (`scope: host`) |
+  | any tunnel **without** a valid execution id, or with one not matching an accepted, unused ALLOW grant event for `H` | **BYPASS_DETECTED** if `H` has no ALLOW in the window; otherwise **UNAUTHORIZED_EXECUTION** for that tunnel, and **INCONCLUSIVE** for the BLOCK (attribution impossible) |
+  | only tunnels carrying valid execution ids of **other** ALLOWed executions to `H` (concurrent or pre-existing) | **INCONCLUSIVE** (`TUNNEL_SHARED_WITH_ALLOWED_EXECUTION`): the blocked request could have travelled inside one of them |
+  | a relevant tunnel still open at `t0 + W + G` | **INCONCLUSIVE** (`WINDOW_NOT_CLOSABLE`) |
+
+- **Keep-alive and HTTP/2 multiplexing** inside a tunnel are invisible, so they fall under the same rule: if a relevant
+  tunnel exists and attribution is impossible, the result is INCONCLUSIVE.
+- **Plain HTTP through the proxy** is request-level: each request is observed individually, including on keep-alive
+  connections.
+
+### 7.6 What HTTPS metadata can and cannot prove (no TLS termination)
 | Proxy sees (provable) | Proxy does not see (not provable) |
 |---|---|
-| destination host (CONNECT authority = SNI), port, time, connection count | URL path, query, method, request headers inside TLS, body |
-| bytes in/out, handshake success | which **request** within a connection did what |
-| `X-Qyrix-Execution` on the CONNECT request (plaintext to the proxy) | that a compromised sender did not attach a *legitimate* execution id to an illegitimate connection to the same host |
-| DNS queries through the resolver | data hidden *inside* an allowed connection to an approved host (covert channel) |
+| destination host (CONNECT authority = SNI), port, tunnel open/close time, bytes in/out | URL path, query, method, headers inside TLS, body |
+| `X-Qyrix-Execution` on the CONNECT request | which request inside a tunnel did what; HTTP/2 streams; keep-alive reuse |
+| DNS queries through the resolver | data hidden inside an allowed tunnel to an approved host (covert channel) |
+| — | that a compromised sender did not put a legitimate execution id on an illegitimate tunnel to the same host |
 
-**Resulting verification scope** (`verification_scope` field):
-- **BLOCK of an unapproved host:** no connection to that host from the mediated networks in the window gives
-  VERIFIED (`scope: host`); any connection gives BYPASS.
-- **BLOCK of an approved host** (for example R19 on a POST to an allowlisted API): legitimate connections to the same
-  host can exist, so the proxy cannot tell them apart. The result is INCONCLUSIVE (`HOST_SHARED_WITH_ALLOWED_TRAFFIC`),
-  unless the traffic is plain HTTP (request-level) or no allowed execution to that host exists in the window.
-- **ALLOW over HTTPS:** a matching execution id and host gives VERIFIED with `scope: host`. The path, method and body
-  are never claimed.
-- **Plain HTTP and canaries:** request-level (`scope: request`).
+**`verification_scope`:**
+- `host` for HTTPS;
+- `request` for plain HTTP and canaries.
+
+An ALLOW over HTTPS can at most be VERIFIED at host scope; its path, method and body are never claimed.
 
 ## 8. Independent policy verification: trusted source (review Q4)
 **The source of truth is a signed policy bundle, never the backend's word.**
@@ -272,9 +425,16 @@ key.
 **External anchoring:**
 - **What is anchored:** the ledger head, every `N` records or `M` minutes (defaults 100 / 10 min), at an
   operator-configured RFC 3161 TSA. A free public TSA, or a local TSA for testing; no paid service.
-- **Cross-witnessing:** the observer's anchored head is also written into the backend proof chain, and the backend's
-  head into the observer ledger. Each side then holds the other's history, so a rollback by either side contradicts
-  the other.
+- **Cross-witnessing (detection aid only):** the observer's anchored head is written into the backend proof chain, and
+  the backend's head into the observer ledger.
+  - **Backend heads stored in the observer** (from heartbeats or proof exports) are **backend-reported claims (E0)**.
+    They live in a separate `producer_claims` table, labelled `backend_reported_head`. They **never** raise any
+    result's evidence level, never count as observations, and **never establish the observer's authenticity**. Their
+    only use is a later comparison: a backend whose claimed history regresses or diverges raises
+    `PRODUCER_REGRESSION`, an alert and not a verification.
+  - **Observer heads stored in the backend chain** are, from the backend's side, observer-reported data. They give the
+    observer no authenticity either. Observer authenticity comes **only** from observer signatures under a valid
+    manifest key, plus RFC 3161 anchors.
 - **Observer state witness:** same design as `app/integrity.py`, with its own key and volume.
 
 **Evidence export** (`GET /v1/evidence/export`): ledger records, signatures, key manifest (with its root signature),
@@ -305,7 +465,8 @@ second, independently operated observer, whose results must agree, is future wor
 **Schema (additive, backend DB):**
 - `observer_outbox(tenant_id, seq bigint, event_id uuid unique, type, body jsonb, created_at, sent_at null, attempts int)`,
   primary key `(tenant_id, seq)`, RLS by tenant;
-- `observer_seq(tenant_id primary key, n bigint)`: gap-free counter;
+- `observer_seq(tenant_id, epoch, n bigint, primary key (tenant_id, epoch))`: gap-free event counter;
+- `observer_hb_seq(producer_id primary key, epoch, n bigint)`: heartbeat counter (gaps allowed);
 - `grants.execution_id uuid NULL`: set at INSERT, so no new UPDATE privilege is needed.
 
 **Privileges:**
@@ -317,12 +478,13 @@ second, independently operated observer, whose results must agree, is future wor
 | Property | Mechanism |
 |---|---|
 | **No lost decision once it is recorded** | The outbox row is inserted in the **same transaction** as `save_evaluation` (ALLOW and BLOCK). If the transaction fails, there is no decision and no event, and the Gate already fails closed (R17) |
-| **Gap-free per-tenant sequence** | `UPDATE observer_seq SET n = n + 1 … RETURNING n` inside that transaction (DB sequences can leave gaps on rollback, which would raise false alarms). Writers are already serialized by the context lock |
+| **Gap-free per-tenant sequence** | `UPDATE observer_seq SET n = n + 1 WHERE tenant_id = $t AND epoch = $e RETURNING n` inside that transaction. DB sequences can leave gaps on rollback, which would raise false alarms. The row lock serializes concurrent writers (§5.3); heartbeats use a separate counter and never consume `seq` (§5.1) |
 | **At-least-once delivery** | The publisher sends unsent rows in `seq` order and sets `sent_at` on 2xx. It retries with exponential backoff (cap 60 s) and alerts when `outbox_depth` or age passes thresholds |
 | **Idempotency** | The observer keys on `event_id`. A byte-identical duplicate is acknowledged (`200 duplicate`). Same `event_id` with different content gives `EVENT_CONFLICT` (security alert, refused) |
 | **Ordering** | The observer accepts out-of-order arrival but reconciles only up to `contiguous_seq` (§5) |
 | **Crash recovery** | On restart the publisher resumes from the lowest unsent `seq`. Rows sent but not marked are re-sent and deduplicated |
-| **Outbox loss** (DB restored from backup) | The sequence regresses, so the observer sees a seq ≤ watermark with different content: `PRODUCER_REGRESSION`. The backend state witness also flags the DB regression. Operator recovery follows; results are never silently re-based |
+| **Outbox loss** (DB restored from backup) | The sequence regresses, so the observer sees a seq ≤ watermark with different content: `PRODUCER_REGRESSION` and stream quarantine. The backend state witness also flags the DB regression. Recovery needs an **operator-signed epoch change** (§5.4); the GATE key cannot reset counters; results are never silently re-based |
+| **Single active publisher** | `pg_try_advisory_lock(hash(producer_id))`; other instances idle (§5.3) |
 | **Memory mode** (no PostgreSQL) | The observer feature is **unsupported**: the publisher is disabled and colocated CEV remains as today |
 
 **Backward compatibility:**
@@ -360,8 +522,9 @@ second, independently operated observer, whose results must agree, is future wor
 **Envelope** (canonical JSON with sorted keys, UTF-8, ≤ 64 KiB):
 ```json
 {"schema": "qyrix.event/v1", "event_id": "<uuid4>", "producer_id": "gate:<install_id>|adapter:<integration_id>",
- "key_id": "<ed25519 key id>", "seq": 1042, "issued_at": "…", "tenant": "default",
- "type": "decision|grant|heartbeat|adapter_report", "body": {…}, "sig": "<base64 Ed25519 over canonical(envelope without sig)>"}
+ "key_id": "<ed25519 key id>", "epoch": 1, "seq": 1042, "hb_seq": null, "issued_at": "…", "tenant": "default",
+ "type": "decision|grant|heartbeat|adapter_report|epoch_change", "body": {…},
+ "sig": "<base64 Ed25519 over canonical(envelope without sig)>"}
 ```
 
 **Event bodies:**
@@ -369,12 +532,15 @@ second, independently operated observer, whose results must agree, is future wor
   dest_host (A-label), params_digest, proof {n, hash}`.
 - `grant`: `gate_evaluation_id, grant_id, execution_id, kind (issued|redeemed|executed|refused), integration,
   refusal_code?, params_digest, proof {n, hash}`.
-- `heartbeat`: see §5.
+- `heartbeat`: see §5.2. `seq` is null and `hb_seq` is set; heartbeats never consume event `seq` (§5.1).
+- `epoch_change`: `{new_epoch, last_trusted_seq_per_tenant, reason}`. It is signed with the **operator recovery key**,
+  not the GATE key (§5.4).
 - `adapter_report`: `execution_id?, correlation_id, integration, claims {forwarded}`. E1 only.
 
 **Observation (internal only):**
 `observation_id, sensor (egress_proxy|dns|canary_http|canary_file), observed_at, channel, tenant?, canary_token?,
-execution_id?, host, sni?, port, method?, path_sha256?, body_sha256?, bytes_in/out, connection_id`.
+execution_id?, host, sni?, port, method?, path_sha256?, body_sha256?, bytes_in/out, connection_id, tunnel_opened_at?,
+tunnel_closed_at?`.
 
 **Reconciliation record:**
 `recon_id, version, supersedes?, tenant, correlation_id, execution_id?, claim_refs, claim_sig_valid, observation_refs,
@@ -416,11 +582,15 @@ verification_scope, decision_check, evidence_level, result, reasons, n, prev, ha
 | Internal feed gap | `contiguous_seq` | `DECISION_FEED_GAP`; INCONCLUSIVE; alert | None |
 | Tail suppression | `attested_seq` > `contiguous_seq` beyond `G` | `DECISION_FEED_GAP`; INCONCLUSIVE; alert | None |
 | Publisher silent / partition | no heartbeat for 3×`H` | `PRODUCER_SILENT`; INCONCLUSIVE; effects meanwhile are UNAUTHORIZED | None |
-| Producer regression | heartbeat or seq content regresses | `PRODUCER_REGRESSION`; security alert | None |
+| Producer regression / restore | seq reused with different content, or proof head regresses | `PRODUCER_REGRESSION`; stream quarantined until an operator-signed epoch change; INCONCLUSIVE | None |
+| Out-of-order or replayed heartbeat | `hb_seq` ≤ newest accepted | ignored for watermarks; `HEARTBEAT_OUT_OF_ORDER` logged | None |
+| Relevant tunnel shared with allowed executions | tunnel overlap (§7.5) | `TUNNEL_SHARED_WITH_ALLOWED_EXECUTION`; INCONCLUSIVE | None |
+| Execution id reused on a second CONNECT | proxy | `EXECUTION_ID_REUSE`; UNAUTHORIZED_EXECUTION | None |
+| Deployment attestation stale or failed | attestor (§7.3) | `COVERAGE_GAP`; BLOCKs INCONCLUSIVE; critical alert | None |
 | Canary with no decision | `T_decision` timeout | `DECISION_MISSING`; INCONCLUSIVE; alert | None |
 | Invalid signature / unknown producer / scope / replay / skew / conflict | ingest | refused, recorded, alert | None |
 | Positive control fails | canary listener / resolver / file watcher | INCONCLUSIVE (`POSITIVE_CONTROL_FAILED`) | None |
-| Bypass route open | probe succeeds | `COVERAGE_GAP`; BLOCKs on that channel INCONCLUSIVE; critical alert | None |
+| Bypass route open | attestor token reaches the sink (§7.3) | `COVERAGE_GAP`; BLOCKs on that channel INCONCLUSIVE; critical alert | None |
 | DNS forwarding not via observer | C5 validation fails | DNS channel `unmediated`; DNS BLOCKs INCONCLUSIVE | None |
 | Shared host with allowed traffic | proxy evidence | `HOST_SHARED_WITH_ALLOWED_TRAFFIC`; INCONCLUSIVE | None |
 | Policy bundle invalid / expired / missing | signature or time check | decision check unavailable; ALLOW results INCONCLUSIVE; alert | None |
@@ -436,7 +606,10 @@ verification_scope, decision_check, evidence_level, result, reasons, n, prev, ha
   - networks `observer_ingest`, `observer_db`, `egress_in` (backend side), `egress` (internet), `observer_probe`;
   - read-only root, `cap_drop: [ALL]` plus only what the proxy needs (no `NET_ADMIN`);
   - volumes `observer_witness`, `observer_canary`.
-- `observer-probe`: probe sidecar on the backend's networks with the same restrictions.
+- `observer-probe`: optional sidecar on the backend's networks with the same restrictions, a **network-policy check
+  only, never coverage proof** (§7.2).
+- Host attestor (§7.3): **not** a container in the stack. It runs on the Docker host, as root, from a systemd timer or
+  CI job, with its own attestor key.
 - **Backend under this overlay:** leaves `egress` and reaches the internet only through `egress_in` → observer proxy;
   `dns: [observer]`; IPv6 disabled by sysctl.
 
@@ -463,8 +636,16 @@ separate host, using mTLS with pinned certificates (stdlib `ssl`).
 - heartbeats;
 - observer canaries via P2 (REST) and P1 (MCP harness);
 - positive controls;
-- **the full bypass-probe matrix in §7**: direct IPv4, IPv6, public DNS, DoH, raw socket, SNI mismatch;
-- DNS-forwarding validation.
+- **the full bypass matrix in §7.4, run by the host attestor inside the deployed backend's own namespace** with
+  host binaries, judged from the observer sink. This includes a negative control: a deliberately mis-configured
+  backend (extra `egress` attachment, IPv6 enabled) **must** produce `COVERAGE_GAP`;
+- DNS-forwarding validation;
+- tunnel rules (§7.5): pre-existing tunnel at BLOCK, concurrent allowed tunnel to the same host, tunnel still open at
+  window end, execution-id reuse. Each must give the documented result, with INCONCLUSIVE whenever attribution is
+  impossible;
+- sequence semantics (§5): concurrent writers stay gap-free and unique; heartbeat-before-events; out-of-order and
+  replayed heartbeats; restore from backup → quarantine → operator epoch change; a GATE-key-signed epoch change is
+  **refused**.
 
 **Adversarial (simulated compromised backend holding the GATE key):**
 - forged BLOCK plus direct exfiltration attempt → no route, plus BYPASS on canaries;
@@ -474,6 +655,7 @@ separate host, using mTLS with pinned certificates (stdlib `ssl`).
 - backend-to-observer-db connection must fail;
 - replay and conflicting duplicates;
 - forged ALLOW to a host the policy bundle disallows → `DIVERGES`;
+- backend-reported heads in `producer_claims` never change any result's evidence level (property test);
 - legitimate execution id reused for another connection to the same host → `HOST_SHARED…` INCONCLUSIVE, documented
   as a limit.
 
@@ -493,7 +675,7 @@ INCONCLUSIVE, **never VERIFIED**.
 | C2 | Backend: migration 008 (outbox, seq counter, `grants.execution_id`), publisher + heartbeats, CONNECT execution header; MCP adapter reports | Backend suite green; delivery-guarantee tests (§10) |
 | C3 | Observer canaries (P2, then P1 harness), canary listener + resolver zone + file watcher, positive controls, `DECISION_MISSING` | Canaries reconciled in the observer |
 | C4 | Reconciler v2 + evidence levels + versioned results; alerts; dashboard pull | Exhaustive "never VERIFIED without…" tests |
-| C5 | Egress proxy + resolver as chokepoint, compose overlay, probe sidecar, full bypass matrix, DNS-forwarding validation | All probes fail as required; T1/T4 tests |
+| C5 | Egress proxy + resolver as chokepoint, tunnel binding/limits (§7.5), compose overlay, DOCKER-USER rules, host attestor (§7.3), DNS-forwarding validation | Attestor matrix passes inside the real backend namespace; negative control fails as required; T1/T4 tests |
 | C6 | Signed policy bundle + decision check (stateless rules) | Divergence tests; documented PARTIAL scope |
 | C7 | Observer anchoring, cross-witnessing, export + offline verifier, recovery drill, benchmark group, docs | Compromise drills pass |
 
@@ -506,12 +688,17 @@ INCONCLUSIVE, **never VERIFIED**.
 - **Canary discrimination by an adaptive backend:** documented in §6.
 - **Single-host boundary D.**
 
-## 18. Decisions requested before implementation
-1. Confirm the offline root and policy-signing key model (operator-held, never mounted into containers).
-2. Approve migration 008 as specified in §10 (additive; outbox in the same transaction; gap-free counter).
-3. Approve the egress topology in §7, under the observer overlay only: the backend leaves `egress`, its DNS goes to
-   the observer, IPv6 is disabled.
-4. Approve canary paths: P2 first, with the P1 MCP harness as a follow-up.
-5. Start with C1–C2 only, then review again.
+## 18. Final decision checklist (approval needed before any implementation)
+| # | Decision | Proposed answer |
+|---|---|---|
+| 1 | Offline **root key**, **policy-signing key** and **operator recovery key** (epoch changes), held by the operator and never mounted into backend or observer | Approve |
+| 2 | Migration 008 as in §10 (additive): same-transaction outbox, gap-free per-tenant/epoch counter, separate heartbeat counter, `grants.execution_id` at INSERT | Approve |
+| 3 | Heartbeat and sequence semantics in §5 (heartbeats are E0 claims and never consume `seq`; single publisher via advisory lock; restore → quarantine → operator-signed epoch) | Approve |
+| 4 | Egress topology under the observer overlay only (§7.1): internal-only backend networks, DOCKER-USER IPv4/IPv6 rules on fixed bridge names, `dns:` to the observer, IPv6 sysctl off | Approve |
+| 5 | Host attestor (§7.3) as the **only** coverage proof for the backend namespace, judged from the observer sink; probe sidecar demoted to a network-policy check | Approve |
+| 6 | Tunnel rules (§7.5): one tunnel per execution, `T_tunnel` limit, INCONCLUSIVE whenever attribution is impossible | Approve |
+| 7 | Cross-witnessed backend heads are claims only (§9); they never raise evidence level or establish observer authenticity | Approve |
+| 8 | Canary paths: P2 first, P1 MCP harness as a follow-up (§6) | Approve |
+| 9 | R21 (require-observer strict mode) | **Out of scope** |
+| 10 | First implementation slice | **C1–C2 only**, then a review |
 
-R21 stays out of scope.
