@@ -19,7 +19,7 @@ from observer.envelope import MAX_BYTES
 from observer.ingest import Observer
 
 
-def create_app(obs: Observer, operator_token: Optional[str], canaries=None, read_tokens=None) -> FastAPI:
+def create_app(obs: Observer, operator_token: Optional[str], canaries=None, read_tokens=None, c5=None) -> FastAPI:
     """read_tokens: [{"sha256": <hex of a read token>, "tenants": ["t1", ...] | ["*"]}] - READ-ONLY, tenant-scoped
     keys for GET /v1/reconciliations (e.g. the dashboard proxy); they cannot start canaries or read status."""
     app = FastAPI(title="Qyrix Observer", version="c1", docs_url=None, redoc_url=None, openapi_url=None)
@@ -76,6 +76,9 @@ def create_app(obs: Observer, operator_token: Optional[str], canaries=None, read
         with lock:
             out = obs.status()
         out["ingest"] = dict(counters)
+        if c5 is not None:
+            out["coverage"] = c5["coverage"].status()
+            out["egress"] = {"counters": dict(c5["recorder"].counters), "open_tunnels": len(c5["proxy"].open_tunnels)}
         if canaries is not None:
             out["canaries"] = {"http_sensor": canaries.http.counters if canaries.http else None,
                                "file_sensor": canaries.file.counters if canaries.file else None,
@@ -146,6 +149,21 @@ def create_app(obs: Observer, operator_token: Optional[str], canaries=None, read
                 "verified_possible": False,
                 "note": "ENFORCEMENT_VERIFIED requires a coverage attestation (Phase C5, not implemented); absence of an "
                         "observation is INCONCLUSIVE."}
+
+    # C5: signed coverage attestations from the host attestor (operator credential over mTLS; signature checked too)
+    @app.post("/v1/coverage/attestations")
+    def coverage_submit(body: dict, authorization: str = Header(default="")):
+        operator(authorization)
+        if c5 is None:
+            raise HTTPException(503, "C5_TOPOLOGY_NOT_ENABLED")
+        from observer.db import DbError
+        try:
+            r = c5["coverage"].submit(body)
+        except DbError:
+            raise HTTPException(503, "OBSERVER_DB_UNAVAILABLE")
+        if not r.get("stored"):
+            raise HTTPException(400, r.get("error", "REFUSED"))
+        return r
 
     @app.get("/v1/canaries/{tenant}/{run_id}")
     def canary_get(tenant: str, run_id: str, authorization: str = Header(default="")):

@@ -116,13 +116,15 @@ class Manifest:
         self.digest = sha256_hex(canonical(doc))
         self.observer_keys = {k.key_id: k for k in (Key(x) for x in doc.get("observer_keys") or [])}
         self.recovery_keys = {k.key_id: k for k in (Key(x, {"epoch_change"}) for x in doc.get("recovery_keys") or [])}
+        # C5: host attestor keys (coverage attestations only; never a producer, observer or recovery key)
+        self.attestor_keys = {k.key_id: k for k in (Key(x, {"coverage_attestation"}) for x in doc.get("attestor_keys") or [])}
         self.producers: Dict[str, Producer] = {}
         for p in doc.get("producers") or []:
             pr = Producer(p)
             if pr.producer_id in self.producers:
                 raise ManifestError("PRODUCER_DUPLICATE")
             self.producers[pr.producer_id] = pr
-        ids: List[str] = list(self.observer_keys) + list(self.recovery_keys) + [
+        ids: List[str] = list(self.observer_keys) + list(self.recovery_keys) + list(self.attestor_keys) + [
             kid for p in self.producers.values() for kid in p.keys]
         if len(ids) != len(set(ids)) or root_id in ids:
             raise ManifestError("KEY_REUSED_ACROSS_ROLES")

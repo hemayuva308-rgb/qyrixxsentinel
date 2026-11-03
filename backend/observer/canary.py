@@ -69,9 +69,12 @@ class HttpCanarySensor:
     """Loopback-only HTTP sensor. Refuses any non-loopback bind in C3 (network exposure is C5).
     A request to /c/<token> is looked up by hash; unknown or malformed requests are only COUNTED, never stored."""
 
-    def __init__(self, record: Callable[..., bool], host: str = "127.0.0.1", port: int = 0, max_concurrency: int = 16):
-        if not ipaddress.ip_address(host).is_loopback:
-            raise CanaryError("C3 canary HTTP sensor binds to loopback only (network exposure is C5)")
+    def __init__(self, record: Callable[..., bool], host: str = "127.0.0.1", port: int = 0, max_concurrency: int = 16,
+                 external: bool = False):
+        # C5: `external=True` (OBSERVER_C5_TOPOLOGY=1) binds the sensor on the observer's EXTERNAL-side address, which the
+        # backend can reach only THROUGH the egress proxy. Otherwise loopback only.
+        if not external and not ipaddress.ip_address(host).is_loopback:
+            raise CanaryError("canary HTTP sensor binds to loopback unless the C5 topology is enabled")
         self.record, self.counters = record, {"matched": 0, "unmatched": 0, "busy": 0, "unrecorded": 0}
         slots = threading.BoundedSemaphore(max_concurrency)
         sensor = self
@@ -249,6 +252,7 @@ class CanaryService:
         self.clock = clock or observer.clock
         self.unrecorded = 0
         self.suppressed = 0
+        self.coverage = None                             # C5: observer.coverage.CoverageService (None => no coverage)
         self._alerted: Dict[str, float] = {}
         self._alock = threading.Lock()
 
@@ -456,9 +460,30 @@ class CanaryService:
             w = cur.fetchone()
             if (w[0] if w else 0) < alloc:
                 complete = False
+        # C5: tunnels through the egress proxy to the canary host:port inside the window (a tunnel can hide a token)
+        cur.execute("SELECT resource_template FROM canary_runs WHERE run_id=%s", (rid,))
+        from urllib.parse import urlsplit
+        u = urlsplit(cur.fetchone()[0])
+        host_traffic = 0
+        if u.scheme == "http" and u.hostname:
+            cur.execute("SELECT count(*) FROM egress_observations WHERE kind='tunnel_open' AND dest_ip=%s AND dest_port=%s"
+                        " AND observed_at >= %s AND observed_at <= %s",
+                        (u.hostname, u.port or 80, run["created"], run["due"]))
+            host_traffic = cur.fetchone()[0]
+        # the container the backend CLAIMS to run in (heartbeat, E0): used only to INVALIDATE an attestation
+        claim_cid = None
+        for pid, ep, _ in streams:
+            cur.execute("SELECT envelope->'body'->>'container_id' FROM heartbeats WHERE producer_id=%s AND epoch=%s"
+                        " AND status='accepted' ORDER BY hb_seq DESC LIMIT 1", (pid, ep))
+            r = cur.fetchone()
+            if r and r[0]:
+                claim_cid = r[0]
+        coverage = None
+        if self.coverage is not None:
+            coverage = self.coverage.current(run["created"].timestamp(), run["due"].timestamp(), claim_cid)
         return Facts(status=status, submission=submission, positive_control="POSITIVE_CONTROL_PASSED" in kinds,
                      token_in_window=tin, token_late=tlate, epoch_boundary=boundary, feed_complete=complete,
-                     producers_quarantined=quarantined, claim=claim, coverage=None)
+                     producers_quarantined=quarantined, claim=claim, coverage=coverage, canary_host_traffic=host_traffic)
 
     def reconcile_all(self, now: Optional[float] = None) -> List[Dict]:
         """(Re)reconcile ended runs within the horizon. A changed outcome is a NEW version superseding the last one;

@@ -304,8 +304,11 @@ class Publisher:
             n, h = self.db_factory(f["tenant"]).proof_head()
             tenants[f["tenant"]] = {"allocated_through_seq": f["allocated"], "proof_n": n, "proof_head": h}
         now = self.clock()
+        cid = os.getenv("HOSTNAME", "")
+        cid = cid if 12 <= len(cid) <= 64 and all(c in "0123456789abcdef" for c in cid) else None
         env = sign_envelope(envelope(self.producer, "heartbeat", {
-            "gate_clock": iso(now), "outbox_depth": sum(f["unsent"] for f in feed), "tenants": tenants},
+            "gate_clock": iso(now), "outbox_depth": sum(f["unsent"] for f in feed), "tenants": tenants,
+            "container_id": cid},                        # C5: a CLAIM; the observer uses it only to invalidate coverage
             None, epoch, hb_seq=hb_seq, issued_at=iso(now)), self.key)
         status, code = self._post(env)
         self.last_hb = now

@@ -75,7 +75,8 @@ class ObserverCluster:
 
 class Keys:
     def __init__(self):
-        self.root, self.observer, self.gate, self.adapter, self.recovery, self.other = (crypto.generate() for _ in range(6))
+        self.root, self.observer, self.gate, self.adapter, self.recovery, self.other, self.attestor = (
+            crypto.generate() for _ in range(7))
         self.install_id = str(uuid.uuid4())
         self.gate_pid = "gate:" + self.install_id
         self.adapter_pid = "adapter:mcp_proxy"
@@ -95,7 +96,8 @@ class Keys:
                      "keys": [self.entry(self.gate, scopes=["decision", "grant", "heartbeat"], **(gate_extra or {}))]},
                     {"producer_id": self.adapter_pid, "tenants": list(adapter_tenants),
                      "keys": [self.entry(self.adapter, scopes=["adapter_report"])]}],
-                "recovery_keys": [self.entry(self.recovery)]}
+                "recovery_keys": [self.entry(self.recovery)],
+                "attestor_keys": [self.entry(self.attestor)]}
 
     def manifest(self, **kw) -> Manifest:
         return Manifest(sign_manifest(self.manifest_doc(**kw), self.root), self.root_pub())

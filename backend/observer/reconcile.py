@@ -11,16 +11,19 @@ Pure function over facts the observer itself holds. Results:
                           the contiguous watermark has reached - so the claim is not merely still in flight (§5.6).
   INCONCLUSIVE            everything else, with explicit reasons.
 
-ENFORCEMENT_VERIFIED is NOT producible in C4: §11 requires a current coverage attestation of the channel (C5 host
-attestor), which does not exist. Absence of an observation therefore always yields INCONCLUSIVE /
-COVERAGE_UNATTESTED. The O003 schema refuses the value as well.
+  ENFORCEMENT_VERIFIED    (C5) NO E3 observation of the token at any time and NO tunnel to the canary host in the window,
+                          while EVERY one of: clean signed BLOCK claim; submitted; positive control passed; no epoch
+                          boundary; closing heartbeat reached by the watermark; no quarantined stream; and a VALID,
+                          signed coverage attestation (observer-judged sink/proxy/DNS evidence) covering the whole
+                          window for the container the backend runs in. Missing any one => INCONCLUSIVE.
 
 Producer claims (E0) are used only to classify an observed effect (which claim did it contradict?) - never as evidence
 that something did or did not happen. Backend-reported heads (producer_claims) are not an input at all.
 """
 from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple  # noqa: F401
 
+VERIFIED = "ENFORCEMENT_VERIFIED"
 BYPASS = "BYPASS_DETECTED"
 UNAUTHORIZED = "UNAUTHORIZED_EXECUTION"
 INCONCLUSIVE = "INCONCLUSIVE"
@@ -47,7 +50,8 @@ class Facts:
     feed_complete: bool               # closing heartbeat reached by the contiguous watermark (all current gate streams)
     producers_quarantined: bool       # any gate stream of the tenant's producers is quarantined
     claim: Optional[Claim] = None
-    coverage: Optional[Dict] = field(default=None)     # C5 coverage attestation; always None in C4
+    coverage: Optional[Dict] = field(default=None)     # C5: {"mediated": True, "attestation_id": ...} or None
+    canary_host_traffic: int = 0                       # C5: proxy tunnels to the canary host inside the window
 
     def as_dict(self) -> Dict:
         return asdict(self)
@@ -96,5 +100,17 @@ def reconcile(f: Facts) -> Optional[Tuple[str, List[str]]]:
         reasons.append("LATE_OBSERVATION_ONLY")
     if c is None and f.submission == "submitted":
         reasons.append("NO_DECISION_CLAIM")
-    reasons.append("COVERAGE_UNATTESTED")       # no observation != enforcement without mediation (C5)
+    if f.canary_host_traffic:
+        reasons.append("TUNNEL_TO_CANARY_HOST")          # a tunnel could have carried the token (§7.5)
+    if f.producers_quarantined:
+        reasons.append("PRODUCER_QUARANTINED")
+    if not f.feed_complete:
+        reasons.append("DECISION_FEED_INCOMPLETE")
+    cov = f.coverage or {}
+    if not (cov.get("mediated") is True and cov.get("attestation_id")):
+        reasons.append("COVERAGE_UNATTESTED")            # no observation != enforcement without mediation
+    if not reasons and c is not None:
+        return VERIFIED, []
+    if not reasons:                                      # defensive: never VERIFIED without a claim
+        reasons.append("NO_DECISION_CLAIM")
     return INCONCLUSIVE, reasons

@@ -53,7 +53,7 @@ def test_honest_block_is_never_verified(env):
     closing_heartbeat(env, 1, 1)
     env["clock"].t += 1
     env["svc"].tick()
-    (v, res, reasons, el), = recon(env, r["run_id"])
+    v, res, reasons, el = recon(env, r["run_id"])[-1]                       # latest version (feed completed later)
     assert res == "INCONCLUSIVE" and reasons == ["COVERAGE_UNATTESTED"] and el == "none"
 
 
@@ -182,7 +182,9 @@ def test_o003_upgrade_preserves_existing_data(cluster, monkeypatch):
         run = svc.start("default")
         before = q(admin, "SELECT n, hash FROM ledger ORDER BY n")
         monkeypatch.setattr(omigrate, "MIGRATIONS", real)
-        assert omigrate.migrate(admin) == ["O003_reconciliations.sql"] and omigrate.migrate(admin) == []
+        applied = omigrate.migrate(admin)
+        assert applied[0] == "O003_reconciliations.sql" and all(m > "O003" for m in applied[1:])
+        assert omigrate.migrate(admin) == []
         assert q(admin, "SELECT n, hash FROM ledger ORDER BY n") == before
         assert q(admin, "SELECT count(*) FROM canary_runs WHERE run_id=%s", (run["run_id"],)) == [(1,)]
         assert make_observer(url, keys, Clock()).verify_ledger()["valid"]
