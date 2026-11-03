@@ -99,8 +99,9 @@ def to_action(name: str, args: Dict, mapping: Dict[str, Dict], correlation_id: s
 class McpProxy:
     def __init__(self, sentinel: SentinelClient, server_cmd: List[str], mapping: Dict[str, Dict],
                  write_client: Callable[[Dict], None], timeout: float = 30.0, env: Optional[Dict[str, str]] = None,
-                 task_id: Optional[str] = None):
+                 task_id: Optional[str] = None, reporter=None):
         self.sentinel, self.cmd, self.mapping, self.write_client = sentinel, server_cmd, mapping, write_client
+        self.reporter = reporter                              # optional observer_feed.AdapterReporter (E1 self-reports)
         if task_id is not None and not _CORR.match(task_id):
             raise ValueError("invalid task_id")
         self.task_id = task_id                                # default task context; a call may override it
@@ -185,8 +186,18 @@ class McpProxy:
         else:
             self._to_server(msg)                               # initialize, tools/list, notifications, pings...
 
+    def _report(self, corr: str, forwarded: bool, execution_id: Optional[str] = None) -> None:
+        """Phase C2: signed adapter_report to the observer (E1: a self-report, never evidence). Never blocks the call."""
+        if self.reporter is not None:
+            try:
+                self.reporter.report(corr, forwarded, execution_id)
+            except Exception:
+                pass
+
     def _blocked(self, mid, text: str, meta: Dict) -> None:
         self.stats["blocked_calls"] += 1
+        if meta.get("correlation_id"):
+            self._report(meta["correlation_id"], False)
         self._emit({"jsonrpc": "2.0", "id": mid, "result": {
             "content": [{"type": "text", "text": text}], "isError": True, "_meta": {"qyrix": meta}}})
 
@@ -217,7 +228,7 @@ class McpProxy:
                           % (", ".join(d.get("rules") or ["UNKNOWN"]), corr), {**meta, "verdict": "BLOCK"})
             return
         try:
-            self.sentinel.redeem(d, corr, task)                # single-use, exact params_digest, same agent + task
+            red = self.sentinel.redeem(d, corr, task)          # single-use, exact params_digest, same agent + task
         except SentinelError as e:
             self._blocked(mid, "Blocked by Qyrix Sentinel: grant redemption refused (%s). correlation_id=%s" % (e, corr),
                           {**meta, "verdict": "BLOCK", "rules": ["GRANT_" + str(e)[:40]]})
@@ -226,6 +237,7 @@ class McpProxy:
             self._pending[mid] = time.time() + self.timeout
         self.stats["forwarded_calls"] += 1
         self._to_server(msg)                                   # the exact arguments that were evaluated
+        self._report(corr, True, (red or {}).get("execution_id"))
 
 
 class McpProxyCanaryAdapter:
@@ -285,8 +297,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.stdout.write(json.dumps(msg, separators=(",", ":")) + "\n")
             sys.stdout.flush()
 
+    from app.observer_feed import AdapterReporter
     proxy = McpProxy(SentinelClient(os.getenv("QYRIX_URL"), token), cmd, load_mapping(a.config), write, a.timeout,
-                     task_id=a.task_id).start()
+                     task_id=a.task_id, reporter=AdapterReporter.from_env()).start()
     try:
         for line in sys.stdin:
             line = line.strip()

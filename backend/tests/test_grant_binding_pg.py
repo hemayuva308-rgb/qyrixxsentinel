@@ -49,7 +49,7 @@ def test_migration_007_is_additive_and_preserves_existing_rows(pre007):
                   " VALUES ('default', %s, %s, %s, now(), now() + interval '1 hour')", (gid, eid, "d" * 64))
         before = a.execute("SELECT count(*) FROM grants").fetchone()[0], a.execute("SELECT count(*) FROM gate_evaluations").fetchone()[0]
     applied = migrate.migrate(pre007.admin_url)
-    assert applied == ["007_task_bound_grants.sql"]
+    assert applied[0] == "007_task_bound_grants.sql" and all(m > "007" for m in applied[1:])   # later migrations follow
     assert migrate.migrate(pre007.admin_url) == []                    # idempotent: nothing re-applied
     with psycopg.connect(pre007.admin_url, autocommit=True) as a:
         assert NEW_GRANT_COLS <= _cols(a, "grants") and NEW_EVAL_COLS <= _cols(a, "gate_evaluations")

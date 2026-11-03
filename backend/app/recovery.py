@@ -5,6 +5,17 @@
     python -m app.recovery accept --reason "..." --new-installation      # DB intentionally empty/new
     python -m app.recovery accept --reason "..." --reinitialize-witness  # witness key rotated / witness lost
 
+    python -m app.recovery observer-epoch --recovery-key /path/operator-recovery.pem --reason "..." --out epoch.json [--send]
+    python -m app.recovery observer-epoch-send --file epoch.json
+
+`observer-epoch` (Phase C2, design §5.4) is the ONLY way to restart the observer feed's sequence numbers after a
+restore: with the ADMIN database account it records the last trusted seq per tenant of the current epoch, moves the
+producer to epoch+1 (seq restarts at 1, heartbeat counter at 0) and writes an `epoch_change` record signed with the
+OPERATOR RECOVERY key (offline / operator-held; never the GATE key - the observer refuses a GATE-signed one). The
+record is written to --out BEFORE the database commit. With --send the epoch bump is committed ONLY if the observer
+accepts the record (a refused record - wrong key, wrong epoch - leaves the database unchanged); without --send the
+bump is committed and the record must be delivered with observer-epoch-send.
+
 `accept` re-seals the witness to the CURRENT state of the database and chain files. It never deletes data. Every
 acceptance is appended to the witness's `recoveries` log and queued as a RECOVERY_ACCEPTED proof record that the
 backend writes into the affected tenant's chain on its next start - the discontinuity becomes part of the evidence.
@@ -101,14 +112,84 @@ def accept(reason: str, new_installation: bool = False, reinitialize_witness: bo
     return {"accepted": True, "install_id": db_id, "tenants": marks, "pending_proof_records": len(pending)}
 
 
+class _NotAccepted(Exception):
+    pass
+
+
+def observer_epoch(recovery_key: str, reason: str, out: str, send: bool = False, http=None) -> dict:
+    if len(reason.strip()) < 10:
+        raise SystemExit("--reason must describe the incident (>= 10 characters)")
+    import psycopg
+    from app import observer_feed
+    dsn = persistence.admin_dsn_from_env()
+    if not dsn:
+        raise SystemExit("administrative database connection not configured (QYRIX_ADMIN_DATABASE_URL / QYRIX_DB_*)")
+    key = observer_feed.load_key(recovery_key)
+    sent = None
+    try:
+      with psycopg.connect(dsn, autocommit=False) as c:
+        with c.transaction():
+            r = c.execute("SELECT install_id FROM installation WHERE id = 1").fetchone()
+            if not r:
+                raise SystemExit("no installation identity: run `accept` first")
+            producer = "gate:" + str(r[0])
+            c.execute("INSERT INTO observer_hb_seq (producer_id) VALUES (%s) ON CONFLICT DO NOTHING", (producer,))
+            epoch = c.execute("SELECT epoch FROM observer_hb_seq WHERE producer_id=%s FOR UPDATE", (producer,)).fetchone()[0]
+            last = {t: int(n) for t, n in c.execute("SELECT tenant_id, n FROM observer_seq WHERE epoch=%s ORDER BY 1", (epoch,))}
+            env = observer_feed.sign_envelope(observer_feed.envelope(
+                producer, "epoch_change", {"new_epoch": epoch + 1, "last_trusted_seq_per_tenant": last,
+                                           "reason": reason.strip()[:500]}, None, epoch + 1), key)
+            with open(out, "w") as f:
+                json.dump(env, f, sort_keys=True)
+            if send:
+                sent = observer_epoch_send(out, http)
+                if sent["status"] != 200:
+                    raise _NotAccepted()                     # roll back: the database keeps its current epoch
+            c.execute("UPDATE observer_hb_seq SET epoch = epoch + 1, n = 0 WHERE producer_id=%s", (producer,))
+    except _NotAccepted:
+        return {"producer_id": producer, "committed": False, "from_epoch": epoch, "observer": sent, "record": out}
+    return {"producer_id": producer, "committed": True, "from_epoch": epoch, "to_epoch": epoch + 1,
+            "last_trusted_seq_per_tenant": last, "record": out, "recovery_key_id": env["key_id"], "observer": sent}
+
+
+def observer_epoch_send(path: str, http=None) -> dict:
+    from app.observer_feed import canonical
+    env = json.load(open(path))
+    if http is None:
+        import httpx
+        url = os.getenv("QYRIX_OBSERVER_URL", "").strip().rstrip("/")
+        if not url:
+            raise SystemExit("QYRIX_OBSERVER_URL not set")
+        http = httpx.Client(base_url=url, timeout=10, trust_env=False)
+    r = http.post("/v1/events", content=canonical(env), headers={"Content-Type": "application/json"})
+    try:
+        body = r.json()
+    except ValueError:
+        body = {}
+    return {"status": r.status_code, "result": body.get("status") or body.get("error")}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["status", "accept"])
+    ap.add_argument("cmd", choices=["status", "accept", "observer-epoch", "observer-epoch-send"])
     ap.add_argument("--reason", default="")
     ap.add_argument("--new-installation", action="store_true")
     ap.add_argument("--reinitialize-witness", action="store_true")
+    ap.add_argument("--recovery-key", help="operator recovery key (Ed25519 PEM) for observer-epoch")
+    ap.add_argument("--out", help="where observer-epoch writes the signed epoch_change record")
+    ap.add_argument("--file", help="epoch_change record for observer-epoch-send")
+    ap.add_argument("--send", action="store_true", help="also POST the record to QYRIX_OBSERVER_URL")
     a = ap.parse_args(argv)
-    out = status() if a.cmd == "status" else accept(a.reason, a.new_installation, a.reinitialize_witness)
+    if a.cmd == "observer-epoch":
+        if not a.recovery_key or not a.out:
+            ap.error("observer-epoch needs --recovery-key and --out")
+        out = observer_epoch(a.recovery_key, a.reason, a.out, a.send)
+    elif a.cmd == "observer-epoch-send":
+        if not a.file:
+            ap.error("observer-epoch-send needs --file")
+        out = observer_epoch_send(a.file)
+    else:
+        out = status() if a.cmd == "status" else accept(a.reason, a.new_installation, a.reinitialize_witness)
     print(json.dumps(out, indent=2, default=str))
     return 0
 

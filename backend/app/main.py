@@ -28,6 +28,15 @@ def _start_canaries() -> None:
 _start_canaries()
 
 
+def _start_observer_feed() -> None:
+    """Phase C2: outbox publisher + heartbeats, only when QYRIX_OBSERVER_URL is set (durable mode only)."""
+    from app import gateway, observer_feed
+    observer_feed.start(lambda: gateway.PROD)
+
+
+_start_observer_feed()
+
+
 @app.get("/")
 def root():
     return {"service": "qyrix-sentinel", "status": "ok"}

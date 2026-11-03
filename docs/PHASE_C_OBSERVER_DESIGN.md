@@ -1,7 +1,12 @@
 # Phase C: Independent Observer Service (architecture design, revision 3, for review; NOT implemented)
 
-Status: **design only.** Nothing in this document is implemented. It changes no code, schema, migration or runtime
-behaviour. Every "will" below is a proposal for review.
+Status: **slices C1–C2 implemented** (see `docs/OBSERVER.md`, including the resolutions recorded in its §4);
+**C3–C7 are not implemented** and remain proposals. Every "will" below that belongs to C3–C7 is a proposal for review.
+
+**Approved amendment (C2, CONNECT header).** The backend keeps its SSRF IP pinning: the proxy is asked to
+`CONNECT <pinned-ip>:<port>`, and the hostname travels as `X-Qyrix-Host` next to `X-Qyrix-Execution`. TLS SNI is the
+hostname. Wherever §7.4 and §7.6 say "CONNECT authority = SNI", read instead "SNI = `X-Qyrix-Host`, and the CONNECT IP
+is in the resolution of `X-Qyrix-Host`" (enforced by the C5 proxy).
 
 **Revision 2** answers the five review questions:
 - event suppression and liveness (§5);

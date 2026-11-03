@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import accounts, anchor, gateway as g, identity, observability as obs, persistence, proof, tenancy
+from app import accounts, anchor, gateway as g, identity, observability as obs, observer_feed, persistence, proof, tenancy
 from app.auth import client_key, principal, require, require_platform
 from app.identity import AuthError, Principal
 
@@ -191,7 +191,9 @@ def cev_demo_ep(b: CevDemoReq = CevDemoReq(), p: Principal = Depends(require("ce
 def cev_results_ep(p: Principal = Depends(require("read"))):
     from app import cev
     ctx = tenancy.ctx_for(p)
-    return {"results": cev.results(ctx, 100), "conformance": cev.conformance(ctx), "window_ms": int(cev.window_seconds() * 1000)}
+    # design §10: today's in-process CEV is labelled `colocated` - it never counts as observer evidence (E3)
+    return {"results": [{**r, "evidence_level": "colocated"} for r in cev.results(ctx, 100)], "evidence_level": "colocated",
+            "conformance": cev.conformance(ctx), "window_ms": int(cev.window_seconds() * 1000)}
 
 
 # ---------------- proof ----------------
@@ -309,7 +311,9 @@ def reset_ep(p: Principal = Depends(require("demo.reset"))):
 def status_ep(p: Principal = Depends(require("read"))):
     ctx = tenancy.ctx_for(p)
     return {**g.status_snapshot(ctx, p.role), "tenant": p.tenant, "credential": p.cred_id, "multi_tenant": identity.multi_tenant_enabled(),
-            "integrity": {k: v for k, v in tenancy.ctx_for(p).state.get("integrity", {"status": "NOT_APPLICABLE"}).items() if k != "pending"}}
+            "integrity": {k: v for k, v in tenancy.ctx_for(p).state.get("integrity", {"status": "NOT_APPLICABLE"}).items() if k != "pending"},
+            "observer_feed": {k: v for k, v in observer_feed.status().items()
+                              if k in ("state", "reason", "outbox_depth", "stale_epoch_unsent", "heartbeats", "last_error")}}
 
 
 @sentinel.post("/benchmark")

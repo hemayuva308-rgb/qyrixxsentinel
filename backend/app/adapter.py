@@ -12,14 +12,22 @@ immutable parameters that were stored when the Gate decided ALLOW.
                 regular files only, streamed with a 1 MB hard limit. Content is redacted before it is returned.
 - SandboxAdapter : used ONLY by the public demo. Performs no I/O at all and returns a fixed fixture.
 """
+import contextvars
 import os
 import stat
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 from urllib.parse import urljoin, urlsplit
 
 from app import netguard
 
 MAX_FILE_BYTES = 1024 * 1024
+# Phase C2 (design §4): the grant's execution_id for the execution in progress (set by gateway.execute_grant only).
+EXECUTION_ID: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("qyrix_execution_id", default=None)
+
+
+def egress_proxy() -> Optional[str]:
+    """QYRIX_EGRESS_PROXY_URL (http://host:port): the observer's egress proxy (C5). Unset => direct pinned egress."""
+    return os.getenv("QYRIX_EGRESS_PROXY_URL", "").strip() or None
 
 
 class AdapterError(Exception):
@@ -72,7 +80,8 @@ class HttpAdapter:
         if not chk.ok:                                   # re-validated at execution time (policy may have changed)
             raise AdapterError("destination no longer allowed")
         ips = netguard.resolve_public(chk.host)          # all answers validated; NetguardError propagates
-        status, location = netguard.pinned_request_full(params["method"], chk.url, chk.host, ips[0])
+        status, location = netguard.pinned_request_full(params["method"], chk.url, chk.host, ips[0],
+                                                        proxy=egress_proxy(), execution_id=EXECUTION_ID.get())
         out = {"status": status, "pinned_ip": ips[0], "host": chk.host}
         if location and 300 <= status < 400:
             nxt = urljoin(chk.url, location)

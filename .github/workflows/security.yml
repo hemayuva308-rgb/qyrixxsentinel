@@ -83,7 +83,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0      # v7.1.0
         with: { python-version: "3.12" }
       - name: bandit (fail on medium or high severity)
-        run: pip install bandit==1.9.4 && bandit -r backend/app backend/scripts -ll
+        run: pip install bandit==1.9.4 && bandit -r backend/app backend/observer backend/scripts -ll
 
   codeql:
     runs-on: ubuntu-24.04

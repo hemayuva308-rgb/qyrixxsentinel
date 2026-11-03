@@ -23,7 +23,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import observability as obs, adapter as adapters, anchor, netguard, persistence, proof, provenance as prov
+from app import observability as obs, adapter as adapters, anchor, netguard, observer_feed, persistence, proof, provenance as prov
 
 TOOLS = ("http", "file.read")            # `shell` is recognised but never executable in this MVP (R8)
 STATE_CHANGING = frozenset(("POST", "PUT", "PATCH", "DELETE"))   # R19: need trusted lineage or explicit human approval
@@ -576,6 +576,7 @@ def _new_grant(ctx: GateContext, evaluation_id: str, digest: str, agent_id: Opti
                task_id: Optional[str] = None, pv: Optional[str] = None) -> Dict:
     g = {"id": "grt_" + uuid.uuid4().hex, "gate_evaluation_id": evaluation_id, "digest": digest, "used": False,
          "agent_id": agent_id, "task_id": task_id, "policy_version": pv or policy_version(ctx),
+         "execution_id": str(uuid.uuid4()),          # Phase C2: correlates the grant with its outbound execution
          "exp": time.time() + GRANT_TTL,
          "expires_at": datetime.fromtimestamp(time.time() + GRANT_TTL, timezone.utc).isoformat()}
     ctx.grants[g["id"]] = g
@@ -694,7 +695,8 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None, agent_id: Optional[st
                 verdict, rules = "BLOCK", ["R0_FAIL_CLOSED"]
             if grant is not None and ctx.db is not None:     # durable, atomic in the DB BEFORE the decision is recorded
                 try:
-                    ctx.db.save_evaluation(ev, grant, a.approval_id if ap is not None else None)
+                    ctx.db.save_evaluation(ev, grant, a.approval_id if ap is not None else None,
+                                           observer_feed.decision_events(ctx, ev, grant))   # same transaction (§10)
                 except Exception as e:
                     ctx.grants.pop(grant["id"], None)
                     grant = None
@@ -731,7 +733,7 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None, agent_id: Optional[st
         ev["verdict"], ev["rules"] = verdict, rules
         if verdict == "BLOCK" and ctx.db is not None and ctx.state["persistence"] == "postgres":
             try:                                              # audit history of blocked evaluations (never authorises)
-                ctx.db.save_evaluation(ev)
+                ctx.db.save_evaluation(ev, events=observer_feed.decision_events(ctx, ev, None, rec))
             except Exception:
                 _db_down(ctx, "EVALUATION_WRITE_FAILED")
         _store_eval(ctx, ev)
@@ -791,7 +793,8 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None, agent_id: Option
                 code = "PERSISTENCE_UNAVAILABLE"
             else:
                 try:                                       # atomic single-use in the database (survives restarts)
-                    if not ctx.db.consume_grant(gid, eid, g["digest"], agent_id, task_id, g.get("policy_version")):
+                    if not ctx.db.consume_grant(gid, eid, g["digest"], agent_id, task_id, g.get("policy_version"),
+                                                observer_feed.consume_event(ctx, eid, g, "executed")):
                         code = "GRANT_REPLAY"
                 except Exception:
                     _db_down(ctx, "GRANT_CONSUME_FAILED")
@@ -802,6 +805,7 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None, agent_id: Option
                               "tool": ev["params"]["tool"] if ev else None, "rule_ids": [code], "ext_calls": ctx.ext["calls"]})
             except Exception:
                 pass
+            observer_feed.emit_refusal(ctx, eid, g, code)  # claim only, best effort; the refusal itself is unchanged
             raise ExecRefused(code, _REFUSAL_STATUS.get(code, 403))
         g["used"] = True                                   # consumed before the adapter runs: no replay, ever
         params = dict(ev["params"])
@@ -816,10 +820,13 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None, agent_id: Option
         real_egress = params["tool"] == "http" and getattr(run, "name", "") == "http"
         if real_egress:
             ctx.ext["calls"] += 1                          # the only place real egress can happen
+    tok = adapters.EXECUTION_ID.set(g.get("execution_id"))   # adapter tags its proxy request (X-Qyrix-Execution)
     try:
         result, ok = run(params), True
     except Exception as e:
         result, ok = {"error": _public_exec_error(e)}, False
+    finally:
+        adapters.EXECUTION_ID.reset(tok)
     with ctx.lock:
         if ok and isinstance(result, dict) and result.get("redirect"):
             ev["redirect_location"] = result["redirect"]["location"]
@@ -883,7 +890,8 @@ def redeem_grant(body: Any, integration: str, ctx: Optional[GateContext] = None,
                 code = "PERSISTENCE_UNAVAILABLE"
             else:
                 try:
-                    if not ctx.db.consume_grant(gid, eid, g["digest"], agent_id, task_id, g.get("policy_version")):
+                    if not ctx.db.consume_grant(gid, eid, g["digest"], agent_id, task_id, g.get("policy_version"),
+                                                observer_feed.consume_event(ctx, eid, g, "redeemed", integration[:64])):
                         code = "GRANT_REPLAY"
                 except Exception:
                     _db_down(ctx, "GRANT_CONSUME_FAILED")
@@ -895,6 +903,7 @@ def redeem_grant(body: Any, integration: str, ctx: Optional[GateContext] = None,
                               "correlation_id": corr, "ext_calls": ctx.ext["calls"]})
             except Exception:
                 pass
+            observer_feed.emit_refusal(ctx, eid, g, code, integration[:64])
             raise ExecRefused(code, _REFUSAL_STATUS.get(code, 403))
         g["used"] = True                                   # consumed before the integration is told to proceed
         try:
@@ -906,7 +915,7 @@ def redeem_grant(body: Any, integration: str, ctx: Optional[GateContext] = None,
         except Exception:
             raise ExecRefused("PROOF_WRITE_FAILED", 503)   # no evidence => integration must not execute
         return {"redeemed": True, "gate_evaluation_id": eid, "params_digest": ev["digest"], "correlation_id": corr or eid,
-                "proof": rec}
+                "execution_id": g.get("execution_id"), "proof": rec}
 
 
 def _revalidate(ctx: GateContext, p: Dict) -> bool:

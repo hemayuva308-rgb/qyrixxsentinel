@@ -210,7 +210,7 @@ SELECT r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplicat
          WHERE n.nspname = 'public' AND c.relowner = r.oid) AS owned,
        (SELECT d.datdba = r.oid FROM pg_database d WHERE d.datname = current_database()) AS db_owner,
        (SELECT count(*) FROM pg_roles x WHERE x.oid <> r.oid AND (x.rolsuper OR x.rolbypassrls OR x.rolcreaterole
-                                   OR x.rolname IN ('qyrix_auth', 'qyrix_maint'))
+                                   OR x.rolname IN ('qyrix_auth', 'qyrix_maint', 'qyrix_feed'))
                                    AND pg_has_role(r.oid, x.oid, 'MEMBER')) AS powerful_memberships,
        pg_has_role(r.oid, 'qyrix_app', 'MEMBER') AS app_member
   FROM pg_roles r WHERE r.rolname = current_user
@@ -347,9 +347,56 @@ class PgPersistence:
                      "ts": _iso(r[7]), "exp": r[8].timestamp(), "expires_at": _iso(r[8])} for r in cur.fetchall()]
         return self._run(go)
 
+    # ---- observer outbox (Phase C2, migration 008; only used when QYRIX_OBSERVER_URL is set)
+    @staticmethod
+    def _emit(cur, ev: Dict) -> None:
+        """Allocate the next gap-free seq and write the outbox row IN THE CALLER'S TRANSACTION (qyrix_observer_emit,
+        SECURITY DEFINER). If the surrounding transaction rolls back, the number and the row disappear with it."""
+        cur.execute("SELECT out_epoch, out_seq FROM qyrix_observer_emit(%s, %s, %s, %s)",
+                    (ev["producer_id"], ev["type"], ev["event_id"], json.dumps(ev["body"])))
+
+    def emit_event(self, ev: Dict) -> None:
+        """A standalone event in its own transaction (grant refusals - nothing else is written)."""
+        self._run(lambda cur: self._emit(cur, ev))
+
+    def observer_feed(self, producer_id: str) -> List[Dict]:
+        def go(cur):
+            cur.execute("SELECT out_tenant, out_epoch, out_allocated, out_unsent, out_stale_unsent FROM qyrix_observer_feed(%s)",
+                        (producer_id,))
+            return [{"tenant": r[0], "epoch": r[1], "allocated": r[2], "unsent": r[3], "stale_unsent": r[4]} for r in cur.fetchall()]
+        return self.db.run(go)
+
+    def observer_next_hb(self, producer_id: str):
+        def go(cur):
+            cur.execute("SELECT out_epoch, out_hb_seq FROM qyrix_observer_next_hb(%s)", (producer_id,))
+            return tuple(cur.fetchone())
+        return self.db.run(go)
+
+    def outbox_unsent(self, epoch: int, limit: int = 200) -> List[Dict]:
+        def go(cur):
+            cur.execute("SELECT seq, event_id, producer_id, type, body, created_at FROM observer_outbox WHERE tenant_id=%s"
+                        " AND epoch=%s AND sent_at IS NULL ORDER BY seq LIMIT %s", (self.t, epoch, limit))
+            return [{"seq": r[0], "event_id": str(r[1]), "producer_id": r[2], "type": r[3], "body": r[4], "created_at": r[5]}
+                    for r in cur.fetchall()]
+        return self._run(go)
+
+    def outbox_mark(self, epoch: int, seq: int, sent: bool) -> None:
+        sql = ("UPDATE observer_outbox SET sent_at=now(), attempts=attempts+1" if sent
+               else "UPDATE observer_outbox SET attempts=attempts+1")
+        self._run(lambda cur: cur.execute(sql + " WHERE tenant_id=%s AND epoch=%s AND seq=%s", (self.t, epoch, seq)))
+
+    def proof_head(self):
+        def go(cur):
+            cur.execute("SELECT n, hash FROM proof_records WHERE tenant_id=%s ORDER BY n DESC LIMIT 1", (self.t,))
+            r = cur.fetchone()
+            return (r[0], r[1].strip()) if r else (None, None)
+        return self._run(go)
+
     # ---- evaluations & grants
-    def save_evaluation(self, ev: Dict, grant: Optional[Dict] = None, approval_id: Optional[str] = None) -> None:
-        """One transaction: evaluation (+ grant + approval consumption). Approval must be approved, unused, this tenant's."""
+    def save_evaluation(self, ev: Dict, grant: Optional[Dict] = None, approval_id: Optional[str] = None,
+                        events: Optional[List[Dict]] = None) -> None:
+        """One transaction: evaluation (+ grant + approval consumption) (+ observer outbox events, Phase C2).
+        Approval must be approved, unused, this tenant's."""
         def go(cur):
             cur.execute("INSERT INTO gate_evaluations (tenant_id, id, verdict, rule_ids, params, params_digest, hop, host, created_at,"
                         " agent_id, task_id, policy_version, correlation_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
@@ -362,13 +409,15 @@ class PgPersistence:
                     if cur.fetchone() is None:
                         raise PersistenceConflict("approval already consumed or not valid")
                 cur.execute("INSERT INTO grants (tenant_id, id, gate_evaluation_id, params_digest, approval_id, created_at, expires_at,"
-                            " agent_id, task_id, policy_version) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s,%s)",
+                            " agent_id, task_id, policy_version, execution_id) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s,%s,%s)",
                             (self.t, grant["id"], ev["id"], grant["digest"], approval_id, _ts(grant["exp"]),
-                             grant.get("agent_id"), grant.get("task_id"), grant.get("policy_version")))
+                             grant.get("agent_id"), grant.get("task_id"), grant.get("policy_version"), grant.get("execution_id")))
+            for e in events or ():
+                self._emit(cur, e)
         self._run(go)
 
     def consume_grant(self, gid: str, eid: str, digest: str, agent_id: Optional[str] = None, task_id: Optional[str] = None,
-                      policy_version: Optional[str] = None) -> bool:
+                      policy_version: Optional[str] = None, event: Optional[Dict] = None) -> bool:
         """Atomic single use. False => already used, revoked, expired, unknown, other tenant, mismatched digest, or a
         binding (agent, task, policy version) that differs from the one recorded at issue time. NULL never equals a
         value, so legacy unbound rows cannot be consumed by an authenticated caller (fail closed)."""
@@ -376,9 +425,13 @@ class PgPersistence:
             cur.execute("UPDATE grants SET used_at=now() WHERE tenant_id=%s AND id=%s AND gate_evaluation_id=%s AND params_digest=%s"
                         " AND agent_id IS NOT DISTINCT FROM %s AND task_id IS NOT DISTINCT FROM %s"
                         " AND policy_version IS NOT DISTINCT FROM %s"
-                        " AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() RETURNING id",
+                        " AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now() RETURNING id, execution_id",
                         (self.t, gid, eid, digest, agent_id, task_id, policy_version))
-            return cur.fetchone() is not None
+            r = cur.fetchone()
+            if r is not None and event is not None:   # the consumption and its grant event commit (or fail) together
+                body = dict(event["body"], execution_id=str(r[1]) if r[1] else None)
+                self._emit(cur, dict(event, body=body))
+            return r is not None
         return self._run(go)
 
     def revoke_grant(self, gid: str, who: str) -> bool:
@@ -397,11 +450,12 @@ class PgPersistence:
                         " FROM gate_evaluations WHERE tenant_id=%s ORDER BY created_at DESC LIMIT %s", (self.t, limit))
             evs = [{"id": str(r[0]), "verdict": r[1], "rules": list(r[2]), "params": r[3], "digest": r[4].strip(), "hop": r[5],
                     "host": r[6], "redirect_location": r[7], "ts": r[8].timestamp()} for r in cur.fetchall()][::-1]
-            cur.execute("SELECT id, gate_evaluation_id, params_digest, expires_at, used_at, revoked_at, agent_id, task_id, policy_version"
-                        " FROM grants WHERE tenant_id=%s", (self.t,))
+            cur.execute("SELECT id, gate_evaluation_id, params_digest, expires_at, used_at, revoked_at, agent_id, task_id, policy_version,"
+                        " execution_id FROM grants WHERE tenant_id=%s", (self.t,))
             grants = [{"id": r[0], "gate_evaluation_id": str(r[1]), "digest": r[2].strip(), "exp": r[3].timestamp(), "expires_at": _iso(r[3]),
                        "used": r[4] is not None, "revoked": r[5] is not None, "agent_id": r[6], "task_id": r[7],
-                       "policy_version": r[8].strip() if r[8] else None} for r in cur.fetchall()]
+                       "policy_version": r[8].strip() if r[8] else None, "execution_id": str(r[9]) if r[9] else None}
+                      for r in cur.fetchall()]
             return evs, grants
         return self._run(go)
 
