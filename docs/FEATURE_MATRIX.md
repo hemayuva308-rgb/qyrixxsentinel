@@ -42,7 +42,9 @@ Test counts are from the last full run, recorded in the commit that changed this
 | Feature | Status |
 |---|---|
 | Trusted task identity (signed task tokens from a task issuer / orchestrator) | Proposed: today task_id is caller-provided context |
-| Meta Llama red-team case generator (offline; never authorizes) | Proposed |
+| Red-team generator: schema, safety filter, dedupe, isolated runner, deterministic replay, review workflow | Built (v1.5 P2-A) | `app/redteam.py`, `tests/test_redteam.py` (44) |
+| Meta Llama as red-team case author (live generation) | Partially built | Provider path tested with a mock transport only; **live generation not verified** (no credentials) |
+| Template red-team corpus (39 cases, 16 categories) + report | Built (preliminary, synthetic) | `evidence/redteam/`; 3 documented findings (`docs/REDTEAM.md`) |
 | Benchmark v2 (50–100+ cases, the 7 metrics, p50/p95/p99); AgentDojo / InjecAgent after license review | Proposed (today: 10 synthetic cases, preliminary) |
 | Browser-based proof bundle verifier | Proposed (offline CLI verifier is built) |
 | CLI, VS Code, n8n, GitHub, browser-agent integrations; Python/TypeScript SDKs | Roadmap |
