@@ -313,6 +313,19 @@ def test_valid_attestation_judged_by_observer(ob, sink):
     assert cov.current(time.time(), time.time() + 7200, None) is None                   # beyond validity
 
 
+def test_newer_failed_attestation_revokes_older_valid_coverage(ob, sink):
+    cov = CoverageService(ob["obs"])
+    name = "%s.dnscheck.qyrix.invalid" % new_token()
+    ok = cov.submit(sign_attestation(attestation_skeleton("abc123def456", "img", _checks(), _evidence(ob, sink.ports[0], name)),
+                                     ob["keys"].attestor))
+    assert ok["valid"] and cov.current(time.time(), time.time() + 5, None)
+    time.sleep(0.05)
+    bad = cov.submit(sign_attestation(attestation_skeleton("abc123def456", "img", _checks(networks_exact=False),
+                                                           _evidence(ob, sink.ports[0], name)), ob["keys"].attestor))
+    assert bad["valid"] is False
+    assert cov.current(time.time(), time.time() + 5, None) is None          # misconfiguration wins immediately
+
+
 @pytest.mark.parametrize("variant", ["direct_path_open", "attestor_check_failed", "no_dns", "stale"])
 def test_invalid_attestations_never_give_coverage(ob, sink, variant):
     cov = CoverageService(ob["obs"])

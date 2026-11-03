@@ -8,6 +8,7 @@ COPY requirements-lock.txt .
 # fully pinned + hash-verified dependency set (supply-chain integrity); regenerate from requirements.txt
 RUN pip install --no-cache-dir --require-hashes -r requirements-lock.txt
 COPY app ./app
+COPY observer ./observer
 COPY migrations ./migrations
 COPY workspace ./workspace
 USER 10001

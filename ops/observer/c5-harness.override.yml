@@ -1,0 +1,36 @@
+# C5 VALIDATION HARNESS ONLY (ops/observer/validate_c5.py). Layered on top of docker-compose.yml +
+# docker-compose.observer.yml, so every network attachment, DNS setting, sysctl, capability drop and secret comes from
+# the REAL overlay. The only differences, all stated in the validation report:
+#   - image: python:3.13-slim with the repository code and an already-tested dependency set mounted READ-ONLY, because
+#     this build environment cannot fetch PyPI packages inside `docker build` (the production image is backend/Dockerfile);
+#   - user 0 inside the container (capabilities still dropped to NONE; needed only because the named volumes are not
+#     pre-chowned by the production image);
+#   - canaries enabled with live P2 to the backend (observer -> backend on observer_ingest);
+#   - the backend's IPv6 sysctls are reset ONLY when the host kernel has no IPv6 at all (the sysctl cannot exist there);
+#     the attestor then records `ipv6: absent_from_kernel` instead of `ipv6: disabled_by_sysctl`.
+x-harness: &harness
+  image: python:3.13-slim
+  pull_policy: never
+  user: "0"
+  working_dir: /srv
+  environment:
+    PYTHONDONTWRITEBYTECODE: "1"
+    QYRIX_CHAIN_FILE: /data/proof_chain.jsonl
+    QYRIX_WORKSPACE: /srv/workspace
+services:
+  migrate:
+    <<: *harness
+    volumes: ["./backend:/srv:ro", "${QYRIX_HARNESS_SITE_PACKAGES:?}:/usr/local/lib/python3.13/site-packages:ro"]
+  backend:
+    <<: *harness
+    sysctls: !reset {}
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes: ["./backend:/srv:ro", "${QYRIX_HARNESS_SITE_PACKAGES:?}:/usr/local/lib/python3.13/site-packages:ro",
+              "chain:/data", "workspaces:/workspaces", "witness:/witness"]
+  observer-migrate:
+    <<: *harness
+    volumes: ["./backend:/srv:ro", "${QYRIX_HARNESS_SITE_PACKAGES:?}:/usr/local/lib/python3.13/site-packages:ro"]
+  observer:
+    <<: *harness
+    volumes: ["./backend:/srv:ro", "${QYRIX_HARNESS_SITE_PACKAGES:?}:/usr/local/lib/python3.13/site-packages:ro",
+              "./secrets/observer/canary:/run/canary:ro"]

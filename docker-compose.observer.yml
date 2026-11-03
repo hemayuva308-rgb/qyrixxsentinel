@@ -1,0 +1,121 @@
+# Phase C5 OVERLAY: the Independent Observer Service as the backend's ONLY route out (design §7.1, §15).
+#   docker compose -f docker-compose.yml -f docker-compose.observer.yml up -d
+#   sudo ops/observer/docker-user.sh apply          # host firewall (DOCKER-USER, IPv4 + IPv6) - REQUIRED
+#   sudo python3 -m observer.attestor ...           # host attestor: signed coverage attestation (hourly + on change)
+# Do NOT combine with docker-compose.egress.yml (that gives the backend direct egress).
+# Every backend-side network is internal (no default route); only the observer joins `egress`. Bridge names are fixed so
+# the DOCKER-USER rules cannot drift. Nothing is published to the host.
+services:
+  backend:
+    networks:
+      internal: {}
+      observer_ingest: {}
+      egress_in: {}
+    dns: [172.30.2.2]                                    # observer DNS forwarder (every query recorded)
+    sysctls: { net.ipv6.conf.all.disable_ipv6: 1, net.ipv6.conf.default.disable_ipv6: 1 }
+    secrets: [db_runtime_password, state_witness_key, data_key, client_sig_key,
+              gate_signing_key, observer_ca, backend_client_crt, backend_client_key]
+    environment:
+      QYRIX_OBSERVER_URL: https://172.30.1.2:9443        # mTLS only (audit F2); observer_ingest address (in the cert SAN)
+      QYRIX_OBSERVER_GATE_KEY_FILE: /run/secrets/gate_signing_key
+      QYRIX_OBSERVER_CA_FILE: /run/secrets/observer_ca
+      QYRIX_OBSERVER_CLIENT_CERT_FILE: /run/secrets/backend_client_crt
+      QYRIX_OBSERVER_CLIENT_KEY_FILE: /run/secrets/backend_client_key
+      QYRIX_OBSERVER_READ_TOKEN_FILE: ${QYRIX_OBSERVER_READ_TOKEN_FILE:-}
+      QYRIX_EGRESS_PROXY_URL: http://172.30.2.2:3128     # the only way out (HttpAdapter tags CONNECT, pinned IP)
+  observer-db:
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+    environment:
+      POSTGRES_USER: observer_admin
+      POSTGRES_DB: observer
+      POSTGRES_PASSWORD_FILE: /run/secrets/observer_db_admin_password
+    secrets: [observer_db_admin_password]
+    volumes: ["observer_pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U observer_admin -d observer"], interval: 3s, timeout: 3s, retries: 20 }
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    networks: [observer_db]                              # no backend network, no egress (design §13)
+  observer-migrate:
+    build: ./backend
+    command: ["sh", "-c", "OBSERVER_ADMIN_DATABASE_URL=postgresql://observer_admin:$$(cat /run/secrets/observer_db_admin_password)@observer-db/observer exec python -m observer.migrate --runtime-password-file /run/secrets/observer_db_runtime_password"]
+    depends_on: { observer-db: { condition: service_healthy } }
+    secrets: [observer_db_admin_password, observer_db_runtime_password]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [observer_db]
+  observer:
+    build: ./backend
+    command: ["python", "-m", "observer.main"]
+    depends_on: { observer-migrate: { condition: service_completed_successfully } }
+    secrets: [observer_db_runtime_password, observer_signing_key, observer_manifest, observer_tls_crt, observer_tls_key,
+              observer_ca, observer_operator_token]
+    environment:
+      OBSERVER_DB_HOST: observer-db
+      OBSERVER_DB_NAME: observer
+      OBSERVER_DB_PASSWORD_FILE: /run/secrets/observer_db_runtime_password
+      OBSERVER_ROOT_PUBLIC_KEY: ${OBSERVER_ROOT_PUBLIC_KEY:?pinned root public key}
+      OBSERVER_MANIFEST_FILE: /run/secrets/observer_manifest
+      OBSERVER_SIGNING_KEY_FILE: /run/secrets/observer_signing_key
+      OBSERVER_OPERATOR_TOKEN_FILE: /run/secrets/observer_operator_token
+      OBSERVER_BIND: 172.30.1.2                          # observer_ingest ONLY (never 0.0.0.0: it is also on `egress`)
+      OBSERVER_PORT: "9443"
+      OBSERVER_TLS_CERT_FILE: /run/secrets/observer_tls_crt
+      OBSERVER_TLS_KEY_FILE: /run/secrets/observer_tls_key
+      OBSERVER_TLS_CLIENT_CA_FILE: /run/secrets/observer_ca
+      OBSERVER_C5_TOPOLOGY: "1"
+      OBSERVER_EGRESS_BIND: 172.30.2.2:3128              # egress_in side: the backend's proxy
+      OBSERVER_DNS_BIND: 172.30.2.2:53
+      OBSERVER_DNS_UPSTREAM: 127.0.0.11:53
+      OBSERVER_SINK_HOST: 172.30.3.2                     # egress side: attestation sink (reachable only via the proxy)
+      OBSERVER_EGRESS_ALLOW_CIDRS: 172.30.3.0/24         # observer-owned external addresses (sink, canary sensor)
+      OBSERVER_EGRESS_STATIC_HOSTS: '{"sink.c5.qyrix.internal": ["172.30.3.2"], "canary.c5.qyrix.internal": ["172.30.3.2"]}'
+      OBSERVER_CANARIES: ${OBSERVER_CANARIES:-0}
+      OBSERVER_CANARY_HTTP_HOST: 172.30.3.2
+      OBSERVER_CANARY_HTTP_PORT: "8088"
+      OBSERVER_CANARY_CREDENTIALS_FILE: ${OBSERVER_CANARY_CREDENTIALS_FILE:-}
+      OBSERVER_CANARY_P2_LIVE: ${OBSERVER_CANARY_P2_LIVE:-0}
+      OBSERVER_CANARY_BACKEND_URL: ${OBSERVER_CANARY_BACKEND_URL:-}
+    sysctls: { net.ipv4.ip_unprivileged_port_start: 0 }  # DNS :53 / sink :80 without any capability
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      observer_ingest: { ipv4_address: 172.30.1.2 }
+      egress_in: { ipv4_address: 172.30.2.2 }
+      egress: { ipv4_address: 172.30.3.2 }
+      observer_db: {}
+secrets:
+  gate_signing_key: { file: ./secrets/observer/gate_signing_key.pem }
+  observer_ca: { file: ./secrets/observer/ca/ca.crt }
+  backend_client_crt: { file: ./secrets/observer/backend/backend.crt }
+  backend_client_key: { file: ./secrets/observer/backend/backend.key }
+  observer_tls_crt: { file: ./secrets/observer/server/observer.crt }
+  observer_tls_key: { file: ./secrets/observer/server/observer.key }
+  observer_signing_key: { file: ./secrets/observer/observer_signing_key.pem }
+  observer_manifest: { file: ./secrets/observer/manifest.signed.json }
+  observer_operator_token: { file: ./secrets/observer/operator_token }
+  observer_db_admin_password: { file: ./secrets/observer/observer_db_admin_password }
+  observer_db_runtime_password: { file: ./secrets/observer/observer_db_runtime_password }
+networks:
+  internal:
+    internal: true
+    driver_opts: { com.docker.network.bridge.name: qyrix-int }
+  observer_ingest:
+    internal: true
+    driver_opts: { com.docker.network.bridge.name: qyrix-ingest }
+    ipam: { config: [{ subnet: 172.30.1.0/24, ip_range: 172.30.1.128/25 }] }   # dynamic: .128+, observer: .2
+  egress_in:
+    internal: true
+    driver_opts: { com.docker.network.bridge.name: qyrix-egin }
+    ipam: { config: [{ subnet: 172.30.2.0/24, ip_range: 172.30.2.128/25 }] }   # dynamic: .128+, observer: .2
+  observer_db:
+    internal: true
+    driver_opts: { com.docker.network.bridge.name: qyrix-obsdb }
+  egress:
+    driver_opts: { com.docker.network.bridge.name: qyrix-egress }
+    ipam: { config: [{ subnet: 172.30.3.0/24, ip_range: 172.30.3.128/25 }] }   # dynamic: .128+, observer: .2
+volumes: { observer_pgdata: {} }

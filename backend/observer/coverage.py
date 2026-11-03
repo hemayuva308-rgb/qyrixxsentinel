@@ -120,16 +120,19 @@ class CoverageService:
         return self.db.run(go, lock=False)
 
     def current(self, t_from: float, t_to: float, container_claim: Optional[str]) -> Optional[Dict]:
-        """A valid attestation covering [t_from, t_to] whose container is the one the backend claims to run in."""
+        """Coverage for [t_from, t_to]: the LATEST attestation made at or before t_to decides (a newer FAILED attestation
+        revokes coverage at once - an older valid one cannot outlive it). It must be valid, made at or before t_from,
+        valid until at least t_to, and attest the container the backend claims to run in."""
         def go(cur):
-            cur.execute("SELECT attestation_id, container_id, attested_at, valid_until FROM coverage_attestations"
-                        " WHERE valid AND attested_at <= %s AND valid_until >= %s ORDER BY attested_at DESC LIMIT 1",
-                        (_dt(t_from), _dt(t_to)))
+            cur.execute("SELECT attestation_id, container_id, attested_at, valid_until, valid FROM coverage_attestations"
+                        " WHERE attested_at <= %s ORDER BY attested_at DESC, received_at DESC LIMIT 1", (_dt(t_to),))
             return cur.fetchone()
         r = self.db.run(go, lock=False)
         if r is None:
             return None
-        aid, cid, at, until = r
+        aid, cid, at, until, valid = r
+        if not valid or at.timestamp() > t_from or until.timestamp() < t_to:
+            return None
         if container_claim and not (cid.startswith(container_claim) or container_claim.startswith(cid)):
             return None                                   # the backend moved/restarted since: attestation is stale
         return {"mediated": True, "attestation_id": str(aid), "container_id": cid, "attested_at": at.isoformat(),

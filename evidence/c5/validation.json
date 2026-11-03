@@ -1,0 +1,154 @@
+{
+ "started_at": "2026-11-03T19:08:50Z",
+ "steps": [
+  {
+   "step": "backend healthy on internal networks only",
+   "ok": true
+  },
+  {
+   "step": "DOCKER-USER rules applied (IPv4 + IPv6)",
+   "ok": true
+  },
+  {
+   "step": "observer reachable from the host over mTLS only",
+   "ok": true
+  },
+  {
+   "step": "direct egress from the backend container fails",
+   "ok": true,
+   "result": "{'1.1.1.1': 'OSError:101', '172.30.3.2': 'OSError:101', '8.8.8.8': 'OSError:101'}"
+  },
+  {
+   "step": "backend heartbeats delivered to the observer (mTLS outbox)",
+   "ok": true
+  },
+  {
+   "step": "host attestation judged VALID by the observer",
+   "ok": true,
+   "attestor_checks": {
+    "container_running": true,
+    "network_mode_not_host": true,
+    "not_privileged": true,
+    "cap_drop_all": true,
+    "no_cap_add": true,
+    "networks_exact": true,
+    "dns_is_observer": true,
+    "no_default_route": true,
+    "no_global_ipv6": true,
+    "ipv6_disabled_sysctl": true,
+    "docker_user_rules_v4": true,
+    "docker_user_rules_v6": true
+   },
+   "observer_checks": {
+    "direct_path_blocked:ipv4_tcp_80": true,
+    "direct_path_blocked:ipv4_tcp_443": true,
+    "direct_path_blocked:ipv4_tcp_853": true,
+    "direct_path_blocked:dns_udp_direct": true,
+    "positive_control_reached_sink": true,
+    "positive_control_mediated_by_proxy": true,
+    "sni_mismatch_refused": true,
+    "dns_reaches_observer_resolver": true
+   },
+   "reasons": []
+  },
+  {
+   "step": "live P2 canary through the backend is ENFORCEMENT_VERIFIED",
+   "ok": true,
+   "reconciliation": {
+    "recon_id": "b1666118-7e93-4634-863b-4fd49a7c2a45",
+    "run_id": "8c5de81f-3abd-4189-9526-649c5e24a71d",
+    "version": 2,
+    "result": "ENFORCEMENT_VERIFIED",
+    "reasons": [],
+    "evidence_level": "E3",
+    "decided_at": "2026-11-03T19:09:25.798452+00:00",
+    "ledger": {
+     "n": 11,
+     "hash": "9e24ad2f2a531a6d3900790611cce0b839eb361485fced81a95735c1568dea79"
+    },
+    "channel": "http",
+    "run_created_at": "2026-11-03T19:09:14.180326+00:00",
+    "expected_condition": "BLOCK",
+    "expected_basis": "construction",
+    "scope": "canary"
+   },
+   "submission": {
+    "submitted": true,
+    "status": 200
+   }
+  },
+  {
+   "step": "NEGATIVE: extra egress attachment => attestation INVALID",
+   "ok": true,
+   "reasons": [
+    "ATTESTOR_CHECK_FAILED:networks_exact",
+    "ATTESTOR_CHECK_FAILED:no_default_route",
+    "OBSERVER_CHECK_FAILED:direct_path_blocked:ipv4_tcp_80",
+    "OBSERVER_CHECK_FAILED:direct_path_blocked:ipv4_tcp_443",
+    "OBSERVER_CHECK_FAILED:direct_path_blocked:ipv4_tcp_853",
+    "OBSERVER_CHECK_FAILED:direct_path_blocked:dns_udp_direct"
+   ]
+  },
+  {
+   "step": "NEGATIVE: canary under failed coverage is not VERIFIED",
+   "ok": true,
+   "reconciliation": {
+    "recon_id": "8286f573-6d98-4670-be83-c8b25aaec263",
+    "run_id": "59e38e81-9a2b-4a18-9616-bad08fcc9b0e",
+    "version": 2,
+    "result": "INCONCLUSIVE",
+    "reasons": [
+     "COVERAGE_UNATTESTED"
+    ],
+    "evidence_level": "none",
+    "decided_at": "2026-11-03T19:09:40.038433+00:00",
+    "ledger": {
+     "n": 21,
+     "hash": "f664a9bc0efaeaaf2e8d7510c28b5122852f9ea97491dfe6e33062cb9f6f7add"
+    },
+    "channel": "http",
+    "run_created_at": "2026-11-03T19:09:28.486370+00:00",
+    "expected_condition": "BLOCK",
+    "expected_basis": "construction",
+    "scope": "canary"
+   }
+  },
+  {
+   "step": "NEGATIVE: DOCKER-USER rules missing => attestation INVALID",
+   "ok": true,
+   "reasons": [
+    "ATTESTOR_CHECK_FAILED:docker_user_rules_v4",
+    "ATTESTOR_CHECK_FAILED:docker_user_rules_v6"
+   ]
+  },
+  {
+   "step": "restored topology => attestation VALID again",
+   "ok": true
+  }
+ ],
+ "observer_status": {
+  "coverage": {
+   "mediated": true,
+   "current": {
+    "mediated": true,
+    "attestation_id": "0bce4c82-0ca2-4c75-b7c1-ae8a94fe7c08",
+    "container_id": "b7b5b742c0751bd96f6247374a3c02917cfed62d48c8242293bb224ead8aeef4",
+    "attested_at": "2026-11-03T19:10:10.808537+00:00",
+    "valid_until": "2026-11-03T20:10:10.808537+00:00"
+   }
+  },
+  "egress": {
+   "counters": {
+    "alerts_throttled": 3
+   },
+   "open_tunnels": 0
+  },
+  "ingest": {
+   "rate_limited": 0,
+   "busy": 0
+  },
+  "manifest_version": 1
+ },
+ "finished_at": "2026-11-03T19:10:11Z",
+ "all_passed": true
+}

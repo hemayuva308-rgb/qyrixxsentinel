@@ -91,9 +91,12 @@ class Recorder:
         vals = [row.get("observation_id") or str(uuid.uuid4()), row["sensor"], row["kind"], _dt(row["observed_at"])] + [
             _dt(row[k]) if k == "closed_at" else row[k] for k in cols[4:]]
 
+        from psycopg import sql                          # identifiers composed safely (fixed allow-list above)
+        stmt = sql.SQL("INSERT INTO egress_observations ({}) VALUES ({})").format(
+            sql.SQL(", ").join(sql.Identifier(c) for c in cols), sql.SQL(", ").join(sql.Placeholder() * len(cols)))
+
         def go(cur):
-            cur.execute("INSERT INTO egress_observations (%s) VALUES (%s)" % (", ".join(cols), ", ".join(["%s"] * len(cols))),
-                        vals)
+            cur.execute(stmt, vals)
         try:
             self.db.run(go, lock=False)
             return True
