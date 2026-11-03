@@ -61,7 +61,9 @@ def test_relay_never_forwards_an_unexpected_result_value():
     class Fake:
         def get(self, *a, **k):
             return type("R", (), {"status_code": 200, "json": lambda s: {"reconciliations": [
-                {"result": "ENFORCEMENT_VERIFIED", "reasons": [], "extra": "x"}]}})()
+                {"result": "MAYBE_FINE", "reasons": [], "extra": "x"},
+                {"result": "ENFORCEMENT_VERIFIED", "reasons": [], "evidence_level": "none"},
+                {"result": "ENFORCEMENT_VERIFIED", "reasons": [], "evidence_level": "E3"}]}})()
     import os
     os.environ["QYRIX_OBSERVER_URL"] = "http://observer.test"
     import tempfile
@@ -71,6 +73,8 @@ def test_relay_never_forwards_an_unexpected_result_value():
         j = observer_feed.fetch_reconciliations("default", Fake())
         assert j["reconciliations"][0]["result"] == "INCONCLUSIVE" and "extra" not in j["reconciliations"][0]
         assert j["reconciliations"][0]["reasons"] == ["UNEXPECTED_RESULT_VALUE"]
+        assert j["reconciliations"][1]["result"] == "INCONCLUSIVE"                    # weak VERIFIED is not relayed
+        assert j["reconciliations"][2]["result"] == "ENFORCEMENT_VERIFIED"            # a proper one is
     finally:
         del os.environ["QYRIX_OBSERVER_URL"], os.environ["QYRIX_OBSERVER_READ_TOKEN_FILE"]
         os.unlink(f.name)

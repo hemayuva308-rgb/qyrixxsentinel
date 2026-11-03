@@ -1,4 +1,4 @@
-# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-03, updated after Phase C4)
+# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-03, updated after Phase C5)
 
 Rule: **Built** = implemented and covered by automated tests in this repository. Anything else is labelled as such.
 Test counts are from the last full run, recorded in the commit that changed this file.
@@ -41,7 +41,10 @@ Test counts are from the last full run, recorded in the commit that changed this
 | Observer deployed as a separate container / host (compose overlay, egress chokepoint, host attestor) | Proposed (C5) | not deployed; no isolation claimed yet |
 | Observer canaries C3: CSPRNG tokens (hash-only storage), run-before-submission, loopback HTTP + observer-owned file sensors (E3), positive controls, DECISION_MISSING, discrepancies, restart/expiry, O002 | Built (Phase C3; test-only reach) | `observer/canary.py`, `tests/test_observer_canary_pg.py`; **live P2 disabled, no deployed reachability, no verdicts** (`docs/OBSERVER.md` §1.3) |
 | Observer reconciliation C4 (canary runs only): BYPASS / UNAUTHORIZED / INCONCLUSIVE, versioned + signed, tenant-scoped read API, dashboard panel; audit F4/F9/F13 fixes | Built (Phase C4; fixture-tested) | `observer/reconcile.py`, O003, `tests/test_observer_reconcile*.py`, `tests/test_observer_relay_pg.py`; **ENFORCEMENT_VERIFIED not producible until C5** |
-| Real-traffic reconciliation, coverage attestation, policy bundle, anchoring/export (C5, C6, C7) | Proposed | |
+| C5 blockers F1 (refusal flooding), F2 (mTLS), F3 (event loop), F7 (non-finite numbers) | Built (fixed) | `tests/test_observer_c5_blockers.py`, `tests/test_observer_mtls.py` |
+| C5 egress chokepoint: proxy (pinned-IP CONNECT, SNI peek, tunnel lifecycle, execution-id uniqueness), DNS forwarder, coverage sink, compose overlay, DOCKER-USER rules | Built (Phase C5; validated on a real Docker host) | `observer/egress.py`, `docker-compose.observer.yml`, `ops/observer/`, `evidence/c5/validation.json` |
+| Host attestor + signed coverage attestation judged by the observer; ENFORCEMENT_VERIFIED for canary runs | Built (Phase C5; real-host validated, incl. negative controls) | `observer/attestor.py`, `observer/coverage.py`; **production image build and IPv6 path not exercised** (`docs/OBSERVER.md` §1.5) |
+| Real-traffic (ALLOW) reconciliation by execution id; policy bundle; anchoring/export (C6, C7) | Proposed | |
 
 ## Still to do (master plan, in priority order)
 | Feature | Status |

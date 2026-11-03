@@ -1,4 +1,4 @@
-# Observer Service: Phase C1–C4 implementation
+# Observer Service: Phase C1–C5 implementation
 
 Design: `docs/PHASE_C_OBSERVER_DESIGN.md` (revision 3, approved at `fd76a80`). This document records what slices
 **C1–C2** implement, how to run them, the resolutions taken where the design was silent or inconsistent, and the
@@ -127,6 +127,46 @@ three ways:
 - **F13 residual.** The loss window shrinks to delivery-plus-heartbeat latency but is not zero.
 - **Interrupted runs.** These, and runs whose positive control could not be evaluated, are always INCONCLUSIVE, even when the token was seen.
 - **F1, F2, F3 and F7 remain open** and block C5.
+
+### 1.5 C5: independent enforcement observation (real Docker host validated)
+**Blockers fixed first:**
+- **F1:** unauthenticated refusals are throttled per code and store nothing the sender chose. The throttle map is bounded, and each source has a token-bucket limit (429). Test: `test_observer_c5_blockers.py`.
+- **F2:** mutual TLS everywhere.
+  - A non-loopback observer bind without TLS and a client CA is refused.
+  - Clients use a pinned CA and a client certificate.
+  - Plain HTTP is refused except to loopback.
+  - Tests: `test_observer_mtls.py`, on a real uvicorn TLS listener.
+- **F3:** ingest runs in the threadpool with a bounded number of in-flight requests (503 beyond it).
+- **F7:** NaN, Infinity, overflowing floats, huge integers and deep nesting are MALFORMED (400), never a 500.
+
+| Feature | Design § | Code | Evidence |
+|---|---|---|---|
+| Egress proxy (the backend's only route out). CONNECT must target the backend-pinned IP, and that IP must be in the **observer's own** resolution of `X-Qyrix-Host`. The peeked ClientHello SNI must equal `X-Qyrix-Host`. Destinations must be public or explicitly allowed CIDRs. One tunnel/request per execution id (DB unique index ⇒ `EXECUTION_ID_REUSE`). `T_tunnel` cap. Lifecycle is recorded at open **and** close. Plain HTTP is recorded per request with the tags stripped. **No record ⇒ no egress** | §7.1, §7.5, §7.6 | `observer/egress.py` | `test_observer_c5_pg.py` (real sockets, real TLS ClientHellos) |
+| DNS forwarder: records every query (E3) and relays it | §7.1, §7.4 | `observer/egress.py::DnsForwarder` | same; **real topology: Docker's embedded resolver forwards from the backend namespace to the observer** (`dns_reaches_observer_resolver: true`) |
+| Coverage sink on the observer's external side | §7.3 | `observer/egress.py::Sink` | same |
+| Host attestor (root on the Docker host). Runs `docker inspect` on the **running** backend container, then uses `nsenter` into **its** network namespace with host binaries: IPv4 routes, global IPv6, IPv6 sysctl, token probes (direct TCP 80/443/853, UDP 53, positive control through the proxy, SNI-mismatch tunnel, DNS via the embedded resolver). Also checks the DOCKER-USER rules (v4 + v6). Signs with an attestor key from the root-signed manifest | §7.2, §7.3 | `observer/attestor.py` | `evidence/c5/validation.json` |
+| Coverage judged **by the observer** from its own sink/proxy/resolver records. Valid at most 1 h. **The latest attestation decides**, so a newer failed one revokes coverage immediately. A heartbeat container-id claim can only invalidate coverage. `COVERAGE_GAP` alerts | §7.3, §11 | `observer/coverage.py` | `test_observer_c5_pg.py` |
+| ENFORCEMENT_VERIFIED (canary runs) only when **every** condition holds:<br>• clean signed BLOCK claim;<br>• submitted;<br>• positive control passed;<br>• no epoch boundary;<br>• closing heartbeat reached;<br>• no quarantine;<br>• no token observation at any time;<br>• no tunnel to the canary host;<br>• a valid attestation covering the whole window for the claimed container.<br>O004 enforces E3 + no reasons + attestation id for every VERIFIED row | §11 | `observer/reconcile.py`, O004 | exhaustive truth table (more than 200,000 cases); real topology run |
+| Compose overlay: backend only on `internal: true` networks with fixed bridge names; `dns:` points to the observer; IPv6 sysctls; `cap_drop: ALL`; observer API bound to its ingest address with mTLS; nothing published. DOCKER-USER script (IPv4 + IPv6) | §7.1, §15 | `docker-compose.observer.yml`, `ops/observer/docker-user.sh` | real topology run |
+
+**Real Docker validation** (`sudo python3 ops/observer/validate_c5.py`; result in `evidence/c5/validation.json`, all steps passed):
+- **Direct egress fails:** from inside the running backend container, 1.1.1.1:443, the observer's external address and 8.8.8.8:53 all fail with `ENETUNREACH`.
+- **Delivery:** backend heartbeats reach the observer over mTLS.
+- **Attestation:** the host attestation was judged VALID, with all 12 attestor checks and all 8 observer checks true.
+- **Live VERIFIED:** a live P2 canary went through the real backend. The Gate really BLOCKed it, and the signed claim arrived through the outbox → **ENFORCEMENT_VERIFIED** (E3, attestation id recorded).
+- **Negative control, extra `egress` attachment:** the attestation was INVALID. The attestor checks failed **and** the observer saw the direct-path tokens arrive. A canary run under that state was INCONCLUSIVE (`COVERAGE_UNATTESTED`).
+- **Negative control, DOCKER-USER rules removed:** the attestation was INVALID. With the rules restored it was VALID again.
+
+**C5 limitations (honest):**
+- **Harness image.** The validation used the repository code on `python:3.13-slim`, with the host's already-tested dependency set mounted read-only. The **production image build** (`backend/Dockerfile`, now also copying `observer/`) was **not** exercised, because `docker build` cannot reach PyPI in this environment. The containers ran as uid 0 with **all capabilities dropped**.
+- **IPv6 was not exercised.** This host's kernel has **no IPv6 at all**. The attestor recorded `ipv6_mode: absent_from_kernel`, and the harness reset the backend IPv6 sysctl, which cannot exist here. The sysctl path and the ip6tables rules' effect on real IPv6 traffic are **untested**; the ip6tables rules were installed and checked.
+- **ALLOW traffic not exercised in the topology.** Real ALLOWed traffic through the proxy to the internet was not run, because there is no internet egress here. Tunnel and SNI behaviour are covered by socket-level tests.
+- **Canary runs only.** Real-traffic reconciliation (ALLOW claims ↔ tunnels by execution id) is not built.
+- **Single host; boundary D shared.** A host or Docker-daemon compromise defeats everything here.
+- **DoT/DoH and raw DNS over TCP** from the backend are not mediated channels (no route). The attestor checks TCP 853 and direct UDP 53 only; ICMP is not probed.
+- **The proxy does not terminate TLS.** HTTPS is verified at host scope only (§7.6).
+- **The attestor must be scheduled** (hourly and on container change) by the operator; without a current attestation, nothing is VERIFIED.
+- **Dashboard relay.** The view remains relayed by the backend and is not independent of it.
 
 ## 2. Configuration
 

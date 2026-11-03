@@ -27,8 +27,9 @@ function ObserverReconciliations() {
   const d = o.data;
   const counts = (d?.reconciliations ?? []).reduce<Record<string, number>>((a, r) => ({ ...a, [r.result]: (a[r.result] ?? 0) + 1 }), {});
   return (
-    <Card title="INDEPENDENT OBSERVER · CANARY RECONCILIATIONS (PHASE C4)" right={d?.available ? (
+    <Card title="INDEPENDENT OBSERVER · CANARY RECONCILIATIONS" right={d?.available ? (
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <Badge t="ok">{counts.ENFORCEMENT_VERIFIED ?? 0} verified</Badge>
         <Badge t="crit">{(counts.BYPASS_DETECTED ?? 0) + (counts.UNAUTHORIZED_EXECUTION ?? 0)} bypass / unauthorized</Badge>
         <Badge t="warn">{counts.INCONCLUSIVE ?? 0} inconclusive</Badge>
       </div>) : undefined}>
@@ -49,9 +50,10 @@ function ObserverReconciliations() {
               <td><Mono>{r.reasons.length ? r.reasons.join(" ") : "-"}</Mono></td>
               <td>{r.version}</td><td><Mono>{r.ledger ? `#${r.ledger.n} ${short(r.ledger.hash)}` : "-"}</Mono></td></tr>))}</tbody></table></div>)}
       <p className="mt-2 text-[11px] text-mute">
-        Results come from the separate Observer Service (canary runs only). ENFORCEMENT_VERIFIED is not possible yet: it needs a coverage
-        attestation of the network path (Phase C5), so an absent observation is shown as INCONCLUSIVE. &quot;Expected&quot; is a test expectation
-        chosen by construction, not a signed policy check. {d?.source ? `Source: ${d.source}.` : ""}</p>
+        Results come from the separate Observer Service (canary runs only). ENFORCEMENT_VERIFIED requires a current, signed coverage
+        attestation of the backend&apos;s network namespace{d?.verified_possible ? " (present now)" : " (none current: absent observations stay INCONCLUSIVE)"}
+        plus every other condition. &quot;Expected&quot; is a test expectation chosen by construction, not a signed policy check.
+        {d?.source ? ` Source: ${d.source}.` : ""}</p>
     </Card>);
 }
 

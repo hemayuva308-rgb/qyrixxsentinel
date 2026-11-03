@@ -422,7 +422,7 @@ class AdapterReporter:
 
 
 # ---------------- C4: dashboard read path (observer -> backend -> UI), READ-ONLY ----------------
-RESULTS = ("BYPASS_DETECTED", "UNAUTHORIZED_EXECUTION", "INCONCLUSIVE")
+RESULTS = ("ENFORCEMENT_VERIFIED", "BYPASS_DETECTED", "UNAUTHORIZED_EXECUTION", "INCONCLUSIVE")
 _REC_FIELDS = ("recon_id", "run_id", "version", "result", "reasons", "evidence_level", "decided_at", "ledger", "channel",
                "run_created_at", "expected_condition", "expected_basis", "scope")
 
@@ -437,6 +437,7 @@ def fetch_reconciliations(tenant: str, http=None) -> Dict:
     The relay passes through the backend, so the UI view is NOT independent of the backend (stated in `source`)."""
     base = {"source": "observer, relayed by the Sentinel backend (not independent of the backend; verify against the "
                       "observer API / signed ledger)", "verified_possible": False}
+    # (verified_possible is overwritten below only by what the observer itself reports)
     path = os.getenv("QYRIX_OBSERVER_READ_TOKEN_FILE", "").strip()
     if not enabled() or not path:
         return {**base, "configured": False, "available": False, "reconciliations": []}
@@ -463,9 +464,11 @@ def fetch_reconciliations(tenant: str, http=None) -> Dict:
         if not isinstance(x, dict):
             continue
         y = {k: x.get(k) for k in _REC_FIELDS}
-        if y["result"] not in RESULTS:                   # defensive: the UI can never be fed ENFORCEMENT_VERIFIED
+        if y["result"] not in RESULTS:                   # defensive: unknown values never reach the UI as a result
             y["reasons"], y["result"] = ["UNEXPECTED_RESULT_VALUE"], "INCONCLUSIVE"
+        elif y["result"] == "ENFORCEMENT_VERIFIED" and (y.get("evidence_level") != "E3" or y.get("reasons")):
+            y["reasons"], y["result"] = ["VERIFIED_WITHOUT_E3_EVIDENCE"], "INCONCLUSIVE"   # never relay a weak VERIFIED
         y["reasons"] = [str(z)[:64] for z in (y.get("reasons") or [])][:20]
         rows.append(y)
     return {**base, "configured": True, "available": True, "tenant": tenant, "scope": "canary", "reconciliations": rows,
-            "note": str(j.get("note", ""))[:300]}
+            "verified_possible": j.get("verified_possible") is True, "note": str(j.get("note", ""))[:300]}

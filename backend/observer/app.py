@@ -145,10 +145,11 @@ def create_app(obs: Observer, operator_token: Optional[str], canaries=None, read
             rows = canaries.list_reconciliations(tenant, t, max(1, min(int(limit), 500)))
         except DbError:
             raise HTTPException(503, "OBSERVER_DB_UNAVAILABLE")
+        cov = c5["coverage"].status() if c5 is not None else {"mediated": False}
         return {"tenant": tenant, "scope": "canary", "reconciliations": rows,
-                "verified_possible": False,
-                "note": "ENFORCEMENT_VERIFIED requires a coverage attestation (Phase C5, not implemented); absence of an "
-                        "observation is INCONCLUSIVE."}
+                "verified_possible": bool(cov.get("mediated")),
+                "note": "ENFORCEMENT_VERIFIED requires a current, valid, signed coverage attestation of the backend's "
+                        "network namespace (C5) plus every other condition; otherwise an absent observation is INCONCLUSIVE."}
 
     # C5: signed coverage attestations from the host attestor (operator credential over mTLS; signature checked too)
     @app.post("/v1/coverage/attestations")
