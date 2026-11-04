@@ -42,8 +42,8 @@ result = {"format": "qyrix-c5-validation-evidence/2", "started_at": time.strftim
           "steps": [], "attestation_ids": [], "reconciliation_ids": []}
 
 
-def sh(argv, check=True, env=None):
-    r = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)  # nosec B603
+def sh(argv, check=True, env=None, stdin=None):
+    r = subprocess.run(argv, cwd=ROOT, env=env, input=stdin, capture_output=True, text=True, timeout=600)  # nosec B603
     if check and r.returncode != 0:
         raise SystemExit("command failed: %s\n%s" % (" ".join(argv[:4]), (r.stderr or "")[-2000:]))
     return r
@@ -111,9 +111,9 @@ def prepare(image):
     return keys, env
 
 
-def compose(env, *args, check=True):
+def compose(env, *args, check=True, stdin=None):
     files = sum((["-f", f] for f in COMPOSE), []) + ["-f", os.path.join(OFF, "image.override.yml")]
-    return sh(["docker", "compose", "-p", PROJECT, *files, *args], check=check, env={**os.environ, **env})
+    return sh(["docker", "compose", "-p", PROJECT, *files, *args], check=check, env={**os.environ, **env}, stdin=stdin)
 
 
 def client():
@@ -196,12 +196,17 @@ print(json.dumps({
 '''
 
 
+LEDGER_SQL = ("SELECT coalesce(json_agg(row_to_json(l) ORDER BY n), '[]') FROM ledger l "
+              "WHERE ref = ANY(string_to_array(:'refs', ','));\n")
+
+
 def ledger_rows(env, refs):
+    """Signed ledger rows for the given ids; refs travel as a psql variable (quoted by psql), never as SQL text."""
+    refs = [r for r in refs if r and all(ch in "0123456789abcdef-" for ch in r)]
     if not refs:
         return []
-    arr = "ARRAY[%s]::text[]" % ",".join("'%s'" % r for r in refs if all(ch in "0123456789abcdef-" for ch in r))
-    out = compose(env, "exec", "-T", "observer-db", "psql", "-U", "observer_admin", "-d", "observer", "-tAc",
-                  "SELECT coalesce(json_agg(row_to_json(l) ORDER BY n), '[]') FROM ledger l WHERE ref = ANY(%s)" % arr).stdout
+    out = compose(env, "exec", "-T", "observer-db", "psql", "-U", "observer_admin", "-d", "observer", "-tA",
+                  "-v", "refs=" + ",".join(refs), stdin=LEDGER_SQL).stdout
     return json.loads(out.strip() or "[]")
 
 
