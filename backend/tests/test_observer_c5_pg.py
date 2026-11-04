@@ -1,7 +1,6 @@
 """C5 sensors and coverage on REAL PostgreSQL with REAL sockets (loopback): egress proxy (CONNECT lifecycle, pinned-IP
 + resolution check, SNI peek, execution-id reuse, T_tunnel, plain HTTP, fail-closed recording), DNS forwarder, sink,
 signed coverage attestation judged by the observer, and ENFORCEMENT_VERIFIED only with every condition."""
-import datetime
 import json
 import os
 import socket
@@ -22,6 +21,7 @@ from tests.observer_support import HAVE_PG, Keys, ObserverCluster, envelope, hea
 
 pytestmark = pytest.mark.skipif(not HAVE_PG, reason="PostgreSQL not available")
 HOST = "api.example.com"
+TEST_CA = {"path": None}          # CA of the most recent _tls_server(); trusted by tls_through()
 
 
 @pytest.fixture(scope="module")
@@ -50,20 +50,16 @@ def q(admin, sql, p=()):
 
 
 def _tls_server(tmp_path, port=0):
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import NameOID
-    k = ec.generate_private_key(ec.SECP256R1())
-    n = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, HOST)])
-    now = datetime.datetime.now(datetime.timezone.utc)
-    c = (x509.CertificateBuilder().subject_name(n).issuer_name(n).public_key(k.public_key()).serial_number(1)
-         .not_valid_before(now - datetime.timedelta(minutes=1)).not_valid_after(now + datetime.timedelta(hours=1))
-         .add_extension(x509.SubjectAlternativeName([x509.DNSName(HOST)]), False).sign(k, hashes.SHA256()))
-    cp, kp = str(tmp_path / "c.pem"), str(tmp_path / "k.pem")
-    open(cp, "wb").write(c.public_bytes(serialization.Encoding.PEM))
-    open(kp, "wb").write(k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(cp, kp)
+    """TLS origin whose certificate is issued for HOST by a dedicated TEST CA (observer.tls helpers: SKI/AKI/basicConstraints,
+    so it also verifies under Python 3.13's strict X.509 mode). The CA certificate is registered in TEST_CA so that
+    tls_through() verifies against it; no test ever turns verification off."""
+    from observer import tls as otls
+    ca, srv = str(tmp_path / "ca"), str(tmp_path / "srv")
+    otls.make_ca(ca, "C5 test CA")
+    otls.issue(ca, "origin", [HOST], True, srv)
+    TEST_CA["path"] = os.path.join(ca, "ca.crt")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(os.path.join(srv, "origin.crt"), os.path.join(srv, "origin.key"))
     s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", port)); s.listen(8)
 
     def run():
@@ -93,8 +89,11 @@ def connect(proxy, ip, port, xhost=HOST, xexec=None):
     return s, resp
 
 
-def tls_through(s, sni):
-    ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+def tls_through(s, sni, cafile=None):
+    """TLS client over an existing tunnel socket. Certificate AND hostname verification are ON (the create_default_context
+    defaults); the trust anchor is the test CA of the most recent _tls_server() (or `cafile`). TLS >= 1.2 only."""
+    ctx = ssl.create_default_context(cafile=cafile or TEST_CA["path"])
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     t = ctx.wrap_socket(s, server_hostname=sni)
     t.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
     data = t.recv(100)
