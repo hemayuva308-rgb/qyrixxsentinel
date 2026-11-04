@@ -309,8 +309,9 @@ def test_valid_attestation_judged_by_observer(ob, sink):
     r = cov.submit(doc)
     assert r["valid"] and r["reasons"] == [] and all(r["observer_checks"].values())
     assert cov.current(time.time(), time.time() + 60, "abc123def456")["attestation_id"] == r["attestation_id"]
+    assert cov.current(time.time(), time.time() + 60, None) is None                     # no container claim => no coverage
     assert cov.current(time.time(), time.time() + 60, "ffffffffffff") is None           # container moved => stale
-    assert cov.current(time.time(), time.time() + 7200, None) is None                   # beyond validity
+    assert cov.current(time.time(), time.time() + 7200, "abc123def456") is None         # beyond validity
 
 
 def test_newer_failed_attestation_revokes_older_valid_coverage(ob, sink):
@@ -318,12 +319,12 @@ def test_newer_failed_attestation_revokes_older_valid_coverage(ob, sink):
     name = "%s.dnscheck.qyrix.invalid" % new_token()
     ok = cov.submit(sign_attestation(attestation_skeleton("abc123def456", "img", _checks(), _evidence(ob, sink.ports[0], name)),
                                      ob["keys"].attestor))
-    assert ok["valid"] and cov.current(time.time(), time.time() + 5, None)
+    assert ok["valid"] and cov.current(time.time(), time.time() + 5, "abc123def456")
     time.sleep(0.05)
     bad = cov.submit(sign_attestation(attestation_skeleton("abc123def456", "img", _checks(networks_exact=False),
                                                            _evidence(ob, sink.ports[0], name)), ob["keys"].attestor))
     assert bad["valid"] is False
-    assert cov.current(time.time(), time.time() + 5, None) is None          # misconfiguration wins immediately
+    assert cov.current(time.time(), time.time() + 5, "abc123def456") is None   # misconfiguration wins immediately
 
 
 @pytest.mark.parametrize("variant", ["direct_path_open", "attestor_check_failed", "no_dns", "stale"])
@@ -390,7 +391,7 @@ def _run_canary(ob, svc, cov_doc=None, tunnel=False, claim_cid=None):
     return q(ob["admin"], "SELECT version, result, reasons FROM reconciliations WHERE run_id=%s ORDER BY version", (r["run_id"],))
 
 
-@pytest.mark.parametrize("case", ["verified", "no_attestation", "tunnel_to_canary_host", "container_moved"])
+@pytest.mark.parametrize("case", ["verified", "no_attestation", "tunnel_to_canary_host", "container_moved", "no_container_claim"])
 def test_enforcement_verified_only_with_every_condition(ob, sink, case):
     svc = oc.CanaryService(ob["obs"])
     svc.http = oc.HttpCanarySensor(svc.record)
@@ -401,7 +402,7 @@ def test_enforcement_verified_only_with_every_condition(ob, sink, case):
             assert svc.coverage.submit(sign_attestation(attestation_skeleton(
                 "abc123def456", "img", _checks(), _evidence(ob, sink.ports[0], name)), ob["keys"].attestor))["valid"]
         res = _run_canary(ob, svc, tunnel=case == "tunnel_to_canary_host",
-                          claim_cid="ffffffffffff" if case == "container_moved" else "abc123def456")
+                          claim_cid={"container_moved": "ffffffffffff", "no_container_claim": None}.get(case, "abc123def456"))
         last = res[-1]
         if case == "verified":
             assert last[1:] == ("ENFORCEMENT_VERIFIED", [])
@@ -411,7 +412,7 @@ def test_enforcement_verified_only_with_every_condition(ob, sink, case):
         else:
             assert last[1] == "INCONCLUSIVE"
             assert {"no_attestation": "COVERAGE_UNATTESTED", "tunnel_to_canary_host": "TUNNEL_TO_CANARY_HOST",
-                    "container_moved": "COVERAGE_UNATTESTED"}[case] in last[2]
+                    "container_moved": "COVERAGE_UNATTESTED", "no_container_claim": "COVERAGE_UNATTESTED"}[case] in last[2]
     finally:
         svc.http.close()
 

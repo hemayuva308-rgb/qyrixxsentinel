@@ -119,7 +119,7 @@ class CoverageService:
             return out
         return self.db.run(go, lock=False)
 
-    def current(self, t_from: float, t_to: float, container_claim: Optional[str]) -> Optional[Dict]:
+    def current(self, t_from: float, t_to: float, container_claim: Optional[str], require_claim: bool = True) -> Optional[Dict]:
         """Coverage for [t_from, t_to]: the LATEST attestation made at or before t_to decides (a newer FAILED attestation
         revokes coverage at once - an older valid one cannot outlive it). It must be valid, made at or before t_from,
         valid until at least t_to, and attest the container the backend claims to run in."""
@@ -133,7 +133,10 @@ class CoverageService:
         aid, cid, at, until, valid = r
         if not valid or at.timestamp() > t_from or until.timestamp() < t_to:
             return None
-        if container_claim and not (cid.startswith(container_claim) or container_claim.startswith(cid)):
+        if not container_claim:
+            if require_claim:                              # final audit N1: no claim => cannot bind the attestation to
+                return None                                # the running container => no coverage (fail closed)
+        elif not (cid.startswith(container_claim) or container_claim.startswith(cid)):
             return None                                   # the backend moved/restarted since: attestation is stale
         return {"mediated": True, "attestation_id": str(aid), "container_id": cid, "attested_at": at.isoformat(),
                 "valid_until": until.isoformat()}
@@ -141,7 +144,7 @@ class CoverageService:
     def tick(self) -> Optional[str]:
         """COVERAGE_GAP alert once when no valid attestation covers 'now' (re-armed by the next valid one)."""
         now = self.clock()
-        if self.current(now, now, None) is not None:
+        if self.current(now, now, None, require_claim=False) is not None:   # topology-level gap alert only
             self._gap_alerted = False
             return None
         if self._gap_alerted:
@@ -153,7 +156,7 @@ class CoverageService:
 
     def status(self) -> Dict:
         now = self.clock()
-        c = self.current(now, now, None)
+        c = self.current(now, now, None, require_claim=False)              # status only; never used for a result
         return {"mediated": c is not None, "current": c}
 
 
