@@ -21,7 +21,9 @@ SECURITY MODEL (all enforced here, none of it is authorization - the Gate alone 
     initialize / ping / tools/list / tools/call (+ notifications/initialized, notifications/cancelled) are refused.
     resources/*, prompts/*, completion, logging, sampling and elicitation are NOT proxied. A server-initiated request
     inside a response stream is refused toward the upstream (JSON-RPC error) and never relayed to the client;
-  * the response is always buffered and returned as one application/json message (no incremental streaming).
+  * the response is always buffered and returned as one application/json message (no incremental streaming);
+  SSE priming events (an event id with an empty data field) are skipped; resumability / polling (GET + Last-Event-ID)
+  remains UNSUPPORTED, so a server that closes the stream before sending the response yields an unknown outcome.
 Adapter reports are E1 self-reports, never independent evidence. Direct access to the upstream URL bypasses this proxy.
 Nothing in this module logs headers, bodies or tokens."""
 import argparse
@@ -36,7 +38,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -66,6 +68,11 @@ class SseError(Exception):
     pass
 
 
+class SseEvent(NamedTuple):
+    data: str                      # "" for a priming event (2025-11-25: an event id with an empty data field)
+    event_id: Optional[str]        # the stream's last-event-id when the event was dispatched (WHATWG semantics)
+
+
 class SseParser:
     """Strict, bounded Server-Sent-Events parser (WHATWG rules we rely on): lines end in CRLF, LF or CR; blank line
     dispatches; `data:` lines are joined with LF; comments and other fields are ignored; an event that is not
@@ -74,14 +81,15 @@ class SseParser:
 
     def __init__(self, max_line: int = 1 << 20, max_event: int = 1 << 20):
         self.buf, self.data, self.size, self.max_line, self.max_event, self.first = b"", [], 0, max_line, max_event, True
+        self.last_event_id: Optional[str] = None
 
-    def finish(self) -> List[str]:
+    def finish(self) -> List[SseEvent]:
         """End of stream: a trailing lone CR was waiting for a possible LF; it is a line terminator now."""
         return self.feed(b"\n") if self.buf.endswith(b"\r") else []
 
-    def feed(self, chunk: bytes) -> List[str]:
+    def feed(self, chunk: bytes) -> List[SseEvent]:
         self.buf += chunk
-        out: List[str] = []
+        out: List[SseEvent] = []
         while True:
             m = self._EOL.search(self.buf)
             if not m:
@@ -98,14 +106,18 @@ class SseParser:
             if self.first:
                 text, self.first = text.lstrip("﻿"), False
             if text == "":
-                if self.data:
-                    out.append("\n".join(self.data))
+                if self.data:                                    # an `id:`-only block carries no data field: nothing to dispatch
+                    out.append(SseEvent("\n".join(self.data), self.last_event_id))
                 self.data, self.size = [], 0
             elif text.startswith(":"):
                 continue
             else:
                 field_, _, value = text.partition(":")
-                if field_ == "data":
+                if field_ == "id":
+                    v = value[1:] if value.startswith(" ") else value
+                    if "\x00" not in v:                          # WHATWG: an id containing NUL is ignored
+                        self.last_event_id = v
+                elif field_ == "data":
                     value = value[1:] if value.startswith(" ") else value
                     self.size += len(value) + 1
                     if self.size > self.max_event:
@@ -162,6 +174,7 @@ class McpHttpProxy:
         u = urlsplit(cfg.upstream_url)
         if u.scheme not in ("http", "https") or not u.hostname or (u.scheme == "http" and u.hostname not in _LOOPBACK):
             raise ValueError("upstream must be https:// (http:// only for loopback)")
+        core.validate_mapping(cfg.mapping)                         # ValueError: ambiguous / allow-list-less mapping (audit F-02)
         self.cfg, self.sentinel, self.reporter = cfg, sentinel, reporter
         self.upstream = upstream or httpx.Client(
             timeout=httpx.Timeout(cfg.request_timeout, connect=5.0), follow_redirects=False,
@@ -170,7 +183,8 @@ class McpHttpProxy:
         self._lock = threading.Lock()
         self._offered: Optional[Set[str]] = None
         self.stats = {"forwarded_calls": 0, "blocked_calls": 0, "duplicates_refused": 0, "replays": 0,
-                      "unknown_outcomes": 0, "timeouts": 0, "server_requests_refused": 0, "server_messages_dropped": 0}
+                      "unknown_outcomes": 0, "timeouts": 0, "server_requests_refused": 0, "server_messages_dropped": 0,
+                      "sse_priming_events": 0}
         self.app = Starlette(routes=[Route(cfg.path, self.endpoint, methods=["GET", "POST", "DELETE", "PUT", "PATCH", "OPTIONS", "HEAD"])])
 
     # ---------------- plumbing ----------------
@@ -446,15 +460,15 @@ class McpHttpProxy:
                     if ctype == "application/json":
                         buf.append(chunk)
                         continue
-                    for data in sse.feed(chunk):
-                        m = self._classify(s, data, expect_id)
+                    for ev in sse.feed(chunk):
+                        m = self._sse_message(s, ev, expect_id)
                         if m is not None:
-                            return {"kind": "ok", "message": m, "sid": sid}
+                            return {"kind": "ok", "message": m, "sid": sid, "last_event_id": sse.last_event_id}
                 if ctype != "application/json":
-                    for data in sse.finish():
-                        m = self._classify(s, data, expect_id)
+                    for ev in sse.finish():
+                        m = self._sse_message(s, ev, expect_id)
                         if m is not None:
-                            return {"kind": "ok", "message": m, "sid": sid}
+                            return {"kind": "ok", "message": m, "sid": sid, "last_event_id": sse.last_event_id}
                 if ctype == "application/json":
                     m = self._classify(s, b"".join(buf).decode("utf-8", "strict"), expect_id)
                     if m is not None:
@@ -464,6 +478,15 @@ class McpHttpProxy:
             return {"kind": "timeout"}
         except (httpx.HTTPError, SseError, ValueError, UnicodeDecodeError):
             return {"kind": "error", "reason": "transport"}
+
+    def _sse_message(self, s: _Session, ev: SseEvent, expect_id: Any) -> Optional[Dict]:
+        """An SSE event with an EMPTY data field is a priming event (event id only, per 2025-11-25): it carries no JSON-RPC
+        message, is counted and skipped, and can never be a response. Any non-empty data goes through full JSON-RPC
+        validation in _classify, so malformed data (including whitespace-only) still fails the exchange."""
+        if ev.data == "":
+            self.stats["sse_priming_events"] += 1
+            return None
+        return self._classify(s, ev.data, expect_id)
 
     def _classify(self, s: _Session, text: str, expect_id: Any) -> Optional[Dict]:
         """The final response for expect_id, or None to keep reading. Notifications are dropped; server requests are

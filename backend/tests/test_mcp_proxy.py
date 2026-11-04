@@ -19,9 +19,10 @@ from tests.conftest import ADMIN, AGENT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SERVER = [sys.executable, os.path.join(HERE, "fixtures", "mcp_server_fixture.py")]
-MAPPING = {"fetch": {"tool": "http", "method": "GET", "dest_arg": "url"},
-           "echo": {"tool": "http", "method": "GET", "dest_arg": "url"},
-           "slow": {"tool": "http", "method": "GET", "dest_arg": "url"}}
+ARGS = ["url", "text", "seconds"]                   # explicit allow-list (audit F-02): the tools' complete argument set
+MAPPING = {"fetch": {"tool": "http", "method": "GET", "dest_arg": "url", "args": ARGS},
+           "echo": {"tool": "http", "method": "GET", "dest_arg": "url", "args": ARGS},
+           "slow": {"tool": "http", "method": "GET", "dest_arg": "url", "args": ARGS}}
 admin = TestClient(app, headers=ADMIN)
 
 

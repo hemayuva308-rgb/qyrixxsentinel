@@ -14,7 +14,8 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 TOOLS = [{"name": n, "description": n, "inputSchema": {"type": "object"}} for n in
-         ("echo", "stream_echo", "slow", "ask_sampling", "hang_stream", "die", "bigjson", "delete_everything")]
+         ("echo", "stream_echo", "slow", "ask_sampling", "hang_stream", "die", "bigjson", "delete_everything",
+          "prime_echo", "prime_after", "prime_multi", "prime_bad", "prime_only", "empty_stream", "garbage_stream")]
 
 
 def free_port() -> int:
@@ -104,7 +105,41 @@ class UpstreamFixture:
         async def die():                                              # response event never terminated by a blank line
             yield ("data: " + json.dumps(self.result(mid, "unterminated"))).encode()
 
-        gens = {"stream_echo": stream_echo, "ask_sampling": ask_sampling, "hang_stream": hang_stream, "die": die}
+        def ev(msg):
+            return ("data: " + json.dumps(msg) + "\n\n").encode()
+
+        async def prime_echo():                                       # 2025-11-25 priming event, then the response
+            yield b"id: 0\nretry: 100\ndata:\n\n"
+            yield ev(self.result(mid, "primed"))
+
+        async def prime_after():                                      # response first, a priming event after it
+            yield ev(self.result(mid, "primed-after"))
+            yield b"id: 9\ndata:\n\n"
+
+        async def prime_multi():
+            yield b"id: 0\ndata:\n\n"
+            yield b"id: 1\r\ndata:\r\n\r\n"
+            yield b"id: 2\ndata: \n\n"
+            yield b"id: 3\n\n"                                         # id-only block: no data field at all
+            yield ev(self.result(mid, "multi-primed"))
+
+        async def prime_bad():                                        # priming, then malformed JSON
+            yield b"id: 0\ndata:\n\n"
+            yield b"data: {not json\n\n"
+
+        async def prime_only():                                       # priming, then the server closes (polling style)
+            yield b"id: 0\ndata:\n\n"
+
+        async def empty_stream():
+            return
+            yield
+
+        async def garbage_stream():
+            yield b"data: \xff\xfe\n\n"                               # invalid UTF-8
+
+        gens = {"prime_echo": prime_echo, "prime_after": prime_after, "prime_multi": prime_multi, "prime_bad": prime_bad,
+                "prime_only": prime_only, "empty_stream": empty_stream, "garbage_stream": garbage_stream,
+                "stream_echo": stream_echo, "ask_sampling": ask_sampling, "hang_stream": hang_stream, "die": die}
         if name in gens:
             return StreamingResponse(gens[name](), headers=sse)
         return JSONResponse({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "unknown tool"}})

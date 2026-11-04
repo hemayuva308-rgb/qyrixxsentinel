@@ -84,11 +84,92 @@ def to_action(name: str, args: Dict, mapping: Dict[str, Dict], correlation_id: s
     return a
 
 
+# ---------------- argument policy (Phase 2.2, audit F-02) ----------------
+# The Gate evaluates ONE destination (mapping.dest_arg) and ONE method (mapping.method). If the upstream tool also accepts
+# another destination-bearing or method-bearing argument, the Gate would authorize something other than what runs. So a
+# mapped tool must declare an explicit allow-list `args`; anything outside it is refused BEFORE the Gate is asked.
+_SEP = re.compile(r"[-_.\s]")
+_DEST_SUBSTR = ("url", "uri", "endpoint", "webhook", "callback", "redirect", "hostname", "domain", "address", "download", "upload")
+_DEST_EXACT = frozenset(("host", "dest", "destination", "target", "path", "file", "filename", "filepath", "directory", "dir",
+                         "link", "href", "src", "proxy", "server", "origin", "location", "remote", "ip", "site", "bucket"))
+_METHOD_NAMES = frozenset(("method", "httpmethod", "verb", "requestmethod", "reqmethod", "httpverb"))
+_SCALARS = (str, int, float, bool, type(None))
+
+
+def _norm(name: str) -> str:
+    return _SEP.sub("", name.lower())
+
+
+def is_destination_like(name: str) -> bool:
+    n = _norm(name)
+    return n in _DEST_EXACT or any(x in n for x in _DEST_SUBSTR)
+
+
+def is_method_like(name: str) -> bool:
+    return _norm(name) in _METHOD_NAMES
+
+
+def _safe(name: Any) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "?", str(name))[:40]
+
+
+def validate_mapping(mapping: Dict[str, Dict]) -> None:
+    """Raises ValueError for a mapping the proxies must not run. Each entry needs tool (a Gate tool type), dest_arg and an
+    explicit `args` allow-list containing dest_arg and NO other destination-like or method-like name (ambiguous)."""
+    if not isinstance(mapping, dict):
+        raise ValueError("mapping must be an object")
+    for name, m in mapping.items():
+        if not isinstance(m, dict) or m.get("tool") not in GATE_TOOLS:
+            raise ValueError("%s: tool must be one of %s" % (_safe(name), ", ".join(GATE_TOOLS)))
+        dest, args = m.get("dest_arg"), m.get("args")
+        if not isinstance(dest, str) or not dest:
+            raise ValueError("%s: dest_arg is required" % _safe(name))
+        if not isinstance(args, list) or not args or not all(isinstance(a, str) and a for a in args):
+            raise ValueError("%s: an explicit non-empty 'args' allow-list is required" % _safe(name))
+        if dest not in args:
+            raise ValueError("%s: 'args' must contain dest_arg" % _safe(name))
+        if len({_norm(a) for a in args}) != len(args):
+            raise ValueError("%s: 'args' contains names that differ only by case/separators" % _safe(name))
+        for a in args:
+            if is_method_like(a):
+                raise ValueError("%s: method-like argument %r is ambiguous with the mapped method" % (_safe(name), _safe(a)))
+            if a != dest and is_destination_like(a):
+                raise ValueError("%s: destination-like argument %r is ambiguous with dest_arg" % (_safe(name), _safe(a)))
+
+
+def check_arguments(name: str, args: Dict, mapping: Dict[str, Dict]) -> Optional[str]:
+    """None when the call may go to the Gate; otherwise a short reason code. Unmapped tools return None: the Gate refuses
+    them (R8) and their arguments are never interpreted. Nothing is ever dropped or rewritten: the exact arguments the
+    checks passed are the ones the Gate digests and the upstream later receives."""
+    m = mapping.get(name)
+    if m is None:
+        return None
+    try:
+        validate_mapping({name: m})
+    except ValueError:
+        return "ARGS_POLICY_INVALID"
+    for k in args:
+        if k not in m["args"]:
+            return "ARG_NOT_ALLOWED_" + _safe(k)
+    if not isinstance(args.get(m["dest_arg"]), str) or not args[m["dest_arg"]].strip():
+        return "DESTINATION_MISSING_OR_NOT_A_STRING"
+    for k, v in args.items():
+        if not isinstance(v, _SCALARS) or (isinstance(v, float) and v != v):
+            return "ARG_NOT_SCALAR_" + _safe(k)                       # nested values could hide a second destination
+    return None
+
+
 def coverage_report(mapping: Dict[str, Dict], offered: Optional[Iterable[str]]) -> Dict:
     """Which tools the MCP server offers are sent to the Gate as a supported tool type, and which are default-denied.
     This is CONFIGURATION ANALYSIS, an advisory E1-style report: it is not evidence that enforcement happened, and a
     'gate_evaluated' tool is still BLOCKed whenever the Gate's rules say so. `offered=None` means no tools/list was seen."""
-    mapped_ok = {n for n, m in mapping.items() if isinstance(m, dict) and m.get("tool") in GATE_TOOLS}
+    mapped_ok = set()
+    for n, m in mapping.items():
+        try:
+            validate_mapping({n: m})
+            mapped_ok.add(n)
+        except ValueError:
+            pass                                                   # would be refused at call time => not Gate-evaluated
     if offered is None:
         return {"tools_list_observed": False, "gate_evaluated": [], "default_denied": [],
                 "configured_but_not_offered": sorted(mapped_ok),
@@ -138,6 +219,11 @@ class ToolCallGuard:
         if task is not None and not (isinstance(task, str) and CORR.match(task)):
             return {"kind": "blocked", "text": "Blocked by Qyrix Sentinel: invalid task_id. correlation_id=%s" % corr,
                     "meta": {"verdict": "BLOCK", "rules": ["TASK_ID_INVALID"], "correlation_id": corr}}
+        bad = check_arguments(name, args, self.mapping)
+        if bad:                                                     # refused BEFORE the Gate: nothing is evaluated or forwarded
+            rule = bad if bad.startswith("ARGS_POLICY_") else "ARGS_POLICY_" + bad     # one prefix, never two
+            return {"kind": "blocked", "text": "Blocked by Qyrix Sentinel before evaluation: argument policy (%s). correlation_id=%s" % (rule, corr),
+                    "meta": {"verdict": "BLOCK", "rules": [rule], "correlation_id": corr}}
         try:
             d = self.sentinel.evaluate(to_action(name, args, self.mapping, corr, task))
         except SentinelError as e:

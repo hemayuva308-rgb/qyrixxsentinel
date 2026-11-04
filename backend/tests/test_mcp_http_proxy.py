@@ -20,8 +20,9 @@ ALICE, BOB = "alice-token-SYNTHETIC-" + "a" * 20, "bob-token-SYNTHETIC-" + "b" *
 UP_TOKEN = "upstream-token-SYNTHETIC-" + "u" * 16
 GATE_TOKEN = AGENT["Authorization"].split(" ", 1)[1]
 OK_URL, BAD_URL = "https://github.com/qyrix", "http://127.0.0.1:1/x"
-MAPPING = {n: {"tool": "http", "method": "GET", "dest_arg": "url"}
-           for n in ("echo", "stream_echo", "slow", "ask_sampling", "hang_stream", "die", "bigjson")}
+MAPPING = {n: {"tool": "http", "method": "GET", "dest_arg": "url", "args": ["url", "text", "seconds"]}
+           for n in ("echo", "stream_echo", "slow", "ask_sampling", "hang_stream", "die", "bigjson", "prime_echo", "prime_after",
+                     "prime_multi", "prime_bad", "prime_only", "empty_stream", "garbage_stream")}
 
 
 class HttpClient(core.SentinelClient):
@@ -449,7 +450,7 @@ def _events(chunks, **kw):
     p, out = mhp.SseParser(**kw), []
     for c in chunks:
         out += p.feed(c)
-    return out + p.finish()
+    return [e.data for e in out + p.finish()]
 
 
 def test_sse_parser_line_endings_chunking_and_fields():
@@ -493,3 +494,65 @@ def test_upstream_receives_no_authorization_unless_an_upstream_credential_is_con
     env.call(sid, 1, "echo", {"url": OK_URL, "text": "x"})
     assert env.up.requests and all("authorization" not in r["headers"] for r in env.up.requests)
     assert all("cookie" not in r["headers"] and "origin" not in r["headers"] for r in env.up.requests)
+
+
+# ---------------- F-01: SSE priming events (an event id with an empty data field, MCP 2025-11-25) ----------------
+def _sse(env_, sid, mid, tool):
+    return env_.call(sid, mid, tool, {"url": OK_URL})
+
+
+def test_parser_priming_event_is_an_empty_data_event_with_its_id():
+    p = mhp.SseParser()
+    assert p.feed(b"id: 0\nretry: 100\ndata:\n\n") == [mhp.SseEvent("", "0")] and p.last_event_id == "0"
+    assert p.feed(b"id: 1\r\ndata:\r\n\r\n") == [mhp.SseEvent("", "1")]
+    assert p.feed(b"id: 7\n\n") == [] and p.last_event_id == "7"                 # id-only block: nothing dispatched
+    assert p.feed(b"id: bad\x00id\ndata: x\n\n") == [mhp.SseEvent("x", "7")]     # an id containing NUL is ignored
+    assert p.feed(b"data: y\n\n") == [mhp.SseEvent("y", "7")]                    # last-event-id persists (WHATWG)
+    q = mhp.SseParser()
+    assert q.feed(b"id: 0\nda") == [] and q.feed(b"ta:\n") == [] and q.feed(b"\n") == [mhp.SseEvent("", "0")]   # split chunks
+    assert [e.data for e in mhp.SseParser().feed(b"data:  \n\n")] == [" "]       # whitespace-only is NOT priming
+
+
+def test_priming_event_before_the_response(env):
+    sid = env.init()
+    r = _sse(env, sid, 60, "prime_echo")
+    assert r == {"jsonrpc": "2.0", "id": 60, "result": {"content": [{"type": "text", "text": "primed"}]}}
+    assert len(env.up.calls("prime_echo")) == 1 and len(delegated()) == 1 and env.proxy.stats["sse_priming_events"] == 1
+
+
+def test_priming_event_after_the_response(env):
+    sid = env.init()
+    assert _sse(env, sid, 61, "prime_after")["result"]["content"][0]["text"] == "primed-after"
+    assert len(env.up.calls("prime_after")) == 1
+
+
+def test_multiple_priming_events_including_id_only_blocks(env):
+    sid = env.init()
+    assert _sse(env, sid, 62, "prime_multi")["result"]["content"][0]["text"] == "multi-primed"
+    assert env.proxy.stats["sse_priming_events"] == 3 and len(env.up.calls("prime_multi")) == 1   # the id-only block is not an event
+
+
+def test_priming_alone_is_never_a_response_and_the_call_is_not_repeated():
+    e = Env()
+    try:
+        sid = e.init()
+        r = _sse(e, sid, 63, "prime_only")
+        assert "result" not in r and r["error"]["data"]["qyrix"]["unknown_outcome"] is True
+        assert _sse(e, sid, 63, "prime_only")["error"]["code"] == mhp.UNKNOWN_OUTCOME_CODE      # retry: still not re-executed
+        assert len(e.up.calls("prime_only")) == 1
+    finally:
+        e.close()
+
+
+@pytest.mark.parametrize("tool", ["prime_bad", "empty_stream", "garbage_stream"])
+def test_malformed_or_empty_streams_stay_rejected_even_after_priming(env, tool):
+    sid = env.init()
+    r = _sse(env, sid, 64, tool)
+    assert "result" not in r and r["error"]["data"]["qyrix"]["unknown_outcome"] is True
+    assert len(env.up.calls(tool)) == 1                                       # executed once, never repeated by parsing
+
+
+def test_stream_without_priming_still_works_and_counts_no_priming(env):
+    sid = env.init()
+    assert _sse(env, sid, 65, "stream_echo")["result"]["content"][0]["text"] == "stream:None"
+    assert env.proxy.stats["sse_priming_events"] == 0

@@ -35,8 +35,10 @@ def test_unmapped_tool_still_default_denied_by_r8_and_never_forwarded(h):  # noq
 
 
 def test_a_mapping_cannot_smuggle_a_new_tool_type_past_the_gate():
-    rep = core.coverage_report({"x": {"tool": "shell", "dest_arg": "cmd"}, "y": {"tool": "http"}}, ["x", "y"])
-    assert rep["gate_evaluated"] == ["y"] and rep["default_denied"] == ["x"]
+    rep = core.coverage_report({"x": {"tool": "shell", "dest_arg": "cmd", "args": ["cmd"]},
+                                "y": {"tool": "http", "dest_arg": "url", "args": ["url"]},
+                                "z": {"tool": "http"}}, ["x", "y", "z"])         # z: no allow-list => refused at call time
+    assert rep["gate_evaluated"] == ["y"] and rep["default_denied"] == ["x", "z"]
 
 
 # ---------------- coverage report ----------------
@@ -49,7 +51,7 @@ def test_coverage_unknown_before_tools_list_never_claims_coverage(h):  # noqa: F
 def test_coverage_report_matches_what_the_gate_actually_does(h, tmp_path):  # noqa: F811
     path = str(tmp_path / "coverage.json")
     h.proxy.coverage_path = path
-    h.proxy.mapping = {**MAPPING, "ghost": {"tool": "http", "method": "GET", "dest_arg": "url"}}   # configured, not offered
+    h.proxy.mapping = {**MAPPING, "ghost": {"tool": "http", "method": "GET", "dest_arg": "url", "args": ["url"]}}   # configured, not offered
     tools = h.rpc(20, "tools/list")["result"]["tools"]                       # relayed unchanged
     assert [t["name"] for t in tools] == ["fetch", "echo", "slow", "delete_everything"]
     rep = h.proxy.coverage()

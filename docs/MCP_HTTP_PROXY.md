@@ -19,7 +19,10 @@ Re-check these against the live page before relying on third-party interoperabil
 | `initialize`, `ping` (answered locally), `tools/list` (relayed, observed for the coverage report), `tools/call` (Gate-protected), `notifications/initialized`, `notifications/cancelled`; `DELETE` (ends the proxy session) | JSON-RPC **batches**; **GET** and other verbs (405: no server-initiated stream); **resumability / `Last-Event-ID`**; client responses to server requests; `resources/*`, `prompts/*`, `completion/*`, `logging/*`, `sampling/*` and every other method (-32601); unknown notifications |
 
 Responses are **always buffered and returned as one `application/json` message** (no incremental streaming). The upstream
-may answer with JSON or an SSE stream (strict bounded parser; an unterminated final event is discarded). Notifications in
+may answer with JSON or an SSE stream (strict bounded parser; an unterminated final event is discarded). **Priming events**
+(an SSE event with an id and an empty data field, a SHOULD in 2025-11-25) are skipped and counted; they can never be a
+response, and non-empty malformed data still fails the exchange. **Resumability and polling remain unsupported**: a server
+that closes the stream after a priming event *before* sending the response yields an unknown outcome (no `Last-Event-ID` GET). Notifications in
 the stream are dropped; a **server-initiated request** in the stream is answered *toward the upstream* with a JSON-RPC
 error and never relayed to the client.
 
@@ -33,6 +36,25 @@ error and never relayed to the client.
   agent identity and tenant. Use one instance per agent/tenant. Per-client identity at the Gate is NOT provided.
 * Sessions are issued by the proxy (`secrets.token_urlsafe(32)`), bound to the authenticating client; foreign and unknown
   sessions are indistinguishable (404). The upstream session id never reaches the client. Bounded count and idle TTL.
+
+## Argument policy (applies to the stdio AND the HTTP proxy)
+Existing `tools.json` files must be migrated: see [MCP_TOOLS_JSON_MIGRATION.md](MCP_TOOLS_JSON_MIGRATION.md).
+The Gate evaluates exactly one destination (`dest_arg`) and one method (`method` from the mapping). So every mapped tool
+must declare the **complete** set of arguments it may receive, and anything else is refused *before the Gate is asked*
+(rule code `ARGS_POLICY_<reason>`; nothing is evaluated, redeemed or forwarded):
+```json
+{"tools": {"fetch": {"tool": "http", "method": "GET", "dest_arg": "url", "args": ["url", "text"]}}}
+```
+* `args` is required, must contain `dest_arg`, and must contain **no other destination-like name** (`url`, `uri`, `endpoint`,
+  `host`, `callback_url`, `webhook`, `path`, ... after case/separator normalisation) and **no method-like name**
+  (`method`, `http_method`, `verb`). An ambiguous or allow-list-less mapping is rejected at startup (and blocked at call time).
+* Per call: an argument outside `args`, a missing or non-string destination, or a non-scalar value (an object or array could
+  hide a second destination) is refused. Arguments are never dropped or rewritten, so the upstream receives exactly the
+  arguments that were digested and authorised.
+* Unmapped tools are unchanged: the Gate refuses them (R8).
+* Limits: values of *allowed* non-destination arguments are not interpreted (a `text` value containing a URL is the tool's
+  business); a rejected call leaves no Gate decision record (the Gate was never asked); this is a name-based heuristic, so the
+  operator must still list only arguments the tool genuinely treats as data.
 
 ## Authorization (unchanged)
 `tools/call` -> `core.ToolCallGuard` -> `POST /gate/evaluate` -> `POST /tools/redeem` (single-use grant, exact

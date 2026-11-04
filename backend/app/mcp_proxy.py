@@ -14,8 +14,11 @@ Every JSON-RPC message is passed through unchanged EXCEPT `tools/call`, which is
   5. Responses are relayed; a call that exceeds --timeout gets a JSON-RPC error and its late response is dropped.
 
 Configuration: QYRIX_URL (default http://127.0.0.1:8000), QYRIX_TOKEN or QYRIX_TOKEN_FILE (an agent/integrator API key).
-tools.json: {"tools": {"fetch": {"tool": "http", "method": "GET", "dest_arg": "url"},
-                       "read_file": {"tool": "file.read", "dest_arg": "path"}}}
+tools.json: {"tools": {"fetch": {"tool": "http", "method": "GET", "dest_arg": "url", "args": ["url"]},
+                       "read_file": {"tool": "file.read", "dest_arg": "path", "args": ["path"]}}}
+  `args` is the COMPLETE allow-list of arguments the tool may receive. It must contain dest_arg and no other
+  destination-like or method-like name; values must be scalars. Anything else is refused before the Gate is asked
+  (audit F-02), because the Gate evaluates only dest_arg and the mapped method.
 Coverage: `--coverage-file` / McpProxy.coverage() report which offered tools reach the Gate and which are default-denied (advisory).
 Scope: stdio transport only. Tested against a stdio MCP server fixture (tests/fixtures/mcp_server_fixture.py);
 compatibility with other MCP servers is claimed only where a test demonstrates it.
@@ -52,6 +55,7 @@ class McpProxy:
                  task_id: Optional[str] = None, reporter=None, coverage_path: Optional[str] = None):
         self.sentinel, self.cmd, self.mapping, self.write_client = sentinel, server_cmd, mapping, write_client
         self.reporter = reporter                              # optional observer_feed.AdapterReporter (E1 self-reports)
+        core.validate_mapping(mapping)                        # ValueError: ambiguous / allow-list-less mapping (audit F-02)
         if task_id is not None and not _CORR.match(task_id):
             raise ValueError("invalid task_id")
         self.task_id = task_id                                # default task context; a call may override it
@@ -233,6 +237,10 @@ def load_mapping(path: Optional[str]) -> Dict[str, Dict]:
     for k, v in tools.items():
         if not isinstance(v, dict) or v.get("tool") not in ("http", "file.read"):
             raise SystemExit("tools.json: %s must map to tool 'http' or 'file.read'" % k)
+    try:
+        core.validate_mapping(tools)                           # explicit per-tool `args` allow-list (audit F-02)
+    except ValueError as e:
+        raise SystemExit("tools.json: %s" % e)
     return tools
 
 
