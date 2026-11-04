@@ -15,3 +15,8 @@ backend/tests/test_sentinel.py:generic-api-key:75
 # v1.4: benchmark fixture in exported case texts; deliberate fake secret asserted to be REDACTED by test_alerts
 a86b0dcd1a7c3f8a5c4375b2bf78e72f02bac82d:evidence/benchmark-case-texts.json:generic-api-key:49
 882f40ae81efdad2f2b50dc350c442c0e150359f:backend/tests/test_alerts.py:generic-api-key:104
+# v1.5 C5: signed real-host validation evidence. These two `token_sha256` fields are SHA-256 DIGESTS of one-use, 128-bit CSPRNG
+# canary tokens in observer ledger rows (the observer stores only the digest, never the token). Not credentials; the file is
+# signed, so it cannot be redacted without invalidating evidence_sig. Verified with gitleaks 8.30.0 (git history, --redact).
+c6ea13fad040fcbe8663b685a3bf192fe1c55a81:evidence/c5/validation.json:generic-api-key:573
+c6ea13fad040fcbe8663b685a3bf192fe1c55a81:evidence/c5/validation.json:generic-api-key:755
