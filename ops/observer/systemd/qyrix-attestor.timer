@@ -1,0 +1,12 @@
+[Unit]
+Description=Qyrix Sentinel host attestor - every 10 minutes (attestations are valid 30 minutes)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=true
+Unit=qyrix-attestor.service
+
+[Install]
+WantedBy=timers.target

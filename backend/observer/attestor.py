@@ -96,8 +96,32 @@ def firewall_ok(ipt: str, bridges) -> bool:
     return True
 
 
+def resolve_container(a) -> str:
+    """The CURRENT backend container: by explicit name/id, or by compose labels (survives re-creation)."""
+    if getattr(a, "container", None):
+        return a.container
+    r = run(["docker", "ps", "-a", "-q", "--no-trunc", "-f", "label=com.docker.compose.project=%s" % a.compose_project,
+             "-f", "label=com.docker.compose.service=%s" % a.compose_service])
+    ids = [x for x in r.stdout.split() if x]
+    return ids[0] if len(ids) == 1 else ""
+
+
+def absent(name: str) -> dict:
+    """Backend container missing / ambiguous: a signed FAILED attestation, which revokes coverage at once."""
+    return {"container_id": name or "absent", "image": "", "checks": {"container_running": False},
+            "probes": {"ipv6_mode": "unknown", "reason": "CONTAINER_NOT_FOUND"}}
+
+
 def collect(a) -> dict:
-    info = inspect(a.container)
+    name = resolve_container(a)
+    if not name:
+        return absent("absent:%s/%s" % (getattr(a, "compose_project", ""), getattr(a, "compose_service", "")))
+    try:
+        info = inspect(name)
+    except (subprocess.CalledProcessError, ValueError, IndexError):
+        return absent("absent:" + name)
+    if not info.get("State", {}).get("Running"):
+        return {**absent(info["Id"]), "image": info.get("Image", "")}
     hc, st, ns = info["HostConfig"], info["State"], info["NetworkSettings"]
     pid = int(st.get("Pid") or 0)
     checks = {
@@ -153,16 +177,35 @@ def submit(a, doc: dict) -> dict:
         return {"status": r.status_code}
 
 
-def main(argv=None) -> int:
+REQUIRED = ("observer", "ca", "cert", "key", "operator-token-file", "attestor-key", "networks", "dns", "proxy", "sink")
+
+
+def parse(argv=None):
+    """CLI flags, optionally defaulted from --config FILE (JSON: {"observer": ..., "compose-project": ...}); the systemd
+    units use the config file so no secret path or value appears in a unit or a process list."""
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config")
+    known, _ = pre.parse_known_args(argv)
+    cfg = json.load(open(known.config)) if known.config else {}
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for k in ("container", "observer", "ca", "cert", "key", "operator-token-file", "attestor-key", "networks", "dns",
-              "proxy", "sink"):
-        ap.add_argument("--" + k, required=True)
-    ap.add_argument("--sink-host", default="sink.c5.qyrix.internal")
-    ap.add_argument("--bridges", default="qyrix-int,qyrix-ingest,qyrix-egin")
-    ap.add_argument("--validity", type=float, default=3600.0)
+    ap.add_argument("--config")
+    ap.add_argument("--container", default=cfg.get("container"))
+    ap.add_argument("--compose-project", default=cfg.get("compose-project"))
+    ap.add_argument("--compose-service", default=cfg.get("compose-service", "backend"))
+    for k in REQUIRED:
+        ap.add_argument("--" + k, default=cfg.get(k), required=k not in cfg)
+    ap.add_argument("--sink-host", default=cfg.get("sink-host", "sink.c5.qyrix.internal"))
+    ap.add_argument("--bridges", default=cfg.get("bridges", "qyrix-int,qyrix-ingest,qyrix-egin"))
+    ap.add_argument("--validity", type=float, default=float(cfg.get("validity", 1800.0)))
     ap.add_argument("--dry-run", action="store_true", help="print the signed attestation instead of submitting it")
     a = ap.parse_args(argv)
+    if not a.container and not a.compose_project:
+        ap.error("--container or --compose-project is required")
+    return a
+
+
+def main(argv=None) -> int:
+    a = parse(argv)
     if os.geteuid() != 0:
         print("the attestor must run as root on the Docker host (nsenter, iptables)", file=sys.stderr)
         return 2
