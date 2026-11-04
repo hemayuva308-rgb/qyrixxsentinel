@@ -27,7 +27,7 @@ AI agents call real tools, and a poisoned README can make them leak secrets. Qyr
 
 **How we use Meta.** The Meta Model API classifies untrusted instruction text and explains why it looks risky. Only redacted, bounded text is sent, off-schema model output is discarded, and if the API is unreachable the system falls back to a deterministic heuristic and says so on screen. The model is advisory only; authorization is deterministic policy, by design.
 
-**What we verified.** Backend suite 1116 passed (1 skipped), including real PostgreSQL suites; a 10-case benchmark with 7/7 attacks blocked and 0 false positives on safe tasks; mutation checks that deliberately break the n8n node and egress-proxy security checks and confirm the tests catch each one; independent audit findings listed openly in the repository.
+**What we verified.** Backend suite 1136 passed (1 skipped), including real PostgreSQL suites; a 10-case benchmark with 7/7 attacks blocked and 0 false positives on safe tasks; mutation checks that deliberately break the n8n node and egress-proxy security checks and confirm the tests catch each one; independent audit findings listed openly in the repository.
 
 **Honest limits.** Prototype, not production-ready, not independently certified. It protects only traffic that passes through its adapters, and egress control depends on network isolation around the protected workload. n8n support covers one custom node on self-hosted n8n 2.46.5, not n8n Cloud and not other nodes.
 
