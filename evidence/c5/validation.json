@@ -1,6 +1,6 @@
 {
  "format": "qyrix-c5-validation-evidence/2",
- "started_at": "2026-11-04T03:02:44Z",
+ "started_at": "2026-11-04T03:18:31Z",
  "steps": [
   {
    "step": "secret ownership/modes (uid 10001, 0400; no offline keys under ./secrets)",
@@ -162,25 +162,25 @@
    "step": "watcher attests on start (no manual attestation)",
    "ok": true,
    "seconds": 2.0,
-   "attestation_id": "3d1b5b1c-583a-41cd-ba8a-ad4a4a7a4314"
+   "attestation_id": "564fd66a-efc6-4a8a-a9a5-fbe48aa200e9"
   },
   {
    "step": "live P2 canary through the backend is ENFORCEMENT_VERIFIED",
    "ok": true,
    "reconciliation": {
-    "recon_id": "5c120470-45d0-4539-a357-4f7c0b7c1d7d",
-    "run_id": "306159e6-03f2-4f5e-9ffc-ce461c8d8470",
+    "recon_id": "806a8fe5-3cd4-44f4-bc0b-1744a4eeb353",
+    "run_id": "0e07e98b-267b-45b2-b094-e62d567cabf5",
     "version": 2,
     "result": "ENFORCEMENT_VERIFIED",
     "reasons": [],
     "evidence_level": "E3",
-    "decided_at": "2026-11-04T03:03:19.882252+00:00",
+    "decided_at": "2026-11-04T03:19:08.324157+00:00",
     "ledger": {
      "n": 12,
-     "hash": "39a27ed22f8ef103184e855c486ec9697e07a4d9d4d9afbb504431e76bb749fe"
+     "hash": "ace49be0ffb6515dd8cd3429c3fb664b263e5b60a6709948f313b7bda1daea0f"
     },
     "channel": "http",
-    "run_created_at": "2026-11-04T03:03:08.841201+00:00",
+    "run_created_at": "2026-11-04T03:18:56.938532+00:00",
     "expected_condition": "BLOCK",
     "expected_basis": "construction",
     "scope": "canary"
@@ -189,27 +189,27 @@
   {
    "step": "NEGATIVE: extra egress attachment => watcher revokes coverage automatically",
    "ok": true,
-   "seconds": 4.0
+   "seconds": 5.1
   },
   {
    "step": "NEGATIVE: canary under revoked coverage is not VERIFIED",
    "ok": true,
    "reconciliation": {
-    "recon_id": "39c6e58a-bc30-4449-9c21-e9762d805aeb",
-    "run_id": "ad82efe8-8d3e-4f02-b163-74808f7da1ba",
+    "recon_id": "bb4fbb2a-f9cb-4d82-b8dd-a5f3f440bad2",
+    "run_id": "1c6c6118-0c0e-4655-bc78-c82855aad202",
     "version": 1,
     "result": "INCONCLUSIVE",
     "reasons": [
      "COVERAGE_UNATTESTED"
     ],
     "evidence_level": "none",
-    "decided_at": "2026-11-04T03:03:36.134835+00:00",
+    "decided_at": "2026-11-04T03:19:24.594257+00:00",
     "ledger": {
      "n": 21,
-     "hash": "bdee2e9d25925f8444f902047fd9eb7a631c29ddcc396ebfffde93350a13f8cc"
+     "hash": "1bbd8603e7078238ac23a37ec883791166ca85fe8ba6410b8f1cf6cc633fcab3"
     },
     "channel": "http",
-    "run_created_at": "2026-11-04T03:03:25.189090+00:00",
+    "run_created_at": "2026-11-04T03:19:14.353180+00:00",
     "expected_condition": "BLOCK",
     "expected_basis": "construction",
     "scope": "canary"
@@ -224,7 +224,7 @@
    "step": "docker restart => re-attested with a NEW attestation",
    "ok": true,
    "seconds": 4.0,
-   "attestation_id": "edfd3e46-a40a-4c37-ba8c-1ab1231ff30c"
+   "attestation_id": "ae5bc858-2533-4a42-8376-be4d1b888353"
   },
   {
    "step": "NEGATIVE: docker stop => signed FAILED attestation revokes coverage",
@@ -259,17 +259,17 @@
   }
  ],
  "attestation_ids": [
-  "10405098-4491-41f1-a53d-0891420cf0d0",
-  "3d1b5b1c-583a-41cd-ba8a-ad4a4a7a4314",
-  "8dea7b0d-09c3-4417-9e99-7bfd07d69f84",
-  "e3bb7f55-266e-499e-95e7-ed8bcf92c629",
-  "edfd3e46-a40a-4c37-ba8c-1ab1231ff30c",
-  "eebbfaa1-bf99-4a59-a856-2984061b69ba",
-  "f903c264-4718-43be-984f-5458ecd74568"
+  "022d088c-301b-4f05-8701-777d31da3e91",
+  "11e2878a-e65c-4f25-b67d-8f7bb15136de",
+  "564fd66a-efc6-4a8a-a9a5-fbe48aa200e9",
+  "82334391-2778-416f-ab2c-4eab471e4b98",
+  "84f1fc25-97b9-4c78-a6ab-44025e970477",
+  "ae5bc858-2533-4a42-8376-be4d1b888353",
+  "d828b614-e91e-42bb-bf16-35808a9efe57"
  ],
  "reconciliation_ids": [
-  "5c120470-45d0-4539-a357-4f7c0b7c1d7d",
-  "39c6e58a-bc30-4449-9c21-e9762d805aeb"
+  "806a8fe5-3cd4-44f4-bc0b-1744a4eeb353",
+  "bb4fbb2a-f9cb-4d82-b8dd-a5f3f440bad2"
  ],
  "ipv6_in_kernel": false,
  "secret_permissions": [
@@ -387,21 +387,21 @@
   "issued_at": "2026-11-04T00:00:00+00:00",
   "observer_keys": [
    {
-    "key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-    "public_key": "raFaxE2wiyfd0VUOC3czx0Spc+z71753hY/ihwLWEfo=",
+    "key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+    "public_key": "rOYStWjR0azAozjzyApSwq15KtoNgXUEvuNIiGeBhpk=",
     "valid_from": "2026-01-01T00:00:00+00:00"
    }
   ],
   "producers": [
    {
-    "producer_id": "gate:fbb83715-f061-4958-bef6-bfd17f9ae57c",
+    "producer_id": "gate:978320f3-8ad1-4745-871d-11b69149815f",
     "tenants": [
      "*"
     ],
     "keys": [
      {
-      "key_id": "ed25519:3d936382421d87b4db33fbbc51951245",
-      "public_key": "hNyRy/FHSJv4UvaLQlk4zaGITHAl4+DJof6D7vOzzZw=",
+      "key_id": "ed25519:e48b6c50f59564e9b542404ca1005485",
+      "public_key": "EXbcKdJbpRjjn81POWefgdsF67P4l0gYxP4q2FUL+Sg=",
       "valid_from": "2026-01-01T00:00:00+00:00",
       "scopes": [
        "decision",
@@ -414,32 +414,32 @@
   ],
   "recovery_keys": [
    {
-    "key_id": "ed25519:ca8d1ee143fe3f774021fcbab2e533b7",
-    "public_key": "mVId8cqtj4OFdMqctBinaYUXhisUDNp2eYiu3Uh0HKM=",
+    "key_id": "ed25519:e331cece4a160a0eea35b0fcd10fda09",
+    "public_key": "LRnsGbMhpEtyLMTLvLmng3gvXJSEnBD5tq/vNNb6U0E=",
     "valid_from": "2026-01-01T00:00:00+00:00"
    }
   ],
   "attestor_keys": [
    {
-    "key_id": "ed25519:b5f3e9a96fc15451c80d538c6886d8ec",
-    "public_key": "u+Z4aMjSrghABxFTHk91Wd6O9v8YHKJ+PofrsNzGLJo=",
+    "key_id": "ed25519:57e05d517e6c7672a1ec714659cb06a8",
+    "public_key": "The1OcW6cHe1A4VxhqqT/jrWvMlCrFuXbY3qBPRcosQ=",
     "valid_from": "2026-01-01T00:00:00+00:00"
    }
   ],
   "format": "qyrix-observer-manifest/1",
-  "root_key_id": "ed25519:9bf708f1627fb4541f99a4dfe899b504",
-  "sig": "/inTBnMv1xEcygXMxZDMWs8QoAu9YLegvh3bQAo7uCJggO5WICX+pmfL/u8Bx7FNqocn7gBhmE895oi+7qCTBg=="
+  "root_key_id": "ed25519:2d5b9de9336eb6d4fee79d6e9218257f",
+  "sig": "r8NsFjkEDP623DopLjyZZw8Zj5SZF7Re0RiOgXI1Or5NOr1fwkKE91RWxNuO08bp1ONyLyzfuQGkpQ5CYhNoBQ=="
  },
- "root_public_key": "ZEsZGmQ/1CHIg8brB8pPy7x4oGuNLOw6d8SO0pu6ORg=",
+ "root_public_key": "JJ/6Xpc9w+3AMQzXcDENQRpu/5HRF+Z9vdL1bsZybXM=",
  "observer_status": {
   "coverage": {
    "mediated": true,
    "current": {
     "mediated": true,
-    "attestation_id": "eebbfaa1-bf99-4a59-a856-2984061b69ba",
-    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff",
-    "attested_at": "2026-11-04T03:04:34.590366+00:00",
-    "valid_until": "2026-11-04T03:34:34.590366+00:00"
+    "attestation_id": "84f1fc25-97b9-4c78-a6ab-44025e970477",
+    "container_id": "5d9c28614ae025b58e0a64d665d7e5617a0f0bbf00679fa1cb893436216d1ef4",
+    "attested_at": "2026-11-04T03:20:23.886332+00:00",
+    "valid_until": "2026-11-04T03:50:23.886332+00:00"
    }
   },
   "egress": {
@@ -457,182 +457,182 @@
  "ledger_rows": [
   {
    "n": 6,
-   "prev": "7cd16a841089b173fafda5bcd48a508e70907d52a47640a166509668da5b1438",
-   "hash": "fa4f0d658555b2eb28854ae3019d82169983ab65f35c459c5c8cd6aa795fea5d",
-   "recorded_at": "2026-11-04T03:03:08.75938+00:00",
+   "prev": "e21dfb2682f3b0aa209dc0224e4b917b1a7c1629be2c9dee06711a58816705b2",
+   "hash": "bc170107de1b843912ee85cf39b174532227aee13a622549bf6d5c83264bb318",
+   "recorded_at": "2026-11-04T03:18:56.877767+00:00",
    "kind": "coverage",
    "code": "COVERAGE_ATTESTED",
    "producer_id": null,
    "tenant_id": null,
-   "ref": "3d1b5b1c-583a-41cd-ba8a-ad4a4a7a4314",
+   "ref": "564fd66a-efc6-4a8a-a9a5-fbe48aa200e9",
    "detail": {
     "valid": true,
     "reasons": [],
-    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+    "container_id": "5d9c28614ae025b58e0a64d665d7e5617a0f0bbf00679fa1cb893436216d1ef4"
    },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "DT9AIQndy/eQsoNeO4rYOhshA+PSRYA8tgwT+EaYYKhX7K3dxJkbu4Yc7La/KR5AFtjIwdlGAtnNFUdBEONeCA=="
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "jO2wyldVz1AxNr5Xt39NqUeByGGOW/pxYum7DzixpX4XxZ7wkbYXhidHADhcjF5eqQe+rgc42woK7yZ6Eo90Dg=="
   },
   {
    "n": 12,
-   "prev": "0fe7b2e829866f74bd04b190d85b9d385f70d0e3b04cbaba8586fb3862176a80",
-   "hash": "39a27ed22f8ef103184e855c486ec9697e07a4d9d4d9afbb504431e76bb749fe",
-   "recorded_at": "2026-11-04T03:03:19.882252+00:00",
+   "prev": "0b7e94ae2317d92f0e42072963a4757d9149286e622eae96dea1ad75d91c808c",
+   "hash": "ace49be0ffb6515dd8cd3429c3fb664b263e5b60a6709948f313b7bda1daea0f",
+   "recorded_at": "2026-11-04T03:19:08.324157+00:00",
    "kind": "reconciliation",
    "code": "ENFORCEMENT_VERIFIED",
    "producer_id": null,
    "tenant_id": "default",
-   "ref": "5c120470-45d0-4539-a357-4f7c0b7c1d7d",
+   "ref": "806a8fe5-3cd4-44f4-bc0b-1744a4eeb353",
    "detail": {
     "scope": "canary",
-    "run_id": "306159e6-03f2-4f5e-9ffc-ce461c8d8470",
+    "run_id": "0e07e98b-267b-45b2-b094-e62d567cabf5",
     "reasons": [],
     "version": 2,
-    "facts_sha256": "0e89f60b5603921012368e71dd55ff38267495583a6b99142aa21698d34885c9"
+    "facts_sha256": "3ad11c06a6c4756e5803b4d7c82e02990e056443bee43d7dc94761ee1b4193e5"
    },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "jtJIwAbB5fg7WXxhiwApHAzLqFuI7pNF/wjYJHBPf3HlRd9dDqNa4YUxfFAfOVC3ElccH58lF4gsruflo1EKAQ=="
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "mFE2bRrb+4UxQTj1u2mHy8Fhv0ovC677DKzDkbQdRYjSAeVhgJXqRiptXiqUrD5mCud9cQ98b7SCCz8ftZxbBA=="
   },
   {
    "n": 21,
-   "prev": "3bf9f064668da450f79b68397a7026b65acf99fd74526fdbce7bddd38bff46ee",
-   "hash": "bdee2e9d25925f8444f902047fd9eb7a631c29ddcc396ebfffde93350a13f8cc",
-   "recorded_at": "2026-11-04T03:03:36.134835+00:00",
+   "prev": "d42a1ecf9bd414fefe08b39830c689dd1311225993169fc1ebea12eb42f2a6ae",
+   "hash": "1bbd8603e7078238ac23a37ec883791166ca85fe8ba6410b8f1cf6cc633fcab3",
+   "recorded_at": "2026-11-04T03:19:24.594257+00:00",
    "kind": "reconciliation",
    "code": "INCONCLUSIVE",
    "producer_id": null,
    "tenant_id": "default",
-   "ref": "39c6e58a-bc30-4449-9c21-e9762d805aeb",
+   "ref": "bb4fbb2a-f9cb-4d82-b8dd-a5f3f440bad2",
    "detail": {
     "scope": "canary",
-    "run_id": "ad82efe8-8d3e-4f02-b163-74808f7da1ba",
+    "run_id": "1c6c6118-0c0e-4655-bc78-c82855aad202",
     "reasons": [
      "COVERAGE_UNATTESTED"
     ],
     "version": 1,
     "facts_sha256": "ceb48b82b53acf7219ab7a4525d6086b2016898ca0f5b0e4a4fcf6cf45e6b0ae"
    },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "y8Dzvd0ozRtm4ckeLfjD6UwWVPDACK1G2vcy/vk2dTZ9Oocz8y12AE058VuvoNrFsD7qVPo6dXo2ldoFXo+IAw=="
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "TD09mG1k8pOBkB3ilJ/emh8pltEvJwssXvGqgDHuHCGpjG2yPSdgQCWa56k+09HKsC4ciQmMWtRzBURmsNJ9BA=="
   },
   {
-   "n": 26,
-   "prev": "0db84cfc13f52f4fee73f85ece87fcb39d7c3f9adeb7f2465d70bd17aa702f58",
-   "hash": "420aaa5c1def4067b150773e07f5729fa384f29e2c1e165f610704898c31c74f",
-   "recorded_at": "2026-11-04T03:04:15.482891+00:00",
+   "n": 27,
+   "prev": "71f7f0b4a6b54b98f62fa1fdfa0db4a96193d6349139858af5ebcd0d48ef7159",
+   "hash": "fc57534fab65bf5283fd3cb8991002ee73ab815c4cf76b9259471d452cad3fb0",
+   "recorded_at": "2026-11-04T03:20:04.715321+00:00",
    "kind": "coverage",
    "code": "COVERAGE_ATTESTED",
    "producer_id": null,
    "tenant_id": null,
-   "ref": "10405098-4491-41f1-a53d-0891420cf0d0",
+   "ref": "d828b614-e91e-42bb-bf16-35808a9efe57",
    "detail": {
     "valid": true,
     "reasons": [],
-    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+    "container_id": "5d9c28614ae025b58e0a64d665d7e5617a0f0bbf00679fa1cb893436216d1ef4"
    },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "w/ORt8zgS1fhVbvNf5VJXo3sTI3SJQxieOBiHUZxEW8pqdK/+xVSNUiFaxux+h790R7PWwLgEygu9MkcAgsLAg=="
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "OLtDTtWLRqSiD3qHHINwi6xaegIwWaYOH9cW1rXpOpvWlhOhHfMqSGLL32UNCN4dnZy4No19bUap8MGSqK0vAQ=="
   },
   {
-   "n": 28,
-   "prev": "63cff3047a1f815bc59d867b53ff7c1604cce3bf84ab2311d46e37b20d34cc10",
-   "hash": "bbd4a1773bf55fb5fd79b7c0bfa8d9b06e1a02061f7a6faf88db88120feea1a7",
-   "recorded_at": "2026-11-04T03:04:20.372982+00:00",
+   "n": 29,
+   "prev": "bfe481c0d9e90f787581c48e4689969de751e1a760cd706156c7ec0a81313614",
+   "hash": "c6b279a0599fef14431260c024c40251a2ee0c7276cf4379af1c890ab01aab36",
+   "recorded_at": "2026-11-04T03:20:09.664028+00:00",
    "kind": "coverage",
    "code": "COVERAGE_ATTESTED",
    "producer_id": null,
    "tenant_id": null,
-   "ref": "edfd3e46-a40a-4c37-ba8c-1ab1231ff30c",
+   "ref": "ae5bc858-2533-4a42-8376-be4d1b888353",
    "detail": {
     "valid": true,
     "reasons": [],
-    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+    "container_id": "5d9c28614ae025b58e0a64d665d7e5617a0f0bbf00679fa1cb893436216d1ef4"
    },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "SHHlQjqTWnXspd2wXNq08wcdbzG5GfSKt6NJgC7PkIRrqpZTAqlDh0osRKI56sYhZJ2Lq2IT/UrCzjGi5B1jDQ=="
-  },
-  {
-   "n": 32,
-   "prev": "b41a78180a0a5c4bc6c8bdb8086cb7cce810a9cb53aeaa3c4c0f2457408fee1a",
-   "hash": "caacf6d83120290a7bcd101188f5ef2407dda9c8b0549e52ab47eea41bcfb6cf",
-   "recorded_at": "2026-11-04T03:04:28.503936+00:00",
-   "kind": "coverage",
-   "code": "COVERAGE_ATTESTED",
-   "producer_id": null,
-   "tenant_id": null,
-   "ref": "e3bb7f55-266e-499e-95e7-ed8bcf92c629",
-   "detail": {
-    "valid": true,
-    "reasons": [],
-    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
-   },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "/Vavcy9A4LBHwZGegGZYyaHsEECiugZM9FZezqZGhVs6G/XP0igEFhLtJ5BryezAAyqTREZ4o6FJf3VAXYc1DA=="
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "ME5ZWmeHbyjzNeY4WSdpNu6cEay9+1HF1PPX7Mno/FsmDKDswdGfxU3pmNXdBCpICQvFH4HCFy8AioZZgg+EDw=="
   },
   {
    "n": 33,
-   "prev": "caacf6d83120290a7bcd101188f5ef2407dda9c8b0549e52ab47eea41bcfb6cf",
-   "hash": "10a4732e057f634f5f56af39a8b3fafd715162569a40fd1b02ece7c3077d000a",
-   "recorded_at": "2026-11-04T03:04:30.58304+00:00",
+   "prev": "19f32a436769c6a0ad9b7f6ac072932c296195836f85194635d50b657a2a88ed",
+   "hash": "d7cd75c3dfe727f6ed43aa8e39f78d95373be093788a076dea59315404a1ca76",
+   "recorded_at": "2026-11-04T03:20:17.790077+00:00",
    "kind": "coverage",
    "code": "COVERAGE_ATTESTED",
    "producer_id": null,
    "tenant_id": null,
-   "ref": "f903c264-4718-43be-984f-5458ecd74568",
+   "ref": "82334391-2778-416f-ab2c-4eab471e4b98",
    "detail": {
     "valid": true,
     "reasons": [],
-    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+    "container_id": "5d9c28614ae025b58e0a64d665d7e5617a0f0bbf00679fa1cb893436216d1ef4"
    },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "EEU9ZGzUKG61W//3G6q3kyvq4MTZlih9YuXuN6B5oz5FGNtUw3YUiYfVtcSm1LbyiofWivKBI5v/tJCMyH3VDw=="
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "NC9l3ze4ZY3+B/vFFtxYMXMuvg4pyC4aPV33RdJO0epatb8Aa8VxExeMaGjExmk2fV44d2C0svD+C2eAuUu+Bw=="
   },
   {
    "n": 34,
-   "prev": "10a4732e057f634f5f56af39a8b3fafd715162569a40fd1b02ece7c3077d000a",
-   "hash": "713978581f0e42aa84d1dc1bcebfd671b2bd179445fa3c73f03e1836292fcbf3",
-   "recorded_at": "2026-11-04T03:04:32.702338+00:00",
+   "prev": "d7cd75c3dfe727f6ed43aa8e39f78d95373be093788a076dea59315404a1ca76",
+   "hash": "6ce13d464d02ce185dad036c03ef5bfbbc607ff7eb4f30312cfaff2aa09c9758",
+   "recorded_at": "2026-11-04T03:20:19.884616+00:00",
+   "kind": "coverage",
+   "code": "COVERAGE_ATTESTED",
+   "producer_id": null,
+   "tenant_id": null,
+   "ref": "022d088c-301b-4f05-8701-777d31da3e91",
+   "detail": {
+    "valid": true,
+    "reasons": [],
+    "container_id": "5d9c28614ae025b58e0a64d665d7e5617a0f0bbf00679fa1cb893436216d1ef4"
+   },
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "BDBzYtQuYpfDVJJ5zM6hBw/gLMBiuFK8OiM5UEctM1swe5BpS5nfPEbZ25mw6SKgWvzGRDB/ziTrDFkCrHBCBg=="
+  },
+  {
+   "n": 35,
+   "prev": "6ce13d464d02ce185dad036c03ef5bfbbc607ff7eb4f30312cfaff2aa09c9758",
+   "hash": "76a1e4c0c4a548b69ae7f6a3547db38cd465b7a2fae4d277c0b91dfb3aab667a",
+   "recorded_at": "2026-11-04T03:20:22.044024+00:00",
    "kind": "alert",
    "code": "COVERAGE_GAP",
    "producer_id": null,
    "tenant_id": null,
-   "ref": "8dea7b0d-09c3-4417-9e99-7bfd07d69f84",
+   "ref": "11e2878a-e65c-4f25-b67d-8f7bb15136de",
    "detail": {
     "valid": false,
     "reasons": [
      "ATTESTOR_CHECK_FAILED:docker_user_rules_v4",
      "ATTESTOR_CHECK_FAILED:docker_user_rules_v6"
     ],
-    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+    "container_id": "5d9c28614ae025b58e0a64d665d7e5617a0f0bbf00679fa1cb893436216d1ef4"
    },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "S3OygjooXZHTrGhBBGFNCiATMxaJVUuBK1T0gN+e6lh8avHD/Z13xHT6xbbp7l/oBrfkYXkxEgjTBJyt2iPvDg=="
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "OD6d/MK1q8nAFJx1Ld/IIWJgervaMu1KqwLRT4+eaEaml7E4uUdIfKb0BnOhvVJJolI/hQRv9ySBq/gIDkAWAg=="
   },
   {
-   "n": 36,
-   "prev": "94657e6d1ed8b80a1e985cb0e5547ccc02205a7c872960c2a91a62134928d7e9",
-   "hash": "2b477356c463a6e54625a56c13f4daf9642bdc5218e6fabf3630cdddf5ac3faa",
-   "recorded_at": "2026-11-04T03:04:34.698414+00:00",
+   "n": 37,
+   "prev": "e3d12ec9e8240aade747b6330dc78f808d4263c844666f2a51770d0bf701303a",
+   "hash": "ac4c4b0f6bb9b4ec06a33f225ebd4946038dc3be36c77eae1e6fcf5cad1598ae",
+   "recorded_at": "2026-11-04T03:20:24.004453+00:00",
    "kind": "coverage",
    "code": "COVERAGE_ATTESTED",
    "producer_id": null,
    "tenant_id": null,
-   "ref": "eebbfaa1-bf99-4a59-a856-2984061b69ba",
+   "ref": "84f1fc25-97b9-4c78-a6ab-44025e970477",
    "detail": {
     "valid": true,
     "reasons": [],
-    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+    "container_id": "5d9c28614ae025b58e0a64d665d7e5617a0f0bbf00679fa1cb893436216d1ef4"
    },
-   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
-   "sig": "VSEkloz31/s3y5c7LaQ3fkx2mQa+zctP8im7BS2Q+tVM3PaiOKD3ZYtWwpFyMJTaScCs9/xET+AOWEOdb4ijAQ=="
+   "observer_key_id": "ed25519:759e30f92bf01dd824ba664e9df8f8fa",
+   "sig": "fc4JmLMTUnAzsiOe1Z0PgGqAORGzBkzk36LZ1OwJ/qLz+uC3AVjnQ1I9hTAvCUHVXIj7qQxsoQyKMlak/BmcCQ=="
   }
  ],
  "images": {
-  "backend": "sha256:8b6ec5e69752f47ec77c87c58c2868804c9bae119753a9219750f44cf13196b2",
+  "backend": "sha256:93769af83be9f2073d378b421276b1008a15b8fa25aede263eb34be0cfff27b8",
   "postgres": "sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab"
  },
- "finished_at": "2026-11-04T03:04:35Z",
- "commit": "a031622b83d04d9cf6cba52798825fb023adc158",
+ "finished_at": "2026-11-04T03:20:24Z",
+ "commit": "93fd810fab2d0a8c9ad60f6fb115b829dbea16a8",
  "git_dirty": false,
  "compose_files": {
   "docker-compose.yml": "30a8863a32998ab72769845854321166f7a3bd024be5aae2905ed6ca5053e011",
@@ -641,7 +641,7 @@
  "image_override": "x-img: &img\n  image: qyrix-backend:c5\n  pull_policy: never\nservices:\n  migrate: *img\n  backend:\n    <<: *img\n    sysctls: !reset {}\n  observer-migrate: *img\n  observer:\n    <<: *img\n    volumes: [\"./secrets/observer/canary:/run/canary:ro\"]\n",
  "all_passed": true,
  "evidence_sig": {
-  "key_id": "ed25519:b5f3e9a96fc15451c80d538c6886d8ec",
-  "sig": "UioXyaOF5ozYYFq4GsJgXmpHeSfdbQB+1oNW6FWi+cycjOHiYEoOyJkcbL6+nQ1kpa2RytGRTpddojLa6MGuAw=="
+  "key_id": "ed25519:57e05d517e6c7672a1ec714659cb06a8",
+  "sig": "W99/9nT9p+xDYrMIoufuE1YzHe0/ssp/X7rHqrWG8pgNu/cOSOiejHEDBwc1J+rAXbhkx2kYzN9yF7glsy22DA=="
  }
 }
