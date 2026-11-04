@@ -1,8 +1,123 @@
 {
- "started_at": "2026-11-03T19:08:50Z",
+ "format": "qyrix-c5-validation-evidence/2",
+ "started_at": "2026-11-04T03:02:44Z",
  "steps": [
   {
-   "step": "backend healthy on internal networks only",
+   "step": "secret ownership/modes (uid 10001, 0400; no offline keys under ./secrets)",
+   "ok": true,
+   "files": [
+    {
+     "file": "secrets/db_admin_password",
+     "owner": "70:10001",
+     "mode": "0o440",
+     "ok": true
+    },
+    {
+     "file": "secrets/db_runtime_password",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/state_witness_key",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/data_key",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/client_sig_key",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/gate_signing_key.pem",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/observer_signing_key.pem",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/backend/backend.key",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/server/observer.key",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/operator_token",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/observer_db_runtime_password",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/observer_db_admin_password",
+     "owner": "70:10001",
+     "mode": "0o440",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/canary/agent_token",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/canary/creds.json",
+     "owner": "10001:10001",
+     "mode": "0o400",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/backend/backend.crt",
+     "owner": "0:0",
+     "mode": "0o444",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/server/observer.crt",
+     "owner": "0:0",
+     "mode": "0o444",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/ca/ca.crt",
+     "owner": "0:0",
+     "mode": "0o444",
+     "ok": true
+    },
+    {
+     "file": "secrets/observer/manifest.signed.json",
+     "owner": "0:0",
+     "mode": "0o444",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "step": "backend (production image, uid 10001) healthy on internal networks only",
    "ok": true
   },
   {
@@ -10,8 +125,13 @@
    "ok": true
   },
   {
-   "step": "observer reachable from the host over mTLS only",
+   "step": "observer (production image, uid 10001) healthy over mTLS",
    "ok": true
+  },
+  {
+   "step": "no CA / attestor / root key inside any application container",
+   "ok": true,
+   "containers_with_keys": []
   },
   {
    "step": "direct egress from the backend container fails",
@@ -19,102 +139,110 @@
    "result": "{'1.1.1.1': 'OSError:101', '172.30.3.2': 'OSError:101', '8.8.8.8': 'OSError:101'}"
   },
   {
+   "step": "N2: exfiltration through the proxy is refused (untagged, hostname, unknown execution id, plain HTTP)",
+   "ok": true,
+   "attempts": {
+    "untagged_connect": "HTTP/1.1 403 Refused",
+    "untagged_hostname_connect": "HTTP/1.1 403 Refused",
+    "unknown_execution_id": "HTTP/1.1 403 Refused",
+    "plain_http_post": "HTTP/1.1 403 Refused"
+   },
+   "observer_reasons": [
+    "UNTAGGED_EGRESS_DENIED",
+    "UNRESOLVABLE",
+    "IP_NOT_IN_HOST_RESOLUTION",
+    "UNTAGGED_EGRESS_DENIED"
+   ]
+  },
+  {
    "step": "backend heartbeats delivered to the observer (mTLS outbox)",
    "ok": true
   },
   {
-   "step": "host attestation judged VALID by the observer",
+   "step": "watcher attests on start (no manual attestation)",
    "ok": true,
-   "attestor_checks": {
-    "container_running": true,
-    "network_mode_not_host": true,
-    "not_privileged": true,
-    "cap_drop_all": true,
-    "no_cap_add": true,
-    "networks_exact": true,
-    "dns_is_observer": true,
-    "no_default_route": true,
-    "no_global_ipv6": true,
-    "ipv6_disabled_sysctl": true,
-    "docker_user_rules_v4": true,
-    "docker_user_rules_v6": true
-   },
-   "observer_checks": {
-    "direct_path_blocked:ipv4_tcp_80": true,
-    "direct_path_blocked:ipv4_tcp_443": true,
-    "direct_path_blocked:ipv4_tcp_853": true,
-    "direct_path_blocked:dns_udp_direct": true,
-    "positive_control_reached_sink": true,
-    "positive_control_mediated_by_proxy": true,
-    "sni_mismatch_refused": true,
-    "dns_reaches_observer_resolver": true
-   },
-   "reasons": []
+   "seconds": 2.0,
+   "attestation_id": "3d1b5b1c-583a-41cd-ba8a-ad4a4a7a4314"
   },
   {
    "step": "live P2 canary through the backend is ENFORCEMENT_VERIFIED",
    "ok": true,
    "reconciliation": {
-    "recon_id": "b1666118-7e93-4634-863b-4fd49a7c2a45",
-    "run_id": "8c5de81f-3abd-4189-9526-649c5e24a71d",
+    "recon_id": "5c120470-45d0-4539-a357-4f7c0b7c1d7d",
+    "run_id": "306159e6-03f2-4f5e-9ffc-ce461c8d8470",
     "version": 2,
     "result": "ENFORCEMENT_VERIFIED",
     "reasons": [],
     "evidence_level": "E3",
-    "decided_at": "2026-11-03T19:09:25.798452+00:00",
+    "decided_at": "2026-11-04T03:03:19.882252+00:00",
     "ledger": {
-     "n": 11,
-     "hash": "9e24ad2f2a531a6d3900790611cce0b839eb361485fced81a95735c1568dea79"
+     "n": 12,
+     "hash": "39a27ed22f8ef103184e855c486ec9697e07a4d9d4d9afbb504431e76bb749fe"
     },
     "channel": "http",
-    "run_created_at": "2026-11-03T19:09:14.180326+00:00",
+    "run_created_at": "2026-11-04T03:03:08.841201+00:00",
     "expected_condition": "BLOCK",
     "expected_basis": "construction",
     "scope": "canary"
-   },
-   "submission": {
-    "submitted": true,
-    "status": 200
    }
   },
   {
-   "step": "NEGATIVE: extra egress attachment => attestation INVALID",
+   "step": "NEGATIVE: extra egress attachment => watcher revokes coverage automatically",
    "ok": true,
-   "reasons": [
-    "ATTESTOR_CHECK_FAILED:networks_exact",
-    "ATTESTOR_CHECK_FAILED:no_default_route",
-    "OBSERVER_CHECK_FAILED:direct_path_blocked:ipv4_tcp_80",
-    "OBSERVER_CHECK_FAILED:direct_path_blocked:ipv4_tcp_443",
-    "OBSERVER_CHECK_FAILED:direct_path_blocked:ipv4_tcp_853",
-    "OBSERVER_CHECK_FAILED:direct_path_blocked:dns_udp_direct"
-   ]
+   "seconds": 4.0
   },
   {
-   "step": "NEGATIVE: canary under failed coverage is not VERIFIED",
+   "step": "NEGATIVE: canary under revoked coverage is not VERIFIED",
    "ok": true,
    "reconciliation": {
-    "recon_id": "8286f573-6d98-4670-be83-c8b25aaec263",
-    "run_id": "59e38e81-9a2b-4a18-9616-bad08fcc9b0e",
-    "version": 2,
+    "recon_id": "39c6e58a-bc30-4449-9c21-e9762d805aeb",
+    "run_id": "ad82efe8-8d3e-4f02-b163-74808f7da1ba",
+    "version": 1,
     "result": "INCONCLUSIVE",
     "reasons": [
      "COVERAGE_UNATTESTED"
     ],
     "evidence_level": "none",
-    "decided_at": "2026-11-03T19:09:40.038433+00:00",
+    "decided_at": "2026-11-04T03:03:36.134835+00:00",
     "ledger": {
      "n": 21,
-     "hash": "f664a9bc0efaeaaf2e8d7510c28b5122852f9ea97491dfe6e33062cb9f6f7add"
+     "hash": "bdee2e9d25925f8444f902047fd9eb7a631c29ddcc396ebfffde93350a13f8cc"
     },
     "channel": "http",
-    "run_created_at": "2026-11-03T19:09:28.486370+00:00",
+    "run_created_at": "2026-11-04T03:03:25.189090+00:00",
     "expected_condition": "BLOCK",
     "expected_basis": "construction",
     "scope": "canary"
    }
   },
   {
-   "step": "NEGATIVE: DOCKER-USER rules missing => attestation INVALID",
+   "step": "disconnect => watcher re-attests VALID automatically",
+   "ok": true,
+   "seconds": 4.0
+  },
+  {
+   "step": "docker restart => re-attested with a NEW attestation",
+   "ok": true,
+   "seconds": 4.0,
+   "attestation_id": "edfd3e46-a40a-4c37-ba8c-1ab1231ff30c"
+  },
+  {
+   "step": "NEGATIVE: docker stop => signed FAILED attestation revokes coverage",
+   "ok": true,
+   "seconds": 3.0
+  },
+  {
+   "step": "docker start => coverage restored by a new attestation",
+   "ok": true,
+   "seconds": 4.0
+  },
+  {
+   "step": "watcher restart => attests again before relying on anything",
+   "ok": true,
+   "seconds": 2.0
+  },
+  {
+   "step": "NEGATIVE: DOCKER-USER rules missing => (timer) attestation INVALID",
    "ok": true,
    "reasons": [
     "ATTESTOR_CHECK_FAILED:docker_user_rules_v4",
@@ -122,24 +250,201 @@
    ]
   },
   {
+   "step": "... and coverage is revoked immediately (older success not reused)",
+   "ok": true
+  },
+  {
    "step": "restored topology => attestation VALID again",
    "ok": true
   }
  ],
+ "attestation_ids": [
+  "10405098-4491-41f1-a53d-0891420cf0d0",
+  "3d1b5b1c-583a-41cd-ba8a-ad4a4a7a4314",
+  "8dea7b0d-09c3-4417-9e99-7bfd07d69f84",
+  "e3bb7f55-266e-499e-95e7-ed8bcf92c629",
+  "edfd3e46-a40a-4c37-ba8c-1ab1231ff30c",
+  "eebbfaa1-bf99-4a59-a856-2984061b69ba",
+  "f903c264-4718-43be-984f-5458ecd74568"
+ ],
+ "reconciliation_ids": [
+  "5c120470-45d0-4539-a357-4f7c0b7c1d7d",
+  "39c6e58a-bc30-4449-9c21-e9762d805aeb"
+ ],
+ "ipv6_in_kernel": false,
+ "secret_permissions": [
+  {
+   "file": "secrets/db_admin_password",
+   "owner": "70:10001",
+   "mode": "0o440",
+   "ok": true
+  },
+  {
+   "file": "secrets/db_runtime_password",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/state_witness_key",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/data_key",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/client_sig_key",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/gate_signing_key.pem",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/observer_signing_key.pem",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/backend/backend.key",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/server/observer.key",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/operator_token",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/observer_db_runtime_password",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/observer_db_admin_password",
+   "owner": "70:10001",
+   "mode": "0o440",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/canary/agent_token",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/canary/creds.json",
+   "owner": "10001:10001",
+   "mode": "0o400",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/backend/backend.crt",
+   "owner": "0:0",
+   "mode": "0o444",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/server/observer.crt",
+   "owner": "0:0",
+   "mode": "0o444",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/ca/ca.crt",
+   "owner": "0:0",
+   "mode": "0o444",
+   "ok": true
+  },
+  {
+   "file": "secrets/observer/manifest.signed.json",
+   "owner": "0:0",
+   "mode": "0o444",
+   "ok": true
+  }
+ ],
+ "manifest": {
+  "manifest_version": 1,
+  "issued_at": "2026-11-04T00:00:00+00:00",
+  "observer_keys": [
+   {
+    "key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+    "public_key": "raFaxE2wiyfd0VUOC3czx0Spc+z71753hY/ihwLWEfo=",
+    "valid_from": "2026-01-01T00:00:00+00:00"
+   }
+  ],
+  "producers": [
+   {
+    "producer_id": "gate:fbb83715-f061-4958-bef6-bfd17f9ae57c",
+    "tenants": [
+     "*"
+    ],
+    "keys": [
+     {
+      "key_id": "ed25519:3d936382421d87b4db33fbbc51951245",
+      "public_key": "hNyRy/FHSJv4UvaLQlk4zaGITHAl4+DJof6D7vOzzZw=",
+      "valid_from": "2026-01-01T00:00:00+00:00",
+      "scopes": [
+       "decision",
+       "grant",
+       "heartbeat"
+      ]
+     }
+    ]
+   }
+  ],
+  "recovery_keys": [
+   {
+    "key_id": "ed25519:ca8d1ee143fe3f774021fcbab2e533b7",
+    "public_key": "mVId8cqtj4OFdMqctBinaYUXhisUDNp2eYiu3Uh0HKM=",
+    "valid_from": "2026-01-01T00:00:00+00:00"
+   }
+  ],
+  "attestor_keys": [
+   {
+    "key_id": "ed25519:b5f3e9a96fc15451c80d538c6886d8ec",
+    "public_key": "u+Z4aMjSrghABxFTHk91Wd6O9v8YHKJ+PofrsNzGLJo=",
+    "valid_from": "2026-01-01T00:00:00+00:00"
+   }
+  ],
+  "format": "qyrix-observer-manifest/1",
+  "root_key_id": "ed25519:9bf708f1627fb4541f99a4dfe899b504",
+  "sig": "/inTBnMv1xEcygXMxZDMWs8QoAu9YLegvh3bQAo7uCJggO5WICX+pmfL/u8Bx7FNqocn7gBhmE895oi+7qCTBg=="
+ },
+ "root_public_key": "ZEsZGmQ/1CHIg8brB8pPy7x4oGuNLOw6d8SO0pu6ORg=",
  "observer_status": {
   "coverage": {
    "mediated": true,
    "current": {
     "mediated": true,
-    "attestation_id": "0bce4c82-0ca2-4c75-b7c1-ae8a94fe7c08",
-    "container_id": "b7b5b742c0751bd96f6247374a3c02917cfed62d48c8242293bb224ead8aeef4",
-    "attested_at": "2026-11-03T19:10:10.808537+00:00",
-    "valid_until": "2026-11-03T20:10:10.808537+00:00"
+    "attestation_id": "eebbfaa1-bf99-4a59-a856-2984061b69ba",
+    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff",
+    "attested_at": "2026-11-04T03:04:34.590366+00:00",
+    "valid_until": "2026-11-04T03:34:34.590366+00:00"
    }
   },
   "egress": {
    "counters": {
-    "alerts_throttled": 3
+    "alerts_throttled": 11
    },
    "open_tunnels": 0
   },
@@ -149,6 +454,194 @@
   },
   "manifest_version": 1
  },
- "finished_at": "2026-11-03T19:10:11Z",
- "all_passed": true
+ "ledger_rows": [
+  {
+   "n": 6,
+   "prev": "7cd16a841089b173fafda5bcd48a508e70907d52a47640a166509668da5b1438",
+   "hash": "fa4f0d658555b2eb28854ae3019d82169983ab65f35c459c5c8cd6aa795fea5d",
+   "recorded_at": "2026-11-04T03:03:08.75938+00:00",
+   "kind": "coverage",
+   "code": "COVERAGE_ATTESTED",
+   "producer_id": null,
+   "tenant_id": null,
+   "ref": "3d1b5b1c-583a-41cd-ba8a-ad4a4a7a4314",
+   "detail": {
+    "valid": true,
+    "reasons": [],
+    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "DT9AIQndy/eQsoNeO4rYOhshA+PSRYA8tgwT+EaYYKhX7K3dxJkbu4Yc7La/KR5AFtjIwdlGAtnNFUdBEONeCA=="
+  },
+  {
+   "n": 12,
+   "prev": "0fe7b2e829866f74bd04b190d85b9d385f70d0e3b04cbaba8586fb3862176a80",
+   "hash": "39a27ed22f8ef103184e855c486ec9697e07a4d9d4d9afbb504431e76bb749fe",
+   "recorded_at": "2026-11-04T03:03:19.882252+00:00",
+   "kind": "reconciliation",
+   "code": "ENFORCEMENT_VERIFIED",
+   "producer_id": null,
+   "tenant_id": "default",
+   "ref": "5c120470-45d0-4539-a357-4f7c0b7c1d7d",
+   "detail": {
+    "scope": "canary",
+    "run_id": "306159e6-03f2-4f5e-9ffc-ce461c8d8470",
+    "reasons": [],
+    "version": 2,
+    "facts_sha256": "0e89f60b5603921012368e71dd55ff38267495583a6b99142aa21698d34885c9"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "jtJIwAbB5fg7WXxhiwApHAzLqFuI7pNF/wjYJHBPf3HlRd9dDqNa4YUxfFAfOVC3ElccH58lF4gsruflo1EKAQ=="
+  },
+  {
+   "n": 21,
+   "prev": "3bf9f064668da450f79b68397a7026b65acf99fd74526fdbce7bddd38bff46ee",
+   "hash": "bdee2e9d25925f8444f902047fd9eb7a631c29ddcc396ebfffde93350a13f8cc",
+   "recorded_at": "2026-11-04T03:03:36.134835+00:00",
+   "kind": "reconciliation",
+   "code": "INCONCLUSIVE",
+   "producer_id": null,
+   "tenant_id": "default",
+   "ref": "39c6e58a-bc30-4449-9c21-e9762d805aeb",
+   "detail": {
+    "scope": "canary",
+    "run_id": "ad82efe8-8d3e-4f02-b163-74808f7da1ba",
+    "reasons": [
+     "COVERAGE_UNATTESTED"
+    ],
+    "version": 1,
+    "facts_sha256": "ceb48b82b53acf7219ab7a4525d6086b2016898ca0f5b0e4a4fcf6cf45e6b0ae"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "y8Dzvd0ozRtm4ckeLfjD6UwWVPDACK1G2vcy/vk2dTZ9Oocz8y12AE058VuvoNrFsD7qVPo6dXo2ldoFXo+IAw=="
+  },
+  {
+   "n": 26,
+   "prev": "0db84cfc13f52f4fee73f85ece87fcb39d7c3f9adeb7f2465d70bd17aa702f58",
+   "hash": "420aaa5c1def4067b150773e07f5729fa384f29e2c1e165f610704898c31c74f",
+   "recorded_at": "2026-11-04T03:04:15.482891+00:00",
+   "kind": "coverage",
+   "code": "COVERAGE_ATTESTED",
+   "producer_id": null,
+   "tenant_id": null,
+   "ref": "10405098-4491-41f1-a53d-0891420cf0d0",
+   "detail": {
+    "valid": true,
+    "reasons": [],
+    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "w/ORt8zgS1fhVbvNf5VJXo3sTI3SJQxieOBiHUZxEW8pqdK/+xVSNUiFaxux+h790R7PWwLgEygu9MkcAgsLAg=="
+  },
+  {
+   "n": 28,
+   "prev": "63cff3047a1f815bc59d867b53ff7c1604cce3bf84ab2311d46e37b20d34cc10",
+   "hash": "bbd4a1773bf55fb5fd79b7c0bfa8d9b06e1a02061f7a6faf88db88120feea1a7",
+   "recorded_at": "2026-11-04T03:04:20.372982+00:00",
+   "kind": "coverage",
+   "code": "COVERAGE_ATTESTED",
+   "producer_id": null,
+   "tenant_id": null,
+   "ref": "edfd3e46-a40a-4c37-ba8c-1ab1231ff30c",
+   "detail": {
+    "valid": true,
+    "reasons": [],
+    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "SHHlQjqTWnXspd2wXNq08wcdbzG5GfSKt6NJgC7PkIRrqpZTAqlDh0osRKI56sYhZJ2Lq2IT/UrCzjGi5B1jDQ=="
+  },
+  {
+   "n": 32,
+   "prev": "b41a78180a0a5c4bc6c8bdb8086cb7cce810a9cb53aeaa3c4c0f2457408fee1a",
+   "hash": "caacf6d83120290a7bcd101188f5ef2407dda9c8b0549e52ab47eea41bcfb6cf",
+   "recorded_at": "2026-11-04T03:04:28.503936+00:00",
+   "kind": "coverage",
+   "code": "COVERAGE_ATTESTED",
+   "producer_id": null,
+   "tenant_id": null,
+   "ref": "e3bb7f55-266e-499e-95e7-ed8bcf92c629",
+   "detail": {
+    "valid": true,
+    "reasons": [],
+    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "/Vavcy9A4LBHwZGegGZYyaHsEECiugZM9FZezqZGhVs6G/XP0igEFhLtJ5BryezAAyqTREZ4o6FJf3VAXYc1DA=="
+  },
+  {
+   "n": 33,
+   "prev": "caacf6d83120290a7bcd101188f5ef2407dda9c8b0549e52ab47eea41bcfb6cf",
+   "hash": "10a4732e057f634f5f56af39a8b3fafd715162569a40fd1b02ece7c3077d000a",
+   "recorded_at": "2026-11-04T03:04:30.58304+00:00",
+   "kind": "coverage",
+   "code": "COVERAGE_ATTESTED",
+   "producer_id": null,
+   "tenant_id": null,
+   "ref": "f903c264-4718-43be-984f-5458ecd74568",
+   "detail": {
+    "valid": true,
+    "reasons": [],
+    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "EEU9ZGzUKG61W//3G6q3kyvq4MTZlih9YuXuN6B5oz5FGNtUw3YUiYfVtcSm1LbyiofWivKBI5v/tJCMyH3VDw=="
+  },
+  {
+   "n": 34,
+   "prev": "10a4732e057f634f5f56af39a8b3fafd715162569a40fd1b02ece7c3077d000a",
+   "hash": "713978581f0e42aa84d1dc1bcebfd671b2bd179445fa3c73f03e1836292fcbf3",
+   "recorded_at": "2026-11-04T03:04:32.702338+00:00",
+   "kind": "alert",
+   "code": "COVERAGE_GAP",
+   "producer_id": null,
+   "tenant_id": null,
+   "ref": "8dea7b0d-09c3-4417-9e99-7bfd07d69f84",
+   "detail": {
+    "valid": false,
+    "reasons": [
+     "ATTESTOR_CHECK_FAILED:docker_user_rules_v4",
+     "ATTESTOR_CHECK_FAILED:docker_user_rules_v6"
+    ],
+    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "S3OygjooXZHTrGhBBGFNCiATMxaJVUuBK1T0gN+e6lh8avHD/Z13xHT6xbbp7l/oBrfkYXkxEgjTBJyt2iPvDg=="
+  },
+  {
+   "n": 36,
+   "prev": "94657e6d1ed8b80a1e985cb0e5547ccc02205a7c872960c2a91a62134928d7e9",
+   "hash": "2b477356c463a6e54625a56c13f4daf9642bdc5218e6fabf3630cdddf5ac3faa",
+   "recorded_at": "2026-11-04T03:04:34.698414+00:00",
+   "kind": "coverage",
+   "code": "COVERAGE_ATTESTED",
+   "producer_id": null,
+   "tenant_id": null,
+   "ref": "eebbfaa1-bf99-4a59-a856-2984061b69ba",
+   "detail": {
+    "valid": true,
+    "reasons": [],
+    "container_id": "6b491b09befabe8546eacf828d53d39ca19716f9322de135dbf597af2892acff"
+   },
+   "observer_key_id": "ed25519:f32ef9d52ff432adc664fa59d3a28abc",
+   "sig": "VSEkloz31/s3y5c7LaQ3fkx2mQa+zctP8im7BS2Q+tVM3PaiOKD3ZYtWwpFyMJTaScCs9/xET+AOWEOdb4ijAQ=="
+  }
+ ],
+ "images": {
+  "backend": "sha256:8b6ec5e69752f47ec77c87c58c2868804c9bae119753a9219750f44cf13196b2",
+  "postgres": "sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab"
+ },
+ "finished_at": "2026-11-04T03:04:35Z",
+ "commit": "a031622b83d04d9cf6cba52798825fb023adc158",
+ "git_dirty": false,
+ "compose_files": {
+  "docker-compose.yml": "30a8863a32998ab72769845854321166f7a3bd024be5aae2905ed6ca5053e011",
+  "docker-compose.observer.yml": "f4d540eb33ca7a1108e550eed67867833ce1fc49ed83aedf5375381f0f41d670"
+ },
+ "image_override": "x-img: &img\n  image: qyrix-backend:c5\n  pull_policy: never\nservices:\n  migrate: *img\n  backend:\n    <<: *img\n    sysctls: !reset {}\n  observer-migrate: *img\n  observer:\n    <<: *img\n    volumes: [\"./secrets/observer/canary:/run/canary:ro\"]\n",
+ "all_passed": true,
+ "evidence_sig": {
+  "key_id": "ed25519:b5f3e9a96fc15451c80d538c6886d8ec",
+  "sig": "UioXyaOF5ozYYFq4GsJgXmpHeSfdbQB+1oNW6FWi+cycjOHiYEoOyJkcbL6+nQ1kpa2RytGRTpddojLa6MGuAw=="
+ }
 }
