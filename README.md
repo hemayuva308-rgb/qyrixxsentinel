@@ -11,6 +11,30 @@ Meta Llama classifies and explains untrusted instructions; **it can never allow 
 Inspect → Establish Trust → Evaluate → Authorize or Block → Execute Safely (grant) → Verify Proof
 ```
 
+## Meta Global AI Developer Hackathon: summary for judges
+**What it is.** Qyrix Sentinel puts a deterministic security checkpoint between an AI agent and the tools it calls.
+It decides ALLOW or BLOCK *before* anything runs, issues a short-lived single-use grant only for allowed actions, routes
+supported outbound calls through a controlled egress proxy, and keeps tamper-evident evidence.
+
+**How Meta's models are used (and what they are not).** The Meta Model API (OpenAI-compatible `/chat/completions`) classifies
+untrusted instruction text and explains why it looks risky. Only redacted, length-bounded text is sent; off-schema model output
+is discarded; if Meta is unreachable the system falls back to a deterministic heuristic and says so on screen
+(`NO LIVE AI - HEURISTIC ONLY`). **The model is advisory only: it can never allow an action.** Authorization is deterministic policy.
+Configure with `META_API_KEY` and `META_MODEL` (your exact model id); check it with `cd backend && python scripts/verify_meta.py`.
+The authenticated Inspector shows `LIVE: META`, the model and the latency. The public sandbox on the homepage deliberately
+makes **no** LLM call.
+
+**What is real and tested.** Backend suite: 1116 passed, 1 skipped (last full run; CI runs it on every push, including real PostgreSQL
+suites). 10-case benchmark: 7/7 attacks blocked, 0/3 false positives. Integrations: MCP stdio and Streamable HTTP proxies, and an n8n custom
+HTTP node (all prototypes). Independent audit findings are listed openly in `docs/N8N_INTEGRATION.md`.
+
+**What it is not.** A prototype, not production-ready and not independently certified. It protects only traffic that goes through
+its adapters, and egress control is only as strong as the network isolation around the protected workload. Evidence from an adapter is
+E1 (self-reported); only independently observed evidence is E3, and missing evidence is reported as INCONCLUSIVE.
+
+**Try it / watch it.** Demo script: `docs/HACKATHON_DEMO_SCRIPT.md`. Submission text: `docs/HACKATHON_SUBMISSION.md`.
+Homepage with the interactive architecture: run the frontend (`cd frontend && npm ci && npm run build && npm start`).
+
 ## What is in this repository
 | Part | Path |
 |---|---|
@@ -45,7 +69,9 @@ Grants are bound to the authenticated agent, the task context and the policy ver
 
 ## Run with Docker Compose
 ```bash
-cp .env.example .env      # replace both CHANGE_ME tokens:  openssl rand -hex 32
+# create a git-ignored .env with the two required operator tokens (the old .env.example no longer exists):
+printf 'QYRIX_ADMIN_TOKEN=%s\nQYRIX_AGENT_TOKEN=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+# optional, for the LIVE Meta classifier (never commit these):  printf 'META_API_KEY=...\nMETA_MODEL=<your model id>\n' >> .env
 mkdir -p secrets && for f in db_admin_password db_runtime_password state_witness_key data_key client_sig_key; do openssl rand -hex 32 > secrets/$f; done && chmod 644 secrets/*   # see secrets/README.md
 docker compose up --build # db + backend + frontend · http://127.0.0.1:3000 (sign in at /login with the admin token or an API key)
 ```
@@ -72,7 +98,7 @@ Set `QYRIX_ENABLE_DEMO_RESET=1` only for demo/evaluation environments (it enable
 
 ## Run without Docker
 ```bash
-cp .env.example .env && ./scripts/dev.sh
+printf 'QYRIX_ADMIN_TOKEN=%s\nQYRIX_AGENT_TOKEN=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env && ./scripts/dev.sh
 ```
 
 ## External proof anchoring (RFC 3161, optional)
