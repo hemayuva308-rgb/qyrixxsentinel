@@ -56,12 +56,13 @@ def step(name, ok, **detail):
 
 def write(path, data, mode=0o600):
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    safe_mode = mode & 0o700
     if os.path.exists(path):
         os.chmod(path, 0o600)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, safe_mode)
     with os.fdopen(fd, "w") as f:
         f.write(data)
-    os.chmod(path, mode)                                  # O_CREAT's mode only applies to NEW files
+    os.chmod(path, safe_mode)                             # O_CREAT's mode only applies to NEW files
 
 
 def prepare(image):
