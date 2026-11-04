@@ -1,5 +1,6 @@
 """Audit N2 on REAL PostgreSQL + real sockets: the egress proxy denies untagged traffic and opens egress only for an
-execution id backed by a signed, sequenced grant claim (ALLOW, same host, active stream, not revoked, fresh, one use).
+execution id backed by signed, sequenced grant claims (issued for an ALLOW on the same host, CONSUMED - redeemed or
+executed -, active stream, not revoked, no refused redemption, younger than the grant TTL, one tunnel, port 443).
 Destinations here are treated as PUBLIC (no observer-owned exemption), so every request needs authorization."""
 import socket
 import ssl
@@ -33,10 +34,11 @@ def nx(cluster, tmp_path):
     rec = Recorder(obs)
     clock = {"skew": 0.0}
     auth = grant_authorizer(obs.db, clock=lambda: time.time() + clock["skew"], wait=1.0)
-    proxy = EgressProxy(rec, "127.0.0.1", 0, lambda h: {HOST: ["127.0.0.1"], "llm.provider.example": ["127.0.0.1"]}.get(h, []),
-                        [], authorize=auth, untagged_allow=["llm.provider.example"])
-    proxy._is_public = lambda ip: True                  # loopback stands in for a public destination
     srv, port = _tls_server(tmp_path)
+    proxy = EgressProxy(rec, "127.0.0.1", 0, lambda h: {HOST: ["127.0.0.1"], "llm.provider.example": ["127.0.0.1"]}.get(h, []),
+                        [], authorize=auth, untagged_allow=["llm.provider.example"],
+                        tagged_ports=(443, port))       # the test origin cannot bind 443; production allows 443 only
+    proxy._is_public = lambda ip: True                  # loopback stands in for a public destination
     yield {"obs": obs, "admin": admin, "keys": keys, "proxy": proxy, "port": port, "clock": clock, "seq": {"default": 0}}
     proxy.close(); srv.close()
 
@@ -47,13 +49,18 @@ def q(admin, sql, p=()):
         return cur.fetchall() if cur.description else None
 
 
-def claim_grant(nx, verdict="ALLOW", dest=HOST, kind="issued", tenant="default", exec_id=None, extra=()):
-    """Signed decision + grant claims, exactly as the backend publishes them (E0)."""
+def claim_grant(nx, verdict="ALLOW", dest=HOST, kind="issued", tenant="default", exec_id=None, extra=(), consumed="redeemed"):
+    """Signed decision + grant claims, exactly as the backend publishes them (E0): the decision, the grant `kind`
+    (issued at evaluation) and - unless consumed=None - the consumption claim (`redeemed` by a delegated integration,
+    `executed` by the Gate's adapter) that the Gate writes in the transaction that marks the grant used."""
     k, geid, eid = nx["keys"], str(uuid.uuid4()), exec_id or str(uuid.uuid4())
-    for t, body in (("decision", {"gate_evaluation_id": geid, "correlation_id": geid, "verdict": verdict, "rule_ids": [],
-                                  "dest_host": dest}),
-                    ("grant", {"gate_evaluation_id": geid, "grant_id": "grt_" + uuid.uuid4().hex, "execution_id": eid,
-                               "kind": kind})) + tuple(extra):
+    gid = "grt_" + uuid.uuid4().hex
+    claims = (("decision", {"gate_evaluation_id": geid, "correlation_id": geid, "verdict": verdict, "rule_ids": [],
+                            "dest_host": dest}),
+              ("grant", {"gate_evaluation_id": geid, "grant_id": gid, "execution_id": eid, "kind": kind}))
+    if consumed:
+        claims += (("grant", {"gate_evaluation_id": geid, "grant_id": gid, "execution_id": eid, "kind": consumed}),)
+    for t, body in claims + tuple(extra):
         if t == "grant_extra":
             t, body = "grant", dict(body, gate_evaluation_id=geid, execution_id=eid)
         nx["seq"][tenant] = nx["seq"].get(tenant, 0) + 1
@@ -92,7 +99,7 @@ def test_unknown_execution_id_is_denied(nx):
 
 
 @pytest.mark.parametrize("case,why", [("block_decision", "DECISION_NOT_ALLOW"), ("other_host", "HOST_NOT_AUTHORISED"),
-                                      ("revoked", "GRANT_REVOKED"), ("refused_only", "EXECUTION_NOT_AUTHORISED"),
+                                      ("revoked", "GRANT_REVOKED"), ("refused_only", "GRANT_REDEMPTION_REFUSED"),
                                       ("too_old", "GRANT_TOO_OLD")])
 def test_claims_that_do_not_authorize(nx, case, why):
     if case == "block_decision":
@@ -102,10 +109,10 @@ def test_claims_that_do_not_authorize(nx, case, why):
     elif case == "revoked":
         eid = claim_grant(nx, extra=(("grant_extra", {"grant_id": "g", "kind": "revoked", "refusal_code": "REVOKED_BY_OPERATOR"}),))
     elif case == "refused_only":
-        eid = claim_grant(nx, kind="refused")
+        eid = claim_grant(nx, kind="refused", consumed=None)
     else:
         eid = claim_grant(nx)
-        nx["clock"]["skew"] = 3600.0
+        nx["clock"]["skew"] = 121.0                                              # just past the 120 s grant TTL
     s, resp = connect(nx["proxy"], "127.0.0.1", nx["port"], xexec=eid)
     assert resp.startswith(b"HTTP/1.1 403") and refused(nx) == [why] and opened(nx) == []
 
@@ -130,6 +137,92 @@ def test_exfiltration_inside_an_authorised_tunnel_to_another_host_is_refused(nx)
     s, resp = connect(nx["proxy"], "127.0.0.1", nx["port"], xhost="exfil.example.net", xexec=eid)
     assert resp.startswith(b"HTTP/1.1 403")                                      # observer resolution check first
     assert refused(nx) == ["IP_NOT_IN_HOST_RESOLUTION"]
+
+
+# ---------------- Phase 1A remediation: redemption is required at egress ----------------
+@pytest.mark.parametrize("case,why", [
+    ("issued_never_redeemed", "EXECUTION_NOT_REDEEMED"),          # the HIGH-1 gap: an issued grant alone no longer opens
+    ("issued_then_refused", "GRANT_REDEMPTION_REFUSED"),          # e.g. REVALIDATION_FAILED / GRANT_POLICY_CHANGED
+    ("redeemed_then_refused", "GRANT_REDEMPTION_REFUSED"),        # any refusal for the execution fails closed
+    ("consumed_without_issue", "EXECUTION_NOT_AUTHORISED"),       # a consumption claim alone proves nothing
+    ("redeemed_then_revoked", "GRANT_REVOKED")])
+def test_redemption_evidence_is_required(nx, case, why):
+    refusal = ("grant_extra", {"grant_id": "g", "kind": "refused", "refusal_code": "REVALIDATION_FAILED"})
+    if case == "issued_never_redeemed":
+        eid = claim_grant(nx, consumed=None)
+    elif case == "issued_then_refused":
+        eid = claim_grant(nx, consumed=None, extra=(refusal,))
+    elif case == "redeemed_then_refused":
+        eid = claim_grant(nx, extra=(refusal,))
+    elif case == "consumed_without_issue":
+        eid = claim_grant(nx, kind="redeemed", consumed=None)
+    else:
+        eid = claim_grant(nx, extra=(("grant_extra", {"grant_id": "g", "kind": "revoked", "refusal_code": "X"}),))
+    t0 = time.time()
+    s, resp = connect(nx["proxy"], "127.0.0.1", nx["port"], xexec=eid)
+    assert resp.startswith(b"HTTP/1.1 403") and refused(nx) == [why] and opened(nx) == []
+    if case == "issued_never_redeemed":
+        assert time.time() - t0 >= 0.9                                           # it waited for the claim, then refused
+
+
+def test_executed_claim_from_the_gate_adapter_authorises(nx):
+    eid = claim_grant(nx, consumed="executed")
+    s, resp = connect(nx["proxy"], "127.0.0.1", nx["port"], xexec=eid)
+    assert resp.startswith(b"HTTP/1.1 200") and opened(nx) == [(eid,)]
+
+
+def test_redemption_claim_arriving_late_authorises(nx):
+    eid = claim_grant(nx, consumed=None)                                         # issued now, redeemed a moment later
+    k = nx["keys"]
+    geid = q(nx["admin"], "SELECT envelope->'body'->>'gate_evaluation_id' FROM events WHERE type='grant'"
+                          " AND envelope->'body'->>'execution_id'=%s", (eid,))[0][0]
+
+    def late():
+        nx["seq"]["default"] += 1
+        nx["obs"].ingest(raw(envelope(k.gate, k.gate_pid, "grant", {"gate_evaluation_id": geid, "grant_id": "g",
+                                                                     "execution_id": eid, "kind": "redeemed"},
+                                      seq=nx["seq"]["default"], issued=time.time())))
+    threading.Timer(0.4, late).start()
+    s, resp = connect(nx["proxy"], "127.0.0.1", nx["port"], xexec=eid)
+    assert resp.startswith(b"HTTP/1.1 200") and opened(nx) == [(eid,)]
+
+
+def test_grant_within_ttl_authorises(nx):
+    eid = claim_grant(nx)
+    nx["clock"]["skew"] = 110.0                                                  # inside the 120 s grant TTL
+    s, resp = connect(nx["proxy"], "127.0.0.1", nx["port"], xexec=eid)
+    assert resp.startswith(b"HTTP/1.1 200")
+
+
+def test_observer_db_unavailable_fails_closed(nx):
+    class Down:
+        def run(self, *a, **k):
+            from observer.db import DbError
+            raise DbError("down")
+    assert grant_authorizer(Down(), wait=0.1)(str(uuid.uuid4()), HOST) == "OBSERVER_CANNOT_AUTHORIZE"
+
+
+def test_tagged_connect_is_limited_to_port_443_by_default(nx, tmp_path):
+    p = EgressProxy(Recorder(nx["obs"]), "127.0.0.1", 0, lambda h: {HOST: ["127.0.0.1"]}.get(h, []), [],
+                    authorize=grant_authorizer(nx["obs"].db, wait=0.5))
+    p._is_public = lambda ip: True
+    try:
+        assert p.tagged_ports == frozenset({443})
+        eid = claim_grant(nx)                                                    # fully authorised execution...
+        s, resp = connect(p, "127.0.0.1", nx["port"], xexec=eid)                 # ...but to a non-443 port
+        assert resp.startswith(b"HTTP/1.1 403") and refused(nx) == ["PORT_NOT_AUTHORISED"] and opened(nx) == []
+    finally:
+        p.close()
+    with pytest.raises(ValueError):
+        EgressProxy(Recorder(nx["obs"]), "127.0.0.1", 0, lambda h: [], tagged_ports=())
+
+
+def test_max_age_follows_the_gate_grant_ttl(monkeypatch):
+    import observer.egress as eg
+    assert eg.GRANT_MAX_AGE == 120.0
+    for v, want in (("60", 60.0), ("0", 120.0), ("-5", 120.0), ("abc", 120.0), ("1e9", 120.0)):
+        monkeypatch.setenv("QYRIX_GRANT_TTL_SECONDS", v)
+        assert eg._grant_ttl() == want
 
 
 # ---------------- positive controls ----------------
