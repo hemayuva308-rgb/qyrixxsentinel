@@ -455,6 +455,9 @@ class EgressProxy:
             up.close()
 
 
+_HEX = frozenset("0123456789abcdef")
+
+
 class DnsMonitor:
     """Bounded DNS anomaly MONITORING (detection, not prevention): per-source query rate, unusually long names / labels,
     high-entropy labels, and bursts of distinct subdomains under one zone. Alerts are ledger records (throttled per
@@ -475,6 +478,22 @@ class DnsMonitor:
         from collections import Counter
         n = len(label)
         return -sum(c / n * math.log2(c / n) for c in Counter(label).values()) if n else 0.0
+
+    @classmethod
+    def encoded_like(cls, label: str) -> bool:
+        """Alphabet-aware: a fixed Shannon threshold misses hex (max 4 bits/char; random 32-char hex is ~3.7), so hex
+        is judged against its own ceiling; digit-mixed labels without hyphens (base32/base64-ish) at 3.3; anything else
+        (plain words, hyphenated infrastructure names) only at 4.2. Heuristic, alerts only."""
+        l = label.lower()
+        if len(l) < 20:
+            return False
+        import math
+        h, d = cls.entropy(l), sum(ch.isdigit() for ch in l) / len(l)
+        if set(l) <= _HEX and 0 < d < 1:
+            return h >= 0.8 * math.log2(min(len(l), 16))
+        if "-" not in l and 0.1 <= d < 1:
+            return h >= 3.3
+        return h >= 4.2
 
     def _lru(self, d, key, default, cap):
         v = d.pop(key, None)
@@ -509,7 +528,7 @@ class DnsMonitor:
                     found.append("DNS_SUBDOMAIN_BURST")
         if len(qname) > 100 or any(len(l) > 50 for l in labels):
             found.append("DNS_LONG_NAME")
-        if any(len(l) >= 20 and self.entropy(l) >= 3.8 for l in labels):
+        if any(self.encoded_like(l) for l in labels):
             found.append("DNS_HIGH_ENTROPY_LABEL")
         for code in found:
             self.rec.count(code)

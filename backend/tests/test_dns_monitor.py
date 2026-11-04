@@ -55,3 +55,18 @@ def test_memory_is_bounded():
     for i in range(500):
         m.observe("10.0.%d.%d" % (i // 250, i % 250), "x%d.zone%d.example" % (i, i))
     assert len(m.sources) <= 10 and len(m.zones) <= 10 and all(len(z) <= 6 for z in m.zones.values())
+
+
+def test_encoded_label_detection_is_reliable_and_spares_infrastructure_names():
+    import base64
+    import random
+    from observer.egress import DnsMonitor
+    rnd = random.Random(7)                                               # deterministic samples
+    hexes = ["%032x" % rnd.getrandbits(128) for _ in range(500)]
+    b32 = [base64.b32encode(rnd.getrandbits(120).to_bytes(15, "big")).decode().lower() for _ in range(500)]
+    assert sum(map(DnsMonitor.encoded_like, hexes)) >= 490              # was ~6% with a fixed 3.8-bit threshold
+    assert sum(map(DnsMonitor.encoded_like, b32)) >= 400
+    for benign in ("subscriptionmanagement", "internationalization", "customer-dashboard-eu-west",
+                   "production-database-replica", "authentication-service-v2", "ec2-203-0-113-25-compute",
+                   "build-2026-11-04-release", "api-gateway-prod-us-east-1", "12345678901234567890"):
+        assert not DnsMonitor.encoded_like(benign), benign
