@@ -5,10 +5,14 @@ params_digest-bound grant is redeemed (`POST /api/v1/tools/redeem`). Nothing her
 
 Kept dependency-light on purpose (httpx only): the proxy runs as its own process and must not import the server."""
 import json
+import re
+import uuid
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit
 
 import httpx
+
+CORR = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")             # correlation / task id shape (same as the Gate's Action fields)
 
 # Gate tool types an adapter may target. A MIRROR of gateway.TOOLS used only to label the coverage report; the Gate stays
 # the authority (tests/test_adapter_core.py fails if the two ever diverge). Anything else is refused by R8_UNSUPPORTED_TOOL.
@@ -103,3 +107,50 @@ _LIMITS = ["gate_evaluated means the call is sent to the Gate, which can still B
            "the Gate sees the destination argument and the arguments text; other arguments are digest-bound but not interpreted",
            "tools the server adds after the observed tools/list are not reflected until the next tools/list",
            "covers only traffic through this proxy: a client that launches the MCP server directly bypasses it"]
+
+
+def blocked_result(mid: Any, text: str, meta: Dict) -> Dict:
+    """The MCP tool result a client gets when a call is NOT forwarded (isError=true, decision in _meta.qyrix)."""
+    return {"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": text}], "isError": True,
+                                                    "_meta": {"qyrix": meta}}}
+
+
+class ToolCallGuard:
+    """Transport-neutral per-call authorization for MCP `tools/call` (shared by the stdio and HTTP proxies).
+    authorize() does evaluate -> redeem and returns what the TRANSPORT must do; it never forwards anything itself and
+    holds no policy: only the Gate's verdict plus a successfully redeemed single-use grant yields kind == "forward".
+      {"kind": "invalid"}                                  -> JSON-RPC -32602, nothing evaluated
+      {"kind": "blocked", "text", "meta"}                  -> do NOT forward (BLOCK, Gate error, refused redemption)
+      {"kind": "forward", "corr", "execution_id", "meta"}  -> grant redeemed: forward the ORIGINAL message, exactly once"""
+
+    def __init__(self, sentinel: "SentinelClient", mapping: Dict[str, Dict], task_id: Optional[str] = None):
+        self.sentinel, self.mapping, self.task_id = sentinel, mapping, task_id
+
+    def authorize(self, params: Any) -> Dict:
+        params = params if isinstance(params, dict) else {}
+        name, args = params.get("name"), params.get("arguments", {})
+        if not isinstance(name, str) or not isinstance(args, dict):
+            return {"kind": "invalid"}
+        meta_in = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        supplied = meta_in.get("qyrix/correlation_id")
+        corr = supplied if isinstance(supplied, str) and CORR.match(supplied) else "mcp_" + uuid.uuid4().hex
+        task = meta_in.get("qyrix/task_id", self.task_id)       # caller-provided context, NOT a verified task identity
+        if task is not None and not (isinstance(task, str) and CORR.match(task)):
+            return {"kind": "blocked", "text": "Blocked by Qyrix Sentinel: invalid task_id. correlation_id=%s" % corr,
+                    "meta": {"verdict": "BLOCK", "rules": ["TASK_ID_INVALID"], "correlation_id": corr}}
+        try:
+            d = self.sentinel.evaluate(to_action(name, args, self.mapping, corr, task))
+        except SentinelError as e:
+            return {"kind": "blocked", "text": "Blocked by Qyrix Sentinel (fail closed): %s. correlation_id=%s" % (e, corr),
+                    "meta": {"verdict": "BLOCK", "rules": ["PROXY_FAIL_CLOSED"], "reason": str(e), "correlation_id": corr}}
+        meta = {"verdict": d.get("verdict"), "rules": d.get("rules", []), "correlation_id": corr, "task_id": task,
+                "gate_evaluation_id": d.get("gate_evaluation_id"), "decision_proof_hash": (d.get("proof") or {}).get("hash")}
+        if d.get("verdict") != "ALLOW" or not d.get("grant_id"):
+            return {"kind": "blocked", "text": "Blocked by Qyrix Sentinel before execution: %s. correlation_id=%s"
+                    % (", ".join(d.get("rules") or ["UNKNOWN"]), corr), "meta": {**meta, "verdict": "BLOCK"}}
+        try:
+            red = self.sentinel.redeem(d, corr, task)           # single-use, exact params_digest, same agent + task
+        except SentinelError as e:
+            return {"kind": "blocked", "text": "Blocked by Qyrix Sentinel: grant redemption refused (%s). correlation_id=%s" % (e, corr),
+                    "meta": {**meta, "verdict": "BLOCK", "rules": ["GRANT_" + str(e)[:40]]}}
+        return {"kind": "forward", "corr": corr, "execution_id": (red or {}).get("execution_id"), "meta": meta}

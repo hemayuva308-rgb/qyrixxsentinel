@@ -34,7 +34,7 @@ from typing import Any, Callable, Dict, List, Optional
 from app import adapter_core as core
 
 INTEGRATION = "mcp_proxy"
-_CORR = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+_CORR = core.CORR
 TIMEOUT_CODE = -32001
 
 
@@ -185,46 +185,22 @@ class McpProxy:
         self.stats["blocked_calls"] += 1
         if meta.get("correlation_id"):
             self._report(meta["correlation_id"], False)
-        self._emit({"jsonrpc": "2.0", "id": mid, "result": {
-            "content": [{"type": "text", "text": text}], "isError": True, "_meta": {"qyrix": meta}}})
+        self._emit(core.blocked_result(mid, text, meta))
 
     def _intercept(self, msg: Dict) -> None:
-        mid, params = msg["id"], msg.get("params") or {}
-        name, args = params.get("name"), params.get("arguments", {})
-        if not isinstance(name, str) or not isinstance(args, dict):
+        mid = msg["id"]
+        out = core.ToolCallGuard(self.sentinel, self.mapping, self.task_id).authorize(msg.get("params"))
+        if out["kind"] == "invalid":
             self._emit({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "Invalid params"}})
             return
-        meta_in = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
-        supplied = meta_in.get("qyrix/correlation_id")
-        corr = supplied if isinstance(supplied, str) and _CORR.match(supplied) else "mcp_" + uuid.uuid4().hex
-        task = meta_in.get("qyrix/task_id", self.task_id)       # caller-provided context, NOT a verified task identity
-        if task is not None and not (isinstance(task, str) and _CORR.match(task)):
-            self._blocked(mid, "Blocked by Qyrix Sentinel: invalid task_id. correlation_id=%s" % corr,
-                          {"verdict": "BLOCK", "rules": ["TASK_ID_INVALID"], "correlation_id": corr})
-            return
-        try:
-            d = self.sentinel.evaluate(to_action(name, args, self.mapping, corr, task))
-        except SentinelError as e:
-            self._blocked(mid, "Blocked by Qyrix Sentinel (fail closed): %s. correlation_id=%s" % (e, corr),
-                          {"verdict": "BLOCK", "rules": ["PROXY_FAIL_CLOSED"], "reason": str(e), "correlation_id": corr})
-            return
-        meta = {"verdict": d.get("verdict"), "rules": d.get("rules", []), "correlation_id": corr, "task_id": task,
-                "gate_evaluation_id": d.get("gate_evaluation_id"), "decision_proof_hash": (d.get("proof") or {}).get("hash")}
-        if d.get("verdict") != "ALLOW" or not d.get("grant_id"):
-            self._blocked(mid, "Blocked by Qyrix Sentinel before execution: %s. correlation_id=%s"
-                          % (", ".join(d.get("rules") or ["UNKNOWN"]), corr), {**meta, "verdict": "BLOCK"})
-            return
-        try:
-            red = self.sentinel.redeem(d, corr, task)          # single-use, exact params_digest, same agent + task
-        except SentinelError as e:
-            self._blocked(mid, "Blocked by Qyrix Sentinel: grant redemption refused (%s). correlation_id=%s" % (e, corr),
-                          {**meta, "verdict": "BLOCK", "rules": ["GRANT_" + str(e)[:40]]})
+        if out["kind"] == "blocked":
+            self._blocked(mid, out["text"], out["meta"])
             return
         with self._lock:
             self._pending[mid] = time.time() + self.timeout
         self.stats["forwarded_calls"] += 1
         self._to_server(msg)                                   # the exact arguments that were evaluated
-        self._report(corr, True, (red or {}).get("execution_id"))
+        self._report(out["corr"], True, out["execution_id"])
 
 
 class McpProxyCanaryAdapter:
