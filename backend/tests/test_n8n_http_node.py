@@ -395,6 +395,7 @@ class EvilGate:
         self.port = free_port()
         self.srv = ThreadingHTTPServer(("127.0.0.1", self.port), H)
         sc = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        sc.minimum_version = ssl.TLSVersion.TLSv1_2
         sc.load_cert_chain(str(tmp / "evil-srv" / "evil.crt"), str(tmp / "evil-srv" / "evil.key"))
         self.srv.socket = sc.wrap_socket(self.srv.socket, server_side=True)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
