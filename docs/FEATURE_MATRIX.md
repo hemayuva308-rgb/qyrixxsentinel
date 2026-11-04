@@ -49,6 +49,7 @@ Test counts are from the last full run, recorded in the commit that changed this
 | Secret ownership/modes (10001/0400), offline CA/root/attestor keys | Built (hardening) | `ops/observer/secure_secrets.py` |
 | Signed, offline-verifiable real-host evidence (commit, image, compose hashes, signed ledger rows) | Built (hardening) | `ops/observer/verify_evidence.py --trusted-root`, `evidence/c5/validation.json`; INTEGRITY_VERIFIED only against an externally supplied root pin; proves integrity, not runner identity |
 | DNS anomaly alerts (rate, subdomain burst, long / high-entropy labels) | Built (detection only) | `observer/egress.py::DnsMonitor`; **DNS tunnelling not prevented** |
+| MCP proxy over Streamable HTTP (MCP 2025-11-25, POST-only subset): authenticated listener, session isolation, Gate + single-use grants before any upstream call, duplicate/unknown-outcome protection | Built (hand-written fixture only) | `app/mcp_http_proxy.py`, `app/adapter_core.py`, `tests/test_mcp_http_proxy.py`, `docs/MCP_HTTP_PROXY.md`; **no third-party interop test, not exactly-once, direct upstream access bypasses it** |
 | Real-traffic reconciliation (ALLOW claims ↔ observed tunnels as verdicts) | Not built | — |
 | Real-traffic (ALLOW) reconciliation by execution id; policy bundle; anchoring/export (C6, C7) | Proposed | |
 

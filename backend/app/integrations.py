@@ -46,6 +46,11 @@ REGISTRY: List[Integration] = [
                 Capabilities(True, True, True, True, ["http"]),
                 "tools/call interception -> Gate -> grant redemption -> forward. Tested against a stdio MCP server "
                 "fixture; compatibility with third-party MCP servers is only claimed where tests show it."),
+    Integration("mcp_proxy_http", "MCP proxy (Streamable HTTP, POST-only subset, MCP 2025-11-25)", "BUILT",
+                Capabilities(True, True, True, True, ["http"]),
+                "Authenticated HTTP listener -> Gate -> grant redemption -> upstream POST. Tested against a hand-written "
+                "HTTP MCP fixture only; no third-party server interoperability is claimed. Direct access to the upstream "
+                "bypasses it. See docs/MCP_HTTP_PROXY.md."),
     Integration("honest_fixture", "Honest adapter (controlled test fixture)", "TEST_FIXTURE",
                 Capabilities(True, True, True, True, ["http", "file"]),
                 "Respects every decision. Used for the CEV side-by-side demonstration."),
