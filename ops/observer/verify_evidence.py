@@ -28,7 +28,7 @@ import json
 import os
 import subprocess  # nosec B404 - fixed git argv
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "backend"))
 from observer import crypto, ledger  # noqa: E402
@@ -103,7 +103,8 @@ def chain_checks(rows, m, doc) -> dict:
     refs = {r["ref"]: _ts(r["recorded_at"]) for r in rows}
     ids = list(doc.get("attestation_ids", [])) + list(doc.get("reconciliation_ids", []))
     try:
-        lo, hi = _ts(doc["started_at"]), _ts(doc["finished_at"])
+        slack = timedelta(seconds=2)                                           # run timestamps have 1 s resolution
+        lo, hi = _ts(doc["started_at"]) - slack, _ts(doc["finished_at"]) + slack
         res["reported_ids_signed_within_run_window"] = bool(ids) and len(ids) == len(set(ids)) and all(
             i in refs and lo <= refs[i] <= hi for i in ids)
     except (KeyError, ValueError):

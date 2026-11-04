@@ -190,3 +190,11 @@ def test_unsigned_edit_of_document_fails():
     d = copy.deepcopy(doc())
     d["tenant"] = "other"
     assert verify_evidence.verify(d)["evidence_signed_by_manifest_attestor_key"] is False
+
+
+def test_run_window_tolerates_one_second_timestamp_resolution():
+    rows = chain(base_rows(), times=[T0 % i for i in (1, 2, 3, 4, 5, 6, 7)])
+    d = doc(rows, finished_at="2026-11-04T03:00:06Z")                 # last row is 03:00:07.0: inside the 2 s slack
+    assert verify_evidence.verify(d)["reported_ids_signed_within_run_window"] is True
+    d = doc(rows, finished_at="2026-11-04T03:00:03Z")                 # 4 s early: outside
+    assert verify_evidence.verify(d)["reported_ids_signed_within_run_window"] is False
