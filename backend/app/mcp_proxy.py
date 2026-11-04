@@ -16,6 +16,7 @@ Every JSON-RPC message is passed through unchanged EXCEPT `tools/call`, which is
 Configuration: QYRIX_URL (default http://127.0.0.1:8000), QYRIX_TOKEN or QYRIX_TOKEN_FILE (an agent/integrator API key).
 tools.json: {"tools": {"fetch": {"tool": "http", "method": "GET", "dest_arg": "url"},
                        "read_file": {"tool": "file.read", "dest_arg": "path"}}}
+Coverage: `--coverage-file` / McpProxy.coverage() report which offered tools reach the Gate and which are default-denied (advisory).
 Scope: stdio transport only. Tested against a stdio MCP server fixture (tests/fixtures/mcp_server_fixture.py);
 compatibility with other MCP servers is claimed only where a test demonstrates it.
 """
@@ -29,77 +30,26 @@ import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlsplit
 
-import httpx
+from app import adapter_core as core
 
 INTEGRATION = "mcp_proxy"
 _CORR = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 TIMEOUT_CODE = -32001
 
 
-def canonical(o: Any) -> str:
-    return json.dumps(o, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+class SentinelClient(core.SentinelClient):
+    """The shared client, scoped to this integration on redemption (`X-Qyrix-Integration: mcp_proxy`)."""
+    INTEGRATION = INTEGRATION
 
 
-class SentinelError(Exception):
-    pass
-
-
-class SentinelClient:
-    """Talks to the Sentinel REST API. `http` may be any httpx.Client (tests pass FastAPI's TestClient)."""
-
-    def __init__(self, base_url: Optional[str] = None, token: Optional[str] = None, http: Optional[httpx.Client] = None,
-                 timeout: float = 10.0):
-        if http is None:
-            base_url = (base_url or "http://127.0.0.1:8000").rstrip("/")
-            host = urlsplit(base_url).hostname or ""
-            http = httpx.Client(base_url=base_url, timeout=timeout, headers={"Authorization": "Bearer " + (token or "")},
-                                trust_env=host not in ("127.0.0.1", "localhost", "::1"))
-        self.http = http
-
-    def _post(self, path: str, body: Dict, headers: Optional[Dict] = None) -> Dict:
-        try:
-            r = self.http.post(path, json=body, headers=headers or {})
-        except Exception as e:
-            raise SentinelError("SENTINEL_UNREACHABLE") from e
-        try:
-            j = r.json()
-        except ValueError:
-            j = {}
-        if r.status_code != 200:
-            raise SentinelError(str(j.get("detail") or "HTTP_%d" % r.status_code)[:120])
-        return j
-
-    def evaluate(self, action: Dict) -> Dict:
-        return self._post("/api/v1/sentinel/gate/evaluate", action)
-
-    def redeem(self, d: Dict, correlation_id: str, task_id: Optional[str] = None) -> Dict:
-        body = {"gate_evaluation_id": d["gate_evaluation_id"], "grant_id": d["grant_id"],
-                "params_digest": d["params_digest"], "correlation_id": correlation_id}
-        if task_id:
-            body["task_id"] = task_id                          # must equal the task the grant was issued for
-        return self._post("/api/v1/tools/redeem", body, {"X-Qyrix-Integration": INTEGRATION})
-
-
-def to_action(name: str, args: Dict, mapping: Dict[str, Dict], correlation_id: str, task_id: Optional[str] = None) -> Dict:
-    m = mapping.get(name)
-    if m is None:
-        a = {"tool": ("mcp:" + name)[:32], "method": "CALL", "dest": "", "data": canonical(args)[:65536],
-             "correlation_id": correlation_id}
-    else:
-        dest = args.get(m.get("dest_arg", ""), "")
-        a = {"tool": m["tool"], "method": str(m.get("method", "GET"))[:10], "dest": dest if isinstance(dest, str) else "",
-             "data": canonical(args)[:65536], "correlation_id": correlation_id}
-    if task_id:
-        a["task_id"] = task_id
-    return a
+canonical, SentinelError, to_action = core.canonical, core.SentinelError, core.to_action   # public names kept for importers
 
 
 class McpProxy:
     def __init__(self, sentinel: SentinelClient, server_cmd: List[str], mapping: Dict[str, Dict],
                  write_client: Callable[[Dict], None], timeout: float = 30.0, env: Optional[Dict[str, str]] = None,
-                 task_id: Optional[str] = None, reporter=None):
+                 task_id: Optional[str] = None, reporter=None, coverage_path: Optional[str] = None):
         self.sentinel, self.cmd, self.mapping, self.write_client = sentinel, server_cmd, mapping, write_client
         self.reporter = reporter                              # optional observer_feed.AdapterReporter (E1 self-reports)
         if task_id is not None and not _CORR.match(task_id):
@@ -112,6 +62,9 @@ class McpProxy:
         self._wlock = threading.Lock()
         self.proc: Optional[subprocess.Popen] = None
         self.stats = {"forwarded_calls": 0, "blocked_calls": 0, "timeouts": 0}
+        self.coverage_path = coverage_path
+        self._list_ids: set = set()                           # ids of tools/list requests we forwarded
+        self._offered: Optional[set] = None                   # tool names the server has offered (None = not seen yet)
 
     # ---- lifecycle ----
     def start(self) -> "McpProxy":
@@ -153,7 +106,38 @@ class McpProxy:
                         self._pending.pop(mid)
                     elif self._late(mid):
                         continue                               # response to a call we already timed out: drop it
+                self._observe_tools(mid, msg)
             self._emit(msg)
+
+    def _observe_tools(self, mid, msg: Dict) -> None:
+        """Record tool NAMES from a tools/list response for the coverage report. Read-only: the message is relayed
+        unchanged and nothing here influences any decision."""
+        with self._lock:
+            if not isinstance(mid, (str, int)) or mid not in self._list_ids:
+                return
+            self._list_ids.discard(mid)
+            tools = (msg.get("result") or {}).get("tools") if isinstance(msg.get("result"), dict) else None
+            if not isinstance(tools, list):
+                return
+            names = {t.get("name") for t in tools[:5000] if isinstance(t, dict) and isinstance(t.get("name"), str)}
+            self._offered = (self._offered or set()) | names     # accumulates across pages
+        self._write_coverage()
+
+    def coverage(self) -> Dict:
+        with self._lock:
+            offered = None if self._offered is None else set(self._offered)
+        return core.coverage_report(self.mapping, offered)
+
+    def _write_coverage(self) -> None:
+        if not self.coverage_path:
+            return
+        try:
+            tmp = self.coverage_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.coverage(), f, indent=1)
+            os.replace(tmp, self.coverage_path)
+        except OSError:
+            pass                                               # advisory output only: never affects the call path
 
     def _late(self, mid) -> bool:
         return mid in self._timed_out
@@ -184,6 +168,9 @@ class McpProxy:
         if msg.get("method") == "tools/call" and "id" in msg:
             self._intercept(msg)
         else:
+            if msg.get("method") == "tools/list" and isinstance(msg.get("id"), (str, int)):
+                with self._lock:
+                    self._list_ids.add(msg["id"])
             self._to_server(msg)                               # initialize, tools/list, notifications, pings...
 
     def _report(self, corr: str, forwarded: bool, execution_id: Optional[str] = None) -> None:
@@ -277,6 +264,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Qyrix Sentinel MCP proxy (stdio)")
     ap.add_argument("--config", help="tools.json mapping MCP tools to Sentinel actions (unmapped => blocked)")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--coverage-file", help="write the tool coverage report (JSON, tool names only) here after tools/list")
     ap.add_argument("--task-id", help="default task context for every call (caller-provided, not verified)")
     ap.add_argument("server", nargs=argparse.REMAINDER, help="-- <MCP server command>")
     a = ap.parse_args(argv)
@@ -299,7 +287,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     from app.observer_feed import AdapterReporter
     proxy = McpProxy(SentinelClient(os.getenv("QYRIX_URL"), token), cmd, load_mapping(a.config), write, a.timeout,
-                     task_id=a.task_id, reporter=AdapterReporter.from_env()).start()
+                     task_id=a.task_id, reporter=AdapterReporter.from_env(), coverage_path=a.coverage_file).start()
     try:
         for line in sys.stdin:
             line = line.strip()
