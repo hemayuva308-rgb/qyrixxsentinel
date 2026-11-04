@@ -20,3 +20,9 @@ a86b0dcd1a7c3f8a5c4375b2bf78e72f02bac82d:evidence/benchmark-case-texts.json:gene
 # signed, so it cannot be redacted without invalidating evidence_sig. Verified with gitleaks 8.30.0 (git history, --redact).
 c6ea13fad040fcbe8663b685a3bf192fe1c55a81:evidence/c5/validation.json:generic-api-key:573
 c6ea13fad040fcbe8663b685a3bf192fe1c55a81:evidence/c5/validation.json:generic-api-key:755
+# n8n Phase 1A test fixture: a SYNTHETIC, deliberately percent-encoded GitHub-token-shaped string used by
+# test_strict_argument_allow_list_rejects_before_the_gate to prove the n8n node refuses non-canonical URL encoding
+# (expected result URL_NOT_CANONICAL). It is not a credential: its GitHub checksum is invalid and its body is a generated
+# pattern. Reviewed by hand; the test now builds the value at runtime so no such literal remains in source.
+# This fingerprint is exact (commit:file:rule:line); any other finding still fails CI.
+e14dd330f7f88a0c2e83d9005491fe64c224f77f:backend/tests/test_n8n_http_node.py:github-pat:555

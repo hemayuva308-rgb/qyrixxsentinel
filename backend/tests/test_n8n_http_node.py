@@ -256,6 +256,11 @@ def chain(kind=None):
 
 CTX = {"correlationId": "n8n:wfT:1:nodeT:0", "taskId": "n8n-wf-wfT"}
 
+# Audit A-2 fixture: a SYNTHETIC token-shaped value whose "_" is percent-encoded (%5F) - a non-canonical spelling of the same URL.
+# It is assembled from fragments at runtime so no secret-shaped literal sits in the source (secret scanners flag one even though
+# it is fake: its GitHub checksum is invalid). The assembled value is byte-for-byte the one the test always used.
+SYNTHETIC_ENCODED_TOKEN_URL = "https://github.com/x?k=" + "ghp" + "%5F" + "".join(("aB3dE5gH7jK9", "mN1pQ3sT5vW7", "yZ9bC1dE3fG5"))
+
 
 # ---------------- exact binding ----------------
 def test_js_digest_equals_gate_params_digest():
@@ -555,7 +560,7 @@ def test_destination_tampered_after_authorization_is_refused(lab):
     ({"url": "https://github.com/", "method": "GET", "body": [1, 2]}, "BODY_NOT_SUPPORTED"),
     ({"url": "https://github.com/", "method": "GET", "lineage": "abc"}, "ARGS_INVALID"),
     # audit A-2 (node side): non-canonical percent-encoding can hide a secret from a literal-text scanner
-    ({"url": "https://github.com/x?k=ghp%5FaB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5", "method": "GET"}, "URL_NOT_CANONICAL"),
+    ({"url": SYNTHETIC_ENCODED_TOKEN_URL, "method": "GET"}, "URL_NOT_CANONICAL"),
     ({"url": "https://github.com/x?%74oken=abc", "method": "GET"}, "URL_NOT_CANONICAL"),
     ({"url": "https://github.com/%61pi_key/x", "method": "GET"}, "URL_NOT_CANONICAL"),
     ({"url": "https://github.com/x?a=%7E", "method": "GET"}, "URL_NOT_CANONICAL"),
