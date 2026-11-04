@@ -165,7 +165,7 @@ three ways:
   - `docker start` → restored;
   - watcher restart → it attests again first.
 - **Negative control, DOCKER-USER rules removed:** the timer-style attestation was INVALID (`docker_user_rules_v4/v6`) and coverage was revoked immediately; the older success was **not** reused. With the rules restored it was VALID again.
-- **Verify offline:** `python3 ops/observer/verify_evidence.py evidence/c5/validation.json --repo .` (§1.6).
+- **Verify offline:** `python3 ops/observer/verify_evidence.py evidence/c5/validation.json --trusted-root <root key from an independent channel> --repo .` (§1.7).
 
 ### 1.6 C5 hardening sprint (N2, attestor automation, secrets, signed evidence, DNS monitoring)
 | Item | Code | Tests / evidence |
@@ -178,7 +178,7 @@ three ways:
 
 ### 1.7 C6 (minimal): offline ledger verification
 `ops/observer/verify_evidence.py` now requires the **complete** observer ledger from genesis (evidence format 3) and checks:
-- **Continuity:** contiguous `n`, links, hashes, and observer signatures by keys of the root-signed manifest valid at the recorded time (`observer.ledger.verify`).
+- **Continuity:** contiguous `n`, links, hashes, and observer signatures by keys of a manifest signed by the **pinned** root key, valid at the recorded time (`observer.ledger.verify`).
 - **Order:** `recorded_at` is non-decreasing.
 - **Replay:** no duplicated row hash, signature, accepted event id, `(producer, epoch, tenant, seq)`, or reconciliation / attestation id.
 - **Sequence:** heartbeat `hb_seq` strictly increases per `(producer, epoch)`; a producer's epoch never goes back.
@@ -186,15 +186,20 @@ three ways:
 - **Verdict support:** every `ENFORCEMENT_VERIFIED` row has no reasons and canary scope, and the latest coverage record before it is a valid attestation.
 - **Run window:** reported ids are signed ledger rows recorded inside the run window (2 s slack).
 
-Output says `INTEGRITY_VERIFIED` or `INTEGRITY_FAILED` and never an enforcement verdict. **Integrity is not occurrence:** valid signatures prove the records are authentic and unaltered, not that the underlying events happened (E0/E1 are backend claims). Tests: `test_c6_verifier.py` (22, each check on a properly signed synthetic chain).
-**Not C6-complete:** no signed policy bundle or stateless-rule divergence check (the original C6 slice in the design doc), no per-event re-derivation from raw telemetry, and the verifier trusts the exporter's database dump (a root-key holder could forge a self-consistent chain).
+**Trust anchor (`--trusted-root`).** The evidence file carries its own `root_public_key`, so by itself it is **self-asserted**: a forger does not need to steal any existing key, they generate a root, a manifest, observer and attestor keys, and a self-consistent signed ledger, and every internal check passes. The verifier therefore takes the root key from outside the file:
+- Wrong pin → `INTEGRITY_FAILED` (the document's manifest and ledger are not trusted at all); exit 1.
+- No pin → at best `INTEGRITY_SELF_CONSISTENT_UNPINNED`, never `INTEGRITY_VERIFIED`; exit 1.
+- Correct pin → `INTEGRITY_VERIFIED` (all other checks must also pass); exit 0.
+- **Provisioning:** `validate_c5.py` prints the run's root public key on the console and writes it to `$QYRIX_OFFLINE_DIR/trusted_root.pub`, **not** into the repository. The operator must record it through a channel independent of the evidence file (signed release note, ticket, separate secure store) and pass it with `--trusted-root`. The pin in the committed `evidence/c5/validation.json` is only as independent as the channel it was recorded in; a pin copied out of the same file proves nothing.
+Output says `INTEGRITY_VERIFIED`, `INTEGRITY_SELF_CONSISTENT_UNPINNED` or `INTEGRITY_FAILED`, and never an enforcement verdict. **Integrity is not occurrence:** valid signatures prove the records are authentic and unaltered, not that the underlying events happened (E0/E1 are backend claims). Tests: `test_c6_verifier.py` (22, each check on a properly signed synthetic chain).
+**Not C6-complete:** no signed policy bundle or stateless-rule divergence check (the original C6 slice in the design doc), no per-event re-derivation from raw telemetry, and the verifier trusts the exporter's database dump (whoever controls the pinned root key can forge a consistent chain; with no pin, anyone can).
 
 **C5 limitations (honest):**
 - **IPv6 was not exercised.** This host's kernel has **no IPv6 at all**. The attestor recorded `ipv6_mode: absent_from_kernel`, and the image override resets the backend IPv6 sysctl, which cannot exist here. The sysctl path and the ip6tables rules' effect on real IPv6 traffic are **untested**; the ip6tables rules were installed and checked.
 - **Real ALLOW traffic to the internet was not exercised in the topology** (no internet egress here). An authorised ALLOW was exercised end to end at socket level, against a local TLS origin (`test_observer_n2_pg.py`).
 - **Canary runs only.** **Real-traffic reconciliation is NOT built.** N2 binds egress to a signed ALLOW grant claim, but there is no verdict over real ALLOW traffic.
 - **The systemd units were verified with `systemd-analyze verify`, but not run under a real systemd** (the container has none). The validation started the watcher as a process, and ran the timer's command directly.
-- **Evidence identity:** the root key is generated per validation run. A valid signature proves integrity and consistency since signing, **not who ran it**.
+- **Evidence identity:** the root key is generated per validation run. A valid signature chained to a **pinned** root proves integrity and consistency since signing, **not who ran it**; an unpinned result proves nothing about origin.
 - **Single host; boundary D shared.** A host or Docker-daemon compromise defeats everything here. The GATE key lives in the backend (see N2 above).
 - **DNS tunnelling is detected heuristically, not prevented.** DoT/DoH and raw DNS over TCP from the backend have no route. ICMP is not probed.
 - **The proxy does not terminate TLS.** HTTPS is verified at host scope only (§7.6).
@@ -274,7 +279,7 @@ that were never delivered are reported as `stale_epoch_unsent` and are never re-
 2. **Permissions:** run `python3 ops/observer/secure_secrets.py apply`, then `check`. `check` exits non-zero on any wrong owner or mode, or on offline key material found under `./secrets`.
 3. **Egress rules:** `sh ops/observer/docker-user.sh apply`. Leave `OBSERVER_EGRESS_UNTAGGED_ALLOW` empty unless an untagged destination is genuinely required; each entry is a hostname, CONNECT-only and SNI-bound.
 4. **Attestation:** write `/etc/qyrix/attestor.json` (same keys as `validate_c5.py` writes). Install `ops/observer/systemd/*` to `/etc/systemd/system/`, then run `systemctl enable --now qyrix-attestor.timer qyrix-attestor-watch.service`.
-5. **Validation:** run `python3 ops/observer/validate_c5.py --image <tag>`, then `python3 ops/observer/verify_evidence.py evidence/c5/validation.json --repo .`.
+5. **Validation:** run `python3 ops/observer/validate_c5.py --image <tag>`, then `python3 ops/observer/verify_evidence.py evidence/c5/validation.json --trusted-root <root key recorded by the operator> --repo .`.
 
 ## 4. Resolutions where the design was silent or inconsistent (no new security decision)
 1. **CONNECT header vs. SSRF pinning (approved by the owner before coding).**

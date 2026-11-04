@@ -1,9 +1,14 @@
 """Offline verifier for signed C5 validation evidence, extended with the C6 ledger checks:
 
-    python3 ops/observer/verify_evidence.py evidence/c5/validation.json [--repo .]
+    python3 ops/observer/verify_evidence.py evidence/c5/validation.json --trusted-root <base64 root key> [--repo .]
+
+TRUST ANCHOR: the evidence carries its own root_public_key, so on its own it proves nothing: anyone can generate a root,
+a manifest and a self-consistent signed ledger. --trusted-root must come from a channel INDEPENDENT of the evidence file
+(e.g. recorded by the operator who ran validate_c5.py, which prints it and writes it to the offline directory). A wrong
+pin => INTEGRITY_FAILED; no pin => at best INTEGRITY_SELF_CONSISTENT_UNPINNED (non-zero exit). Never INTEGRITY_VERIFIED.
 
 Checks, with nothing but the file (and optionally the git repository):
-  1. the observer key manifest is signed by the root public key recorded in the evidence (trusted manifest);
+  1. the supplied trusted root equals the evidence's root key, and the observer key manifest is signed by it;
   2. the evidence document is signed by the attestor key listed in that manifest;
   3. C6 chain: the exported observer ledger is COMPLETE from genesis, contiguous, every row re-hashes, links to its
      predecessor and is signed by a manifest observer key valid at its recorded time (observer.ledger.verify);
@@ -112,14 +117,20 @@ def chain_checks(rows, m, doc) -> dict:
     return res
 
 
-def verify(doc: dict, repo=None) -> dict:
+def verify(doc: dict, repo=None, trusted_root=None) -> dict:
+    """trusted_root: base64 root public key obtained OUT OF BAND (never from `doc`). Without it the document's own
+    root_public_key is self-asserted, so the result can never be INTEGRITY_VERIFIED."""
     res = {}
-    try:
-        m = Manifest(doc["manifest"], doc["root_public_key"])                  # raises unless root-signed
-        res["manifest_signed_by_root"] = True
-    except Exception:  # nosec B110 - any manifest problem is a failure, reported below
-        res["manifest_signed_by_root"] = False
-        m = None
+    pin = (trusted_root or "").strip()
+    pinned = bool(pin) and pin == str(doc.get("root_public_key", "")).strip()
+    res["trusted_root_pinned"] = pinned                       # False when absent OR different from the document's root
+    m = None
+    if not pin or pinned:                                     # a wrong pin: the document's manifest is not trusted at all
+        try:
+            m = Manifest(doc["manifest"], doc["root_public_key"])              # raises unless root-signed
+        except Exception:  # nosec B110 - any manifest problem is a failure, reported below
+            m = None
+    res["manifest_signed_by_root"] = m is not None
     body = {k: v for k, v in doc.items() if k != "evidence_sig"}
     sig = doc.get("evidence_sig") or {}
     k = m.attestor_keys.get(sig.get("key_id")) if m else None
@@ -140,11 +151,19 @@ def verify(doc: dict, repo=None) -> dict:
     res["tracked_tree_clean_at_validation"] = doc.get("git_dirty") is False
     failure = res.pop("ledger_chain_failure", None)
     res["valid"] = all(v is True for v in res.values())
-    res["integrity"] = "INTEGRITY_VERIFIED" if res["valid"] else "INTEGRITY_FAILED"
+    rest_ok = all(v is True for k, v in res.items() if k not in ("trusted_root_pinned", "valid"))
+    if res["valid"]:
+        res["integrity"] = "INTEGRITY_VERIFIED"
+    elif rest_ok and not pin:                                 # internally consistent, but the trust anchor is the file's own
+        res["integrity"] = "INTEGRITY_SELF_CONSISTENT_UNPINNED"
+    else:
+        res["integrity"] = "INTEGRITY_FAILED"
     if failure:
         res["ledger_chain_failure"] = failure
     res["occurrence"] = OCCURRENCE
-    res["limitation"] = "root key generated per run: proves integrity and consistency, not the identity of the runner"
+    res["limitation"] = ("the root key is generated per run; INTEGRITY_VERIFIED means only that the evidence chains to the "
+                         "root key you supplied via --trusted-root, which must come from a channel independent of this "
+                         "file. It does not identify who ran the validation.")
     return res
 
 
@@ -152,8 +171,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("file")
     ap.add_argument("--repo")
+    ap.add_argument("--trusted-root", help="base64 root public key from an independent channel (NOT from the evidence file)")
     a = ap.parse_args(argv)
-    r = verify(json.load(open(a.file)), a.repo)
+    r = verify(json.load(open(a.file)), a.repo, a.trusted_root)
     print(json.dumps(r, indent=1))
     return 0 if r["valid"] else 1
 

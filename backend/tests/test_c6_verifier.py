@@ -17,6 +17,13 @@ from observer.manifest import sign_manifest  # noqa: E402
 
 KEYS = {n: crypto.generate() for n in ("root", "obs", "att", "other")}
 T0 = "2026-11-04T03:00:%02d+00:00"
+ROOT_PIN = crypto.describe(KEYS["root"])[1]                 # stands in for the independently provisioned pin
+
+
+def V(d, **kw):
+    return verify_evidence.verify(d, trusted_root=kw.pop("trusted_root", ROOT_PIN), **kw)
+
+
 A1, A2, R1 = "a1111111-0000-0000-0000-000000000001", "a2222222-0000-0000-0000-000000000002", "r1111111-0000-0000-0000-000000000003"
 
 
@@ -67,13 +74,13 @@ def sign(d):
 
 
 def fails(d, check):
-    r = verify_evidence.verify(d)
+    r = V(d)
     assert r[check] is False and r["valid"] is False and r["integrity"] == "INTEGRITY_FAILED", r
     return r
 
 
 def test_valid_chain_is_integrity_verified_and_never_a_verdict():
-    r = verify_evidence.verify(doc())
+    r = V(doc())
     assert r["valid"] and r["integrity"] == "INTEGRITY_VERIFIED", r
     assert "ENFORCEMENT_VERIFIED" not in r["integrity"] and "do not prove" in r["occurrence"]
 
@@ -113,7 +120,7 @@ def test_row_signed_by_key_outside_trusted_manifest_fails():
 def test_untrusted_manifest_fails_everything():
     d = doc()
     d["root_public_key"] = crypto.describe(KEYS["other"])[1]
-    r = verify_evidence.verify(sign(d))
+    r = V(sign(d))
     assert r["manifest_signed_by_root"] is False and r["valid"] is False
 
 
@@ -189,12 +196,54 @@ def test_old_evidence_replayed_into_new_run_window_fails():
 def test_unsigned_edit_of_document_fails():
     d = copy.deepcopy(doc())
     d["tenant"] = "other"
-    assert verify_evidence.verify(d)["evidence_signed_by_manifest_attestor_key"] is False
+    assert V(d)["evidence_signed_by_manifest_attestor_key"] is False
 
 
 def test_run_window_tolerates_one_second_timestamp_resolution():
     rows = chain(base_rows(), times=[T0 % i for i in (1, 2, 3, 4, 5, 6, 7)])
     d = doc(rows, finished_at="2026-11-04T03:00:06Z")                 # last row is 03:00:07.0: inside the 2 s slack
-    assert verify_evidence.verify(d)["reported_ids_signed_within_run_window"] is True
+    assert V(d)["reported_ids_signed_within_run_window"] is True
     d = doc(rows, finished_at="2026-11-04T03:00:03Z")                 # 4 s early: outside
-    assert verify_evidence.verify(d)["reported_ids_signed_within_run_window"] is False
+    assert V(d)["reported_ids_signed_within_run_window"] is False
+
+
+def _forged_with_own_root():
+    """An attacker needs no stolen key: fresh root, observer and attestor keys, self-consistent signed ledger."""
+    global KEYS
+    saved = dict(KEYS)
+    try:
+        KEYS.update({n: crypto.generate() for n in ("root", "obs", "att")})
+        return doc(), crypto.describe(KEYS["root"])[1]
+    finally:
+        KEYS.clear()
+        KEYS.update(saved)
+
+
+def test_forged_self_signed_document_without_pin_is_never_verified():
+    d, _ = _forged_with_own_root()
+    r = verify_evidence.verify(d)
+    assert r["integrity"] == "INTEGRITY_SELF_CONSISTENT_UNPINNED" and r["valid"] is False and r["trusted_root_pinned"] is False
+
+
+def test_forged_document_is_trusted_only_if_its_root_is_independently_configured():
+    d, forged_root = _forged_with_own_root()
+    assert verify_evidence.verify(d, trusted_root=ROOT_PIN)["integrity"] == "INTEGRITY_FAILED"      # operator's real pin
+    assert verify_evidence.verify(d, trusted_root=forged_root)["integrity"] == "INTEGRITY_VERIFIED"  # only if THEY pinned it
+
+
+def test_correct_pin_verifies_and_wrong_pin_fails_and_pin_is_never_read_from_the_document():
+    d = doc()
+    assert verify_evidence.verify(d, trusted_root=ROOT_PIN)["integrity"] == "INTEGRITY_VERIFIED"
+    wrong = verify_evidence.verify(d, trusted_root=crypto.describe(KEYS["other"])[1])
+    assert wrong["integrity"] == "INTEGRITY_FAILED" and wrong["manifest_signed_by_root"] is False \
+        and wrong["ledger_chain_complete_linked_signed"] is False and wrong["valid"] is False
+    assert verify_evidence.verify(d)["integrity"] != "INTEGRITY_VERIFIED"
+
+
+def test_cli_exit_codes(tmp_path):
+    f = tmp_path / "e.json"
+    import json
+    f.write_text(json.dumps(doc()))
+    assert verify_evidence.main([str(f)]) == 1
+    assert verify_evidence.main([str(f), "--trusted-root", crypto.describe(KEYS["other"])[1]]) == 1
+    assert verify_evidence.main([str(f), "--trusted-root", ROOT_PIN]) == 0

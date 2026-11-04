@@ -47,7 +47,7 @@ Test counts are from the last full run, recorded in the commit that changed this
 | N2: proxy denies untagged egress; execution id must carry a signed, unquarantined, unrevoked ALLOW grant claim for the host; one use | Built (hardening) | `observer/egress.py`, O005, `tests/test_observer_n2_pg.py`; real-host 403s; **a compromised backend with the GATE key can still self-grant** |
 | Attestor automation: systemd timer + docker-events watcher, signed FAILED attestation on absence, latest attestation decides | Built (hardening) | `observer/attestor_watch.py`, `ops/observer/systemd/`, `tests/test_attestor_automation.py`; **units not run under a real systemd** |
 | Secret ownership/modes (10001/0400), offline CA/root/attestor keys | Built (hardening) | `ops/observer/secure_secrets.py` |
-| Signed, offline-verifiable real-host evidence (commit, image, compose hashes, signed ledger rows) | Built (hardening) | `ops/observer/verify_evidence.py`, `evidence/c5/validation.json`; proves integrity, not runner identity |
+| Signed, offline-verifiable real-host evidence (commit, image, compose hashes, signed ledger rows) | Built (hardening) | `ops/observer/verify_evidence.py --trusted-root`, `evidence/c5/validation.json`; INTEGRITY_VERIFIED only against an externally supplied root pin; proves integrity, not runner identity |
 | DNS anomaly alerts (rate, subdomain burst, long / high-entropy labels) | Built (detection only) | `observer/egress.py::DnsMonitor`; **DNS tunnelling not prevented** |
 | Real-traffic reconciliation (ALLOW claims ↔ observed tunnels as verdicts) | Not built | — |
 | Real-traffic (ALLOW) reconciliation by execution id; policy bundle; anchoring/export (C6, C7) | Proposed | |

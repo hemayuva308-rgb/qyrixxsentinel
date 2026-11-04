@@ -23,9 +23,11 @@ def doc():
     return d
 
 
-def test_committed_evidence_verifies(doc):
-    r = verify_evidence.verify(doc)
-    assert r["valid"], r
+def test_committed_evidence_verifies_only_with_an_external_pin(doc):
+    # The pin here is read from the file only because this is a test; in operation it comes from an independent channel.
+    pin = doc["root_public_key"]
+    assert verify_evidence.verify(doc, trusted_root=pin)["valid"]
+    assert verify_evidence.verify(doc)["integrity"] == "INTEGRITY_SELF_CONSISTENT_UNPINNED"
 
 
 @pytest.mark.parametrize("tamper", [
@@ -39,7 +41,7 @@ def test_tampered_evidence_is_rejected(doc, tamper):
     d = copy.deepcopy(doc)
     tamper(d)
     try:
-        r = verify_evidence.verify(d)
+        r = verify_evidence.verify(d, trusted_root=doc["root_public_key"])
     except Exception:  # manifest signature failure raises
         return
     assert r["valid"] is False

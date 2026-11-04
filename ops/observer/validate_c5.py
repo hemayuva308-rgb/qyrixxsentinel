@@ -343,6 +343,10 @@ def main():
         if not keep:
             compose(env, "down", "-v", "--remove-orphans", check=False)
             sh(["sh", "ops/observer/docker-user.sh", "undo"], check=False)
+    root_pub = result.get("root_public_key")
+    if root_pub:                                              # the independent trust anchor for verify_evidence.py
+        write(os.path.join(OFF, "trusted_root.pub"), root_pub + "\n", 0o444)
+        print("TRUSTED ROOT (record this out of band; verify with --trusted-root): " + root_pub)
     print("ALL PASSED" if result["all_passed"] else "SOME STEPS FAILED")
     return 0 if result["all_passed"] else 1
 
