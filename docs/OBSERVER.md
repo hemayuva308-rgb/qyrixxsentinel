@@ -176,6 +176,19 @@ three ways:
 | **Signed evidence.** The evidence contains:<br>• commit and a clean-tree flag;<br>• image IDs;<br>• compose-file sha256 values;<br>• attestation and reconciliation IDs;<br>• timestamps and steps;<br>• secret-permission results;<br>• the observer-signed ledger rows for those IDs;<br>• the root-signed manifest and root public key.<br>It is signed by the manifest's attestor key | `validate_c5.py`, `ops/observer/verify_evidence.py` | 5 tamper negative controls (edited step, other commit, edited ledger row, invented attestation, swapped manifest) |
 | **DNS monitoring (alerts only).** Per-source query-rate alerts (more than 300/min), more than 60 unique subdomains per zone per minute, long names or labels, and high-entropy labels. Bounded LRU state; the probe zone is exempt. **This is detection, not DNS-tunnelling prevention**: queries are still relayed | `observer/egress.py::DnsMonitor` | `test_dns_monitor.py` (5) |
 
+### 1.7 C6 (minimal): offline ledger verification
+`ops/observer/verify_evidence.py` now requires the **complete** observer ledger from genesis (evidence format 3) and checks:
+- **Continuity:** contiguous `n`, links, hashes, and observer signatures by keys of the root-signed manifest valid at the recorded time (`observer.ledger.verify`).
+- **Order:** `recorded_at` is non-decreasing.
+- **Replay:** no duplicated row hash, signature, accepted event id, `(producer, epoch, tenant, seq)`, or reconciliation / attestation id.
+- **Sequence:** heartbeat `hb_seq` strictly increases per `(producer, epoch)`; a producer's epoch never goes back.
+- **Tenant / epoch:** reconciliations belong to the evidence tenant; no event is accepted on a stream after its quarantine.
+- **Verdict support:** every `ENFORCEMENT_VERIFIED` row has no reasons and canary scope, and the latest coverage record before it is a valid attestation.
+- **Run window:** reported ids are signed ledger rows recorded inside the run window (2 s slack).
+
+Output says `INTEGRITY_VERIFIED` or `INTEGRITY_FAILED` and never an enforcement verdict. **Integrity is not occurrence:** valid signatures prove the records are authentic and unaltered, not that the underlying events happened (E0/E1 are backend claims). Tests: `test_c6_verifier.py` (22, each check on a properly signed synthetic chain).
+**Not C6-complete:** no signed policy bundle or stateless-rule divergence check (the original C6 slice in the design doc), no per-event re-derivation from raw telemetry, and the verifier trusts the exporter's database dump (a root-key holder could forge a self-consistent chain).
+
 **C5 limitations (honest):**
 - **IPv6 was not exercised.** This host's kernel has **no IPv6 at all**. The attestor recorded `ipv6_mode: absent_from_kernel`, and the image override resets the backend IPv6 sysctl, which cannot exist here. The sysctl path and the ip6tables rules' effect on real IPv6 traffic are **untested**; the ip6tables rules were installed and checked.
 - **Real ALLOW traffic to the internet was not exercised in the topology** (no internet egress here). An authorised ALLOW was exercised end to end at socket level, against a local TLS origin (`test_observer_n2_pg.py`).
