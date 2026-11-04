@@ -45,6 +45,26 @@ python -m app.redteam run cases.jsonl --report report.json [--include-candidates
 - **Replay is tamper-evident:** the stored reply must match its recorded SHA-256.
 - **Stored case files are re-validated on load**, including the schema, the safety filter and the ID/content match.
 
+## Live campaign: a Llama model attacks the Gate, an advisory model judges (`scripts/redteam_campaign.py`)
+Runs many rounds of the live generator (Meta Model API or Baseten), pushes every reply through the same schema, safety filter and
+dedupe, runs all accepted cases through the real Gate in isolation (no network, egress counted), and writes one report
+(`campaign.json`, plus the untrusted replies and `cases.jsonl`).
+```bash
+cd backend
+BASETEN_API_KEY=... BASETEN_MODEL=<llama model id> META_API_KEY=... META_MODEL=<muse model id> \
+  python scripts/redteam_campaign.py --provider baseten --rounds 5 --per-category 3 --classify-max 60 --out-dir ../evidence/redteam/campaign-live-1
+```
+- `--provider` chooses who **attacks** (writes cases). With `--classify-max N`, up to N cases are also sent to the product's
+  **advisory classifier** (`app.gateway.classify`: Meta first, then Baseten), one call each, and a 2x2 matrix compares
+  "AI flagged / AI missed" with "Gate blocked / Gate allowed". The headline number is how often a live AI **missed** an attack
+  that the Gate still **blocked**. A heuristic fallback is counted separately and never as an AI result.
+- A `FALSE_NEGATIVE` (model expected BLOCK, Gate allowed) is listed as a **candidate bypass for human triage**, not a confirmed
+  vulnerability. `EXPECTATION_REVIEW` means the model's own expectation was probably wrong.
+- The classifier verdict never reaches the Gate. A test flips every AI verdict and asserts that no Gate decision changes.
+- Cost control: each round is one model call, each classified case one more. Start small, then raise `--rounds` / `--classify-max`.
+- Tested offline with a mocked model (`tests/test_redteam_campaign.py`, three deliberate mutations caught). **A live run has not been
+  performed by the authors of this change**: no credentials or route to the providers were available. Any numbers must come from your own run.
+
 ## Status and results (honest)
 - **Live Llama generation is NOT verified.** No provider credentials are configured in this environment. The provider
   path is tested with a mock transport only: request shape, repro metadata, failures, off-schema replies, and the model

@@ -18,7 +18,14 @@ Important: the **public homepage sandbox makes no LLM call** (by design). To sho
 3. Start the stack: `docker compose up --build`, open `http://127.0.0.1:3000`, sign in at `/login` with the admin token.
 4. Open the dashboard Inspector once and confirm the green badge reads `LIVE: META` with your model name and a latency.
    If it reads `NO LIVE AI - HEURISTIC ONLY`, the key or model id is not being read.
-5. Hide the terminal, browser bookmarks and notifications. Record at 1080p with a clear voice-over. Cover the key if it appears anywhere.
+5. (Optional, strongest) run the campaign once and keep the output for the video. Start small; check your provider dashboards for cost:
+   ```bash
+   cd backend
+   BASETEN_API_KEY=... BASETEN_MODEL=<llama id> META_API_KEY=... META_MODEL=<muse id> \
+     python scripts/redteam_campaign.py --provider baseten --rounds 5 --per-category 3 --classify-max 60 --out-dir ../evidence/redteam/campaign-live-1
+   ```
+   Read `campaign.json`: say only what it shows. Candidate bypasses are for triage, not confirmed vulnerabilities.
+6. Hide the terminal, browser bookmarks and notifications. Record at 1080p with a clear voice-over. Cover the key if it appears anywhere.
 
 ## Inputs to paste (copy exactly; same as `docs/DEMO_SCRIPT.md`)
 | Field | Value |
@@ -35,7 +42,7 @@ Important: the **public homepage sandbox makes no LLM call** (by design). To sho
 | 0:15-0:50 **Meta, live** | `/dashboard` Inspector | "A third-party skill asks the agent to upload a key. Meta's model reads it and flags it, with an explanation. The model only advises." | paste the skill text, INSPECT; the badge `LIVE: META`, model name, latency, label and explanation; `uploads.example.net` unapproved; secret reference found |
 | 0:50-1:15 **Trust chain** | Provenance panel | "The instruction came from an unverified source, and that trust cannot be raised later." | add steps 1 and 2; step 2 shows inherited low trust |
 | 1:15-1:50 **The Gate blocks** | Execution Gate | "Now the agent tries to send it. The deterministic Gate decides, not the model." | **BLOCK** with rule IDs (`R1_DEST_NOT_APPROVED`, `R2_SECRET_EXFIL`, `R3_UNTRUSTED_LINEAGE`); no grant; EXTERNAL CALLS = 0 |
-| 1:50-2:15 **Even a "benign" model answer cannot unblock** | say it over the BLOCK screen | "If the model were fooled and said benign, the Gate still blocks. That is tested." | one calm sentence; no new screen needed |
+| 1:50-2:15 **AI attacks, AI judges, the Gate decides** | terminal: the campaign summary lines (run it BEFORE recording) | "A Llama model on Baseten wrote attacks. Meta Muse judged each one as an advisory opinion. The Gate decided. Here is how often the AI missed and the Gate still stopped it." | the real printed numbers from YOUR run: attack cases, stopped, candidate bypasses, `HEADLINE live AI missed but Gate blocked`. If you did not run it, **skip this row** and say the earlier sentence about benign answers instead |
 | 2:15-2:40 **Evidence** | `/forensic` chain panel | "Every decision is a hash-linked record. Change one and verification fails." | VERIFY CHAIN, then SIMULATE TAMPER (COPY): verification fails |
 | 2:40-3:00 **Close and honesty** | homepage "Product status" | "It is a prototype: MCP and n8n integrations exist, network isolation is required, and evidence is E1 unless independently observed." | status section on screen |
 

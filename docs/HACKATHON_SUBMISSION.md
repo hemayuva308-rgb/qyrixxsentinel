@@ -21,6 +21,8 @@ AI agents call real tools, and a poisoned README can make them leak secrets. Qyr
 - **Verifiable evidence:** hash-linked records verified offline, plus a separate Observer service. We keep adapter self-reports (E1) apart from independently observed evidence (E3), and missing evidence is reported as INCONCLUSIVE.
 - **Integrations (prototypes):** MCP over stdio and Streamable HTTP, and an n8n custom HTTP node.
 
+**New: AI attacks, AI judges, the Gate decides.** A Llama model hosted on Baseten writes adversarial test cases; every reply is treated as untrusted (strict schema, safety filter, dedupe) and run through the real Gate in an isolated sandbox with zero network egress. A Meta Muse model acts as an advisory judge on the same cases, and we report a 2x2 of "AI flagged or missed" against "Gate blocked or allowed". Result of our live run: `<fill from campaign.json: attack cases N, stopped M, candidate bypasses K, live AI missed but Gate blocked J>`. `<If you did not run it live, delete this whole paragraph; the code and offline tests exist, but we must not claim results we do not have.>`
+
 **How we use Meta.** The Meta Model API classifies untrusted instruction text and explains why it looks risky. Only redacted, bounded text is sent, off-schema model output is discarded, and if the API is unreachable the system falls back to a deterministic heuristic and says so on screen. The model is advisory only; authorization is deterministic policy, by design.
 
 **What we verified.** Backend suite 1116 passed (1 skipped), including real PostgreSQL suites; a 10-case benchmark with 7/7 attacks blocked and 0 false positives on safe tasks; mutation checks that deliberately break the n8n node and egress-proxy security checks and confirm the tests catch each one; independent audit findings listed openly in the repository.
@@ -31,6 +33,8 @@ AI agents call real tools, and a poisoned README can make them leak secrets. Qyr
 
 ## Meta models used
 - Meta Model API, model id: `<fill: the exact value you set in META_MODEL and verified with scripts/verify_meta.py>`, used for advisory classification and explanation of untrusted instruction text.
+- Attack generator (only if you ran the campaign): a Llama model on Baseten, model id `<fill>`.
+- Advisory judge (only if you ran it): a Meta Muse model, model id `<fill>`.
 - List **only** models you actually called. Do not list others.
 
 ## Links

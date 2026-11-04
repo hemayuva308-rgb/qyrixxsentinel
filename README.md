@@ -24,6 +24,11 @@ Configure with `META_API_KEY` and `META_MODEL` (your exact model id); check it w
 The authenticated Inspector shows `LIVE: META`, the model and the latency. The public sandbox on the homepage deliberately
 makes **no** LLM call.
 
+**New: AI attacks, AI judges, the Gate decides.** `backend/scripts/redteam_campaign.py` has a Llama model (Baseten or Meta) write attack
+cases, runs them through the real Gate in isolation, and optionally asks the advisory classifier (e.g. a Meta Muse model) about each
+case, then reports how often the AI missed an attack that the Gate still stopped (`docs/REDTEAM.md`). The pipeline is tested offline;
+the live results in `evidence/redteam/` exist only if someone ran it with real credentials.
+
 **What is real and tested.** Backend suite: 1116 passed, 1 skipped (last full run; CI runs it on every push, including real PostgreSQL
 suites). 10-case benchmark: 7/7 attacks blocked, 0/3 false positives. Integrations: MCP stdio and Streamable HTTP proxies, and an n8n custom
 HTTP node (all prototypes). Independent audit findings are listed openly in `docs/N8N_INTEGRATION.md`.
