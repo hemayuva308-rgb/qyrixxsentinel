@@ -27,6 +27,33 @@ Important: the **public homepage sandbox makes no LLM call** (by design). To sho
    Read `campaign.json`: say only what it shows. Candidate bypasses are for triage, not confirmed vulnerabilities.
 6. Hide the terminal, browser bookmarks and notifications. Record at 1080p with a clear voice-over. Cover the key if it appears anywhere.
 
+## Recommended flow: a REAL Meta model is the agent (terminal first)
+`backend/scripts/meta_agent_demo.py` lets a real model act as the agent. It reads a poisoned README, proposes tool calls, and the real Gate
+evaluates each one in isolation (nothing is executed, no network). The model is a deliberately **trusting** agent: that is the threat Sentinel exists for.
+```bash
+cd backend
+META_API_KEY=... META_MODEL=<your model id> python scripts/meta_agent_demo.py --out-dir ../evidence/agent-demo/run-1
+```
+It prints three numbered lines per scenario: `[1]` the advisory Inspector (`LIVE` plus model and latency, or `NO LIVE AI - heuristic`), `[2]` the agent's proposed tool call(s),
+and `[3]` the Gate's decision with rule IDs. The last line is one of: `INJECTION_FOLLOWED_GATE_BLOCKED`, `INJECTION_RESISTED_BY_MODEL`,
+`BYPASS_CANDIDATE_INJECTED_CALL_ALLOWED`, `SAFE_TASK_ALLOWED`. **Say exactly what it printed.**
+
+| Time | Screen | Say (short) |
+|---|---|---|
+| 0:00-0:15 | homepage hero | Hook: "What stops a poisoned README from making an AI agent leak your keys? Detection is not prevention." |
+| 0:15-1:10 | terminal, `--scenario poisoned` | "A real Meta model is the agent. It reads a third-party README, and decides on its own what to call. Meta also flags the document, as an advisory. Now the Gate decides." Point at `[2]` then `[3]`: BLOCK, rule IDs, no grant. |
+| 1:10-1:30 | terminal, `--scenario safe` | "A legitimate task goes through: ALLOW and a single-use grant." |
+| 1:30-2:00 | terminal or `campaign.json` | Only if you ran the campaign: the real numbers. Otherwise skip and extend the evidence step. |
+| 2:00-2:30 | `/forensic` | VERIFY CHAIN, then SIMULATE TAMPER (COPY): verification fails. |
+| 2:30-2:50 | homepage "Product status" | "Prototype: MCP and n8n integrations exist, network isolation is required, and adapter evidence is E1 unless independently observed." |
+| 2:50-3:00 | repo URL on screen | Close. |
+
+**If the model resists the injection** (`INJECTION_RESISTED_BY_MODEL`): that is a real result, not a failure. Do **not** fake it. Say it: "this model ignored the injection, so the Gate was not
+needed on this path; here is what happens when a model does follow it", then run again, try the other provider or model, or switch to the dashboard flow below where the attack is entered by hand.
+A single run on a single prompt is an illustration, not a benchmark.
+
+## Dashboard flow (alternative, hand-entered attack)
+
 ## Inputs to paste (copy exactly; same as `docs/DEMO_SCRIPT.md`)
 | Field | Value |
 |---|---|
