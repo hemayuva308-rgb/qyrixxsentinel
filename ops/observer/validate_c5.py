@@ -38,7 +38,7 @@ PROJECT = "qyrixxsentinel"
 COMPOSE = ["docker-compose.yml", "docker-compose.observer.yml"]
 NETS = ",".join("%s_%s" % (PROJECT, n) for n in ("internal", "observer_ingest", "egress_in"))
 OBS = "https://172.30.1.2:9443"
-result = {"format": "qyrix-c5-validation-evidence/2", "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+result = {"format": "qyrix-c5-validation-evidence/3", "tenant": "default", "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
           "steps": [], "attestation_ids": [], "reconciliation_ids": []}
 
 
@@ -196,17 +196,16 @@ print(json.dumps({
 '''
 
 
-LEDGER_SQL = ("SELECT coalesce(json_agg(row_to_json(l) ORDER BY n), '[]') FROM ledger l "
-              "WHERE ref = ANY(string_to_array(:'refs', ','));\n")
+LEDGER_SQL = "SELECT coalesce(json_agg(row_to_json(l) ORDER BY n), '[]') FROM ledger l;\n"  # WHOLE chain (C6)
 
 
 def ledger_rows(env, refs):
-    """Signed ledger rows for the given ids; refs travel as a psql variable (quoted by psql), never as SQL text."""
+    """The complete signed ledger from genesis (C6: continuity is only provable over the whole chain)."""
     refs = [r for r in refs if r and all(ch in "0123456789abcdef-" for ch in r)]
     if not refs:
         return []
     out = compose(env, "exec", "-T", "observer-db", "psql", "-U", "observer_admin", "-d", "observer", "-tA",
-                  "-v", "refs=" + ",".join(refs), stdin=LEDGER_SQL).stdout
+                  stdin=LEDGER_SQL).stdout
     return json.loads(out.strip() or "[]")
 
 
