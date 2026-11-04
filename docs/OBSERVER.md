@@ -149,23 +149,42 @@ three ways:
 | ENFORCEMENT_VERIFIED (canary runs) only when **every** condition holds:<br>• clean signed BLOCK claim;<br>• submitted;<br>• positive control passed;<br>• no epoch boundary;<br>• closing heartbeat reached;<br>• no quarantine;<br>• no token observation at any time;<br>• no tunnel to the canary host;<br>• a valid attestation covering the whole window for the claimed container.<br>O004 enforces E3 + no reasons + attestation id for every VERIFIED row | §11 | `observer/reconcile.py`, O004 | exhaustive truth table (more than 200,000 cases); real topology run |
 | Compose overlay: backend only on `internal: true` networks with fixed bridge names; `dns:` points to the observer; IPv6 sysctls; `cap_drop: ALL`; observer API bound to its ingest address with mTLS; nothing published. DOCKER-USER script (IPv4 + IPv6) | §7.1, §15 | `docker-compose.observer.yml`, `ops/observer/docker-user.sh` | real topology run |
 
-**Real Docker validation** (`sudo python3 ops/observer/validate_c5.py`; result in `evidence/c5/validation.json`, all steps passed):
+**Real Docker validation** (`sudo python3 ops/observer/validate_c5.py --image qyrix-backend:c5`; signed result in `evidence/c5/validation.json`, 20/20 steps passed, produced at commit `a031622` on a clean tree):
+- **Image:** the **production image** (`backend/Dockerfile` contents, uid 10001), not a harness. The harness override was removed. On this sandbox the base layer had to be rebuilt with the sandbox's TLS-intercepting proxy CA in order to reach PyPI; the application layers are identical to `backend/Dockerfile`.
+- **Secrets:** ownership and modes were applied and checked (§1.6). No CA, root or attestor key exists under `./secrets` or inside any application container (checked with `find /` in both containers).
 - **Direct egress fails:** from inside the running backend container, 1.1.1.1:443, the observer's external address and 8.8.8.8:53 all fail with `ENETUNREACH`.
+- **N2 from inside the real backend container**, through the real proxy: an untagged CONNECT to an IP, an untagged CONNECT to a hostname, a tagged CONNECT with an unknown execution id, and a plain-HTTP POST exfiltration attempt. All four got **403**, and the observer recorded each refusal with its reason.
 - **Delivery:** backend heartbeats reach the observer over mTLS.
-- **Attestation:** the host attestation was judged VALID, with all 12 attestor checks and all 8 observer checks true.
-- **Live VERIFIED:** a live P2 canary went through the real backend. The Gate really BLOCKed it, and the signed claim arrived through the outbox → **ENFORCEMENT_VERIFIED** (E3, attestation id recorded).
-- **Negative control, extra `egress` attachment:** the attestation was INVALID. The attestor checks failed **and** the observer saw the direct-path tokens arrive. A canary run under that state was INCONCLUSIVE (`COVERAGE_UNATTESTED`).
-- **Negative control, DOCKER-USER rules removed:** the attestation was INVALID. With the rules restored it was VALID again.
+- **Watcher, no manual attestation:**
+  - attests on start;
+  - live P2 canary → **ENFORCEMENT_VERIFIED** (E3);
+  - extra `egress` attachment → coverage revoked in about 4 s; a canary run in that state → INCONCLUSIVE (`COVERAGE_UNATTESTED`);
+  - disconnect → VALID again;
+  - `docker restart` → a new VALID attestation;
+  - `docker stop` → a signed **FAILED** attestation revokes coverage;
+  - `docker start` → restored;
+  - watcher restart → it attests again first.
+- **Negative control, DOCKER-USER rules removed:** the timer-style attestation was INVALID (`docker_user_rules_v4/v6`) and coverage was revoked immediately; the older success was **not** reused. With the rules restored it was VALID again.
+- **Verify offline:** `python3 ops/observer/verify_evidence.py evidence/c5/validation.json --repo .` (§1.6).
+
+### 1.6 C5 hardening sprint (N2, attestor automation, secrets, signed evidence, DNS monitoring)
+| Item | Code | Tests / evidence |
+|---|---|---|
+| **N2: untagged egress denied by default.** A request without `X-Qyrix-Execution` is refused (`UNTAGGED_EGRESS_DENIED`). The only exceptions are observer-owned CIDRs and an explicit operator allow-list (`OBSERVER_EGRESS_UNTAGGED_ALLOW`, empty by default), which is **CONNECT-only and SNI-bound to the listed hostname**. A tagged request needs a **signed grant claim** for that execution id: the stream must not be quarantined, there must be exactly one tenant, the decision must be ALLOW and not reversed, the destination host must match, and the claim must be at most 300 s old (the observer waits up to 5 s for the outbox). One use per id is enforced by the existing unique index. **This is authorisation by the backend's own signed claim**: it closes untagged and forged-id egress, but a fully compromised backend holding the GATE key can still sign itself a grant (§5) | `observer/egress.py`, O005 (`observer_grant_lookup`, SECURITY DEFINER, owner `observer_lookup`) | `test_observer_n2_pg.py` (15 tests, including a real-Gate ALLOW through the real `HttpAdapter`); real-host N2 step |
+| **Attestor automation.** A systemd timer (10 min, plus 1 min after boot, `Persistent`) and a `docker events` watcher. The watcher re-attests, debounced, on start, restart, stop, die, kill, OOM, pause, update, rename or destroy of the backend, and on any connect or disconnect on its networks or `egress`. A missing or stopped container produces a **signed FAILED attestation**. The latest attestation decides; expiry means no coverage, which means INCONCLUSIVE. The watcher attests on start and exits when the event stream ends (`Restart=always`) | `observer/attestor.py`, `observer/attestor_watch.py`, `ops/observer/systemd/` | `test_attestor_automation.py` (12); real-host watcher steps |
+| **Secrets.** Application keys and tokens are `10001:10001 0400`. The Postgres/migrator shared password is `70:10001 0440`. Certificates and the manifest are `0444`. CA, root, recovery and attestor keys are kept **offline** (`QYRIX_OFFLINE_DIR`, 0700 root), never under `./secrets` and never mounted. `./secrets` is git-ignored | `ops/observer/secure_secrets.py apply|check` | `test_evidence_and_secrets.py`; real-host step |
+| **Signed evidence.** The evidence contains:<br>• commit and a clean-tree flag;<br>• image IDs;<br>• compose-file sha256 values;<br>• attestation and reconciliation IDs;<br>• timestamps and steps;<br>• secret-permission results;<br>• the observer-signed ledger rows for those IDs;<br>• the root-signed manifest and root public key.<br>It is signed by the manifest's attestor key | `validate_c5.py`, `ops/observer/verify_evidence.py` | 5 tamper negative controls (edited step, other commit, edited ledger row, invented attestation, swapped manifest) |
+| **DNS monitoring (alerts only).** Per-source query-rate alerts (more than 300/min), more than 60 unique subdomains per zone per minute, long names or labels, and high-entropy labels. Bounded LRU state; the probe zone is exempt. **This is detection, not DNS-tunnelling prevention**: queries are still relayed | `observer/egress.py::DnsMonitor` | `test_dns_monitor.py` (5) |
 
 **C5 limitations (honest):**
-- **Harness image.** The validation used the repository code on `python:3.13-slim`, with the host's already-tested dependency set mounted read-only. The **production image build** (`backend/Dockerfile`, now also copying `observer/`) was **not** exercised, because `docker build` cannot reach PyPI in this environment. The containers ran as uid 0 with **all capabilities dropped**.
-- **IPv6 was not exercised.** This host's kernel has **no IPv6 at all**. The attestor recorded `ipv6_mode: absent_from_kernel`, and the harness reset the backend IPv6 sysctl, which cannot exist here. The sysctl path and the ip6tables rules' effect on real IPv6 traffic are **untested**; the ip6tables rules were installed and checked.
-- **ALLOW traffic not exercised in the topology.** Real ALLOWed traffic through the proxy to the internet was not run, because there is no internet egress here. Tunnel and SNI behaviour are covered by socket-level tests.
-- **Canary runs only.** Real-traffic reconciliation (ALLOW claims ↔ tunnels by execution id) is not built.
-- **Single host; boundary D shared.** A host or Docker-daemon compromise defeats everything here.
-- **DoT/DoH and raw DNS over TCP** from the backend are not mediated channels (no route). The attestor checks TCP 853 and direct UDP 53 only; ICMP is not probed.
+- **IPv6 was not exercised.** This host's kernel has **no IPv6 at all**. The attestor recorded `ipv6_mode: absent_from_kernel`, and the image override resets the backend IPv6 sysctl, which cannot exist here. The sysctl path and the ip6tables rules' effect on real IPv6 traffic are **untested**; the ip6tables rules were installed and checked.
+- **Real ALLOW traffic to the internet was not exercised in the topology** (no internet egress here). An authorised ALLOW was exercised end to end at socket level, against a local TLS origin (`test_observer_n2_pg.py`).
+- **Canary runs only.** **Real-traffic reconciliation is NOT built.** N2 binds egress to a signed ALLOW grant claim, but there is no verdict over real ALLOW traffic.
+- **The systemd units were verified with `systemd-analyze verify`, but not run under a real systemd** (the container has none). The validation started the watcher as a process, and ran the timer's command directly.
+- **Evidence identity:** the root key is generated per validation run. A valid signature proves integrity and consistency since signing, **not who ran it**.
+- **Single host; boundary D shared.** A host or Docker-daemon compromise defeats everything here. The GATE key lives in the backend (see N2 above).
+- **DNS tunnelling is detected heuristically, not prevented.** DoT/DoH and raw DNS over TCP from the backend have no route. ICMP is not probed.
 - **The proxy does not terminate TLS.** HTTPS is verified at host scope only (§7.6).
-- **The attestor must be scheduled** (hourly and on container change) by the operator; without a current attestation, nothing is VERIFIED.
 - **Dashboard relay.** The view remains relayed by the backend and is not independent of it.
 
 ## 2. Configuration
@@ -236,6 +255,13 @@ QYRIX_ADMIN_DATABASE_URL=... QYRIX_OBSERVER_URL=... python -m app.recovery obser
 ```
 With `--send`, the epoch bump is committed only after the observer accepts the record. Outbox rows of the old epoch
 that were never delivered are reported as `stale_epoch_unsent` and are never re-sent into the new epoch.
+
+### 3.1 C5 host operations (run as root on the Docker host)
+1. **Offline material:** keep the CA key, root key, recovery key and attestor key/certificate in an offline directory (0700 root, e.g. `/root/.qyrix-offline`). Never put them under `./secrets`, and never mount them. Only `ca.crt` goes into `secrets/observer/ca/`.
+2. **Permissions:** run `python3 ops/observer/secure_secrets.py apply`, then `check`. `check` exits non-zero on any wrong owner or mode, or on offline key material found under `./secrets`.
+3. **Egress rules:** `sh ops/observer/docker-user.sh apply`. Leave `OBSERVER_EGRESS_UNTAGGED_ALLOW` empty unless an untagged destination is genuinely required; each entry is a hostname, CONNECT-only and SNI-bound.
+4. **Attestation:** write `/etc/qyrix/attestor.json` (same keys as `validate_c5.py` writes). Install `ops/observer/systemd/*` to `/etc/systemd/system/`, then run `systemctl enable --now qyrix-attestor.timer qyrix-attestor-watch.service`.
+5. **Validation:** run `python3 ops/observer/validate_c5.py --image <tag>`, then `python3 ops/observer/verify_evidence.py evidence/c5/validation.json --repo .`.
 
 ## 4. Resolutions where the design was silent or inconsistent (no new security decision)
 1. **CONNECT header vs. SSRF pinning (approved by the owner before coding).**

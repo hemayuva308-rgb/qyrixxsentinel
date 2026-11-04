@@ -1,6 +1,6 @@
 # Phase C: Independent Observer Service (architecture design, revision 3, for review; NOT implemented)
 
-Status: **slices C1–C5 implemented** (canary-only reconciliation; ENFORCEMENT_VERIFIED requires a valid C5 coverage attestation; real-host validation in `evidence/c5/validation.json`) (see `docs/OBSERVER.md`, including the resolutions recorded in its §4 and the
+Status: **slices C1–C5 implemented** (canary-only reconciliation; ENFORCEMENT_VERIFIED requires a valid C5 coverage attestation; real-host validation in `evidence/c5/validation.json`; C5 hardening sprint: N2 default-deny egress, attestor automation, secret permissions, signed evidence, DNS anomaly alerts; real-traffic reconciliation not built) (see `docs/OBSERVER.md`, including the resolutions recorded in its §4 and the
 owner's amended C3 decisions in its §1.3; C3 records canary observations and lifecycle only, with no reconciliation
 and test-only sensor reach); **C6–C7 are not implemented** and remain proposals. Every "will" below that belongs to C3–C7 is a proposal for review.
 

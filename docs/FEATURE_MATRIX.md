@@ -1,4 +1,4 @@
-# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-03, updated after Phase C5)
+# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-04, updated after the C5 hardening sprint)
 
 Rule: **Built** = implemented and covered by automated tests in this repository. Anything else is labelled as such.
 Test counts are from the last full run, recorded in the commit that changed this file.
@@ -38,12 +38,18 @@ Test counts are from the last full run, recorded in the commit that changed this
 | MCP compatibility with third-party servers | Proposed | Not yet tested; not claimed |
 | Observer Service C1: signed ingest, root-signed key manifest, gap-free watermarks, heartbeats, epochs/quarantine, window closure, signed hash-chained ledger, separate observer-db (O001) | Built (Phase C1) | `backend/observer/`, `tests/test_observer_unit.py`, `tests/test_observer_pg.py`; claims only (E0/E1): **no sensors, nothing can be ENFORCEMENT_VERIFIED** (`docs/OBSERVER.md`) |
 | Observer feed C2: migration 008, same-transaction outbox, publisher + heartbeats, operator-signed epoch change, `execution_id`, CONNECT execution header (pinned IP), MCP adapter reports | Built (Phase C2) | `app/observer_feed.py`, `tests/test_observer_feed_pg.py`, `tests/test_egress_tagging.py` |
-| Observer deployed as a separate container / host (compose overlay, egress chokepoint, host attestor) | Proposed (C5) | not deployed; no isolation claimed yet |
+| Observer deployed as a separate container (compose overlay, egress chokepoint, host attestor) | Built (C5; single host, boundary D shared) | `docker-compose.observer.yml`; real-host validated on the production image |
 | Observer canaries C3: CSPRNG tokens (hash-only storage), run-before-submission, loopback HTTP + observer-owned file sensors (E3), positive controls, DECISION_MISSING, discrepancies, restart/expiry, O002 | Built (Phase C3; test-only reach) | `observer/canary.py`, `tests/test_observer_canary_pg.py`; **live P2 disabled, no deployed reachability, no verdicts** (`docs/OBSERVER.md` §1.3) |
 | Observer reconciliation C4 (canary runs only): BYPASS / UNAUTHORIZED / INCONCLUSIVE, versioned + signed, tenant-scoped read API, dashboard panel; audit F4/F9/F13 fixes | Built (Phase C4; fixture-tested) | `observer/reconcile.py`, O003, `tests/test_observer_reconcile*.py`, `tests/test_observer_relay_pg.py`; **ENFORCEMENT_VERIFIED not producible until C5** |
 | C5 blockers F1 (refusal flooding), F2 (mTLS), F3 (event loop), F7 (non-finite numbers) | Built (fixed) | `tests/test_observer_c5_blockers.py`, `tests/test_observer_mtls.py` |
 | C5 egress chokepoint: proxy (pinned-IP CONNECT, SNI peek, tunnel lifecycle, execution-id uniqueness), DNS forwarder, coverage sink, compose overlay, DOCKER-USER rules | Built (Phase C5; validated on a real Docker host) | `observer/egress.py`, `docker-compose.observer.yml`, `ops/observer/`, `evidence/c5/validation.json` |
-| Host attestor + signed coverage attestation judged by the observer; ENFORCEMENT_VERIFIED for canary runs | Built (Phase C5; real-host validated, incl. negative controls) | `observer/attestor.py`, `observer/coverage.py`; **production image build and IPv6 path not exercised** (`docs/OBSERVER.md` §1.5) |
+| Host attestor + signed coverage attestation judged by the observer; ENFORCEMENT_VERIFIED for canary runs | Built (Phase C5; real-host validated, incl. negative controls) | `observer/attestor.py`, `observer/coverage.py`; **IPv6 path not exercised** (`docs/OBSERVER.md` §1.5) |
+| N2: proxy denies untagged egress; execution id must carry a signed, unquarantined, unrevoked ALLOW grant claim for the host; one use | Built (hardening) | `observer/egress.py`, O005, `tests/test_observer_n2_pg.py`; real-host 403s; **a compromised backend with the GATE key can still self-grant** |
+| Attestor automation: systemd timer + docker-events watcher, signed FAILED attestation on absence, latest attestation decides | Built (hardening) | `observer/attestor_watch.py`, `ops/observer/systemd/`, `tests/test_attestor_automation.py`; **units not run under a real systemd** |
+| Secret ownership/modes (10001/0400), offline CA/root/attestor keys | Built (hardening) | `ops/observer/secure_secrets.py` |
+| Signed, offline-verifiable real-host evidence (commit, image, compose hashes, signed ledger rows) | Built (hardening) | `ops/observer/verify_evidence.py`, `evidence/c5/validation.json`; proves integrity, not runner identity |
+| DNS anomaly alerts (rate, subdomain burst, long / high-entropy labels) | Built (detection only) | `observer/egress.py::DnsMonitor`; **DNS tunnelling not prevented** |
+| Real-traffic reconciliation (ALLOW claims ↔ observed tunnels as verdicts) | Not built | — |
 | Real-traffic (ALLOW) reconciliation by execution id; policy bundle; anchoring/export (C6, C7) | Proposed | |
 
 ## Still to do (master plan, in priority order)
