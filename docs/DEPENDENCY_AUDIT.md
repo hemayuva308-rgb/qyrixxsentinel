@@ -17,9 +17,15 @@ this repository exercises it; "Analysed" = reasoning only.
 | SBOM | Syft SPDX JSON: source (`evidence/sbom/source.spdx.json`, 90 packages) + both images in CI | — | SBOMs not signed |
 
 ### Accepted scanner exceptions (reviewed by hand — nothing suppressed silently)
-* **gitleaks** (`.gitleaksignore`, 12 exact fingerprints): the synthetic credential `sk-synth-9f3a21c` (also in `evidence/benchmark-case-texts.json`) required by the
+* **gitleaks** (`.gitleaksignore`, 14 exact fingerprints): the synthetic credential `sk-synth-9f3a21c` (also in `evidence/benchmark-case-texts.json`) required by the
   unchanged benchmark case D1 and by tests, `RAWSECRET123` and a fake `sk-live-…` value asserted to be redacted in tests, and the weak-password **denylist** in
   `app/accounts.py`. No real secret. Any new finding fails CI.
+* **gitleaks — C5 evidence digests** (2 of the 14 fingerprints, commit `c6ea13f`, `evidence/c5/validation.json` lines 573 and 755, rule `generic-api-key`):
+  the matches are `token_sha256` fields — **SHA-256 digests of one-use, 128-bit CSPRNG canary tokens** recorded in the observer's signed ledger rows. The observer
+  stores only the digest, never the token, and the digest cannot be reversed to a usable token. They are not raw credentials. The file is signed (`evidence_sig`
+  verified by `ops/observer/verify_evidence.py`), so redacting it would invalidate the evidence; the exact `commit:file:rule:line` fingerprints are therefore
+  accepted instead of any path or rule allowlist. A regenerated evidence file will produce new findings that must be reviewed again. Separately, GitGuardian flags two
+  synthetic payloads in `evidence/redteam/template-v1.cases.jsonl` (not a gitleaks finding; the corpus is covered by a SHA-256 digest and is unchanged).
 * **bandit** (31 LOW, 0 MEDIUM/HIGH after the PR #1 remediation; `evidence/sbom/bandit-report.json`, summary only — no code snippets): B110 try/except/pass — all are best-effort
   side effects after a fail-closed decision (compensations, last-used timestamps, cleanup, base64 probe); B603/B607/B404
   — fixed-argv `openssl` / `pg_dump` calls; B105 — false positives (secret file paths). PR #1 CodeQL / GitGuardian review: `evidence/pr1-security-remediation.md`.

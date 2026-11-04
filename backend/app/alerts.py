@@ -37,6 +37,7 @@ IMMEDIATE = {
     "recovery_code_used": "medium",
     "state_witness_disabled": "high",
     "evidence_reset": "medium",
+    "enforcement_bypass_detected": "critical",   # v1.5 CEV: a BLOCKED action was executed / execution without a grant
 }
 
 

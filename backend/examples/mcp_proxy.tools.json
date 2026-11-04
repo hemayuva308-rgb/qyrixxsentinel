@@ -1,0 +1,7 @@
+{
+  "_comment": "MCP tool name -> Sentinel action. Unmapped tools are evaluated as 'mcp:<name>' and BLOCKED (R8, default deny). The full arguments object is the action payload, so the grant binds the exact arguments.",
+  "tools": {
+    "fetch": {"tool": "http", "method": "GET", "dest_arg": "url"},
+    "read_file": {"tool": "file.read", "dest_arg": "path"}
+  }
+}

@@ -17,5 +17,8 @@ export const RULE_HELP: Record<string, string> = {
   R15_REDIRECT_LIMIT: "More than 5 redirect hops - blocked.",
   R16_REDIRECT_INVALID: "Redirect target does not match the Location returned by the previous gated hop.",
   R17_PERSISTENCE_UNAVAILABLE: "Durable storage (PostgreSQL) is unavailable - nothing can be authorised until it recovers (fail closed).",
+  R19_UNTRUSTED_STATE_CHANGE: "An untrusted or unverified instruction tried to change state (POST/PUT/PATCH/DELETE). An approved destination is not enough: this needs trusted lineage or an explicit human approval of this exact action.",
+  R20_DECEPTIVE_HOSTNAME: "The host name contains invisible characters, look-alike dots, compatibility forms or mixed scripts. Only unambiguous host names are evaluated.",
+  R18_TASK_ID_REQUIRED: "This server requires a task_id on every action (QYRIX_REQUIRE_TASK_ID=1); no grant is issued without task context.",
   LINEAGE_CYCLE_DETECTED: "The lineage graph contains a cycle - provenance cannot be trusted, blocked.",
 };

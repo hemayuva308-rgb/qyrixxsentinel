@@ -23,9 +23,10 @@ import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import observability as obs, adapter as adapters, anchor, netguard, persistence, proof, provenance as prov
+from app import observability as obs, adapter as adapters, anchor, netguard, observer_feed, persistence, proof, provenance as prov
 
 TOOLS = ("http", "file.read")            # `shell` is recognised but never executable in this MVP (R8)
+STATE_CHANGING = frozenset(("POST", "PUT", "PATCH", "DELETE"))   # R19: need trusted lineage or explicit human approval
 SECRET = re.compile(r"(sk-[a-z]+-\w{3,}|api[_-]?key|secret|token|password|aws_\w+|\.env)", re.I)
 # key=value redaction: a deterministic single-pass scanner (see _redact). Every character is visited a bounded number of
 # times, so cost is O(len) for any input. The earlier regexes `(?<![\w.-])[\w.-]+(?=\s*[=:])` and `(\s*[=:]\s*)[^...]+`
@@ -463,13 +464,16 @@ def _sync_proof_mirror(ctx: "GateContext") -> None:
 
 
 def _prove(a: "Action", verdict: str, rules: List[str], dest: Optional[str], lin: List[Dict],
-           ctx: Optional[GateContext] = None, evaluation_id: Optional[str] = None) -> Dict:
+           ctx: Optional[GateContext] = None, evaluation_id: Optional[str] = None, agent_id: Optional[str] = None,
+           pv: Optional[str] = None) -> Dict:
     ctx = ctx or PROD
     return _record(ctx, {"kind": "gate_decision", "gate_evaluation_id": evaluation_id, "tool": a.tool,
                          "method": a.method.upper()[:10], "verdict": verdict, "rule_ids": rules,
                          "blocked_dest": _redact(dest or a.dest or a.cmd) if verdict == "BLOCK" else None,
                          "lineage": ["%s:%s" % (s["id"], s["label"]) for s in lin],
                          "data": "[REDACTED len=%d]" % len(a.data) if a.data else None,
+                         "correlation_id": a.correlation_id or evaluation_id,
+                         "agent_id": agent_id, "task_id": a.task_id, "policy_version": pv,
                          "ext_calls": ctx.ext["calls"]})
 
 
@@ -488,6 +492,75 @@ class Action(BaseModel):
     execute: bool = False                       # v1.1 field: execution moved to POST /api/v1/tools/execute
     approval_id: Optional[str] = Field(None, max_length=64)
     redirect_of: Optional[str] = Field(None, max_length=64)   # gate_evaluation_id of the hop that returned a redirect
+    # v1.5 (CEV): caller-chosen id that links this decision to side effects recorded by the CEV observer. Recorded in the proof
+    # record; NOT part of the parameter digest, so it never changes what a grant authorises. Default: gate_evaluation_id.
+    correlation_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_.:-]{1,64}$")
+    # v1.5 P1: task / execution context the grant is bound to. CALLER-PROVIDED CONTEXT, not a verified task identity:
+    # it prevents a grant issued for one task from being used for another, it does not prove the task is genuine.
+    task_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
+# ---------------- Grant binding (v1.5 P1): agent, task, policy version ----------------
+# Bump whenever Gate rule CODE changes (rules R0-R18, netguard classification, adapters' confinement): it is part of the
+# policy version, so outstanding grants issued under the old logic become unusable.
+POLICY_ENGINE_VERSION = "gate-rules/2026-11-03.2"   # .2: R19 untrusted state change, R20 deceptive hostname
+_TASK_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
+def require_task_id() -> bool:
+    return os.getenv("QYRIX_REQUIRE_TASK_ID") == "1"
+
+
+def policy_inputs(ctx: "GateContext") -> Dict:
+    """Every input that can change what the Gate allows for this context. Deterministic: sets are sorted and normalised."""
+    return {
+        "engine": POLICY_ENGINE_VERSION,
+        "approved_domains": sorted({d.strip().lower().rstrip(".") for d in (ctx.approved() or ()) if d and d.strip()}),
+        "workspace": os.path.realpath(ctx.workspace) if ctx.workspace else None,
+        "executable_tools": sorted(TOOLS),
+        "adapters": sorted(ctx.adapters),
+        "require_task_id": require_task_id(),
+        "max_redirects": MAX_REDIRECTS,
+        "state_changing_methods": sorted(STATE_CHANGING),
+        "max_file_bytes": adapters.MAX_FILE_BYTES,
+        "detectors": {"secret": [SECRET.pattern, SECRET.flags], "inject": [INJECT.pattern, INJECT.flags],
+                      "cmds": [CMDS.pattern, CMDS.flags], "kv_words": [_KV_WORD.pattern, _KV_WORD.flags],
+                      "tlds": sorted(_TLDS)},
+    }
+
+
+def policy_version(ctx: "GateContext") -> str:
+    """SHA-256 over the canonical JSON (sorted keys, no whitespace, ASCII) of policy_inputs()."""
+    return hashlib.sha256(json.dumps(policy_inputs(ctx), sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=True).encode()).hexdigest()
+
+
+def _binding_refusal(ctx: "GateContext", g: Dict, agent_id: Optional[str], task_id: Optional[str]) -> Optional[str]:
+    """Agent first (a foreign caller learns nothing about the grant's state), then task, then policy version."""
+    if g.get("agent_id") != agent_id:
+        return "GRANT_AGENT_MISMATCH"
+    if g.get("task_id") != task_id:
+        return "GRANT_TASK_MISMATCH"
+    try:
+        current = policy_version(ctx)
+    except Exception:
+        return "POLICY_UNAVAILABLE"                          # cannot prove the policy is unchanged => refuse
+    if g.get("policy_version") != current:
+        return "GRANT_POLICY_CHANGED"
+    return None
+
+
+def _task_from(body: Dict) -> Optional[str]:
+    t = body.get("task_id")
+    if t is None:
+        return None
+    if not isinstance(t, str) or not _TASK_RE.match(t):
+        raise ExecRefused("TASK_ID_INVALID", 400)
+    return t
+
+
+_REFUSAL_STATUS = {"GRANT_REPLAY": 409, "GRANT_EXPIRED": 409, "GRANT_REVOKED": 409, "GRANT_POLICY_CHANGED": 409,
+                   "PERSISTENCE_UNAVAILABLE": 503, "POLICY_UNAVAILABLE": 503}
 
 
 def params_of(a: Action) -> Dict:
@@ -499,8 +572,11 @@ def params_digest(p: Dict) -> str:
     return _digest(p["tool"], p["method"], p["dest"], p["cmd"], p["data"])
 
 
-def _new_grant(ctx: GateContext, evaluation_id: str, digest: str) -> Dict:
+def _new_grant(ctx: GateContext, evaluation_id: str, digest: str, agent_id: Optional[str] = None,
+               task_id: Optional[str] = None, pv: Optional[str] = None) -> Dict:
     g = {"id": "grt_" + uuid.uuid4().hex, "gate_evaluation_id": evaluation_id, "digest": digest, "used": False,
+         "agent_id": agent_id, "task_id": task_id, "policy_version": pv or policy_version(ctx),
+         "execution_id": str(uuid.uuid4()),          # Phase C2: correlates the grant with its outbound execution
          "exp": time.time() + GRANT_TTL,
          "expires_at": datetime.fromtimestamp(time.time() + GRANT_TTL, timezone.utc).isoformat()}
     ctx.grants[g["id"]] = g
@@ -515,7 +591,8 @@ def _store_eval(ctx: GateContext, ev: Dict) -> None:
             ctx.grants.pop(gid, None)
 
 
-def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
+def evaluate(a: Action, ctx: Optional[GateContext] = None, agent_id: Optional[str] = None) -> Dict:
+    """agent_id = the authenticated credential id (API) or None for in-process callers; any grant is bound to it."""
     ctx = ctx or PROD
     t0 = time.perf_counter()
     eval_id = str(uuid.uuid4())
@@ -545,6 +622,8 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
                 host = chk.host
                 if chk.reason == "SSRF":
                     rules.append("R9_SSRF_BLOCKED")
+                elif chk.reason == "DECEPTIVE_HOST":
+                    rules.append("R20_DECEPTIVE_HOSTNAME")   # invisible chars, look-alike dots, mixed scripts...
                 elif not chk.ok:
                     rules.append("R1_DEST_NOT_APPROVED")
             elif tool == "file.read" and not (ctx.workspace and netguard.confine_path(ctx.workspace, a.dest)):
@@ -581,6 +660,15 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
                     rules.append("R14_APPROVAL_EXPIRED")
             elif needs_approval:
                 rules.append("R7_APPROVAL_REQUIRED")
+            # R19: an approved destination is NOT authorization for a state change. If any instruction in the lineage
+            # is untrusted (UNTRUSTED / UNVERIFIED, directly or inherited), POST/PUT/PATCH/DELETE needs an explicit,
+            # valid human approval of this exact action (approvals are digest-bound; agents cannot approve).
+            approval_ok = bool(a.approval_id) and ap is not None and not any(
+                r in rules for r in ("R4_APPROVAL_SCOPE_MISMATCH", "R6_APPROVAL_REPLAY", "R14_APPROVAL_EXPIRED"))
+            if tool == "http" and method in STATE_CHANGING and taint and not approval_ok:
+                rules.append("R19_UNTRUSTED_STATE_CHANGE")
+            if require_task_id() and not a.task_id:
+                rules.append("R18_TASK_ID_REQUIRED")       # QYRIX_REQUIRE_TASK_ID=1: no task context => no grant
         except Exception:
             rules = ["R0_FAIL_CLOSED"]
         rules = list(dict.fromkeys(rules))
@@ -588,11 +676,16 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
         params = params_of(a)
         digest = params_digest(params)
         grant = None
+        try:
+            pv = policy_version(ctx)
+        except Exception:                                    # policy source unavailable: fail closed, still recorded
+            pv, verdict, rules = None, "BLOCK", ["R0_FAIL_CLOSED"]
         ev = {"id": eval_id, "verdict": verdict, "rules": rules, "params": params, "digest": digest,
-              "hop": hop, "host": host, "redirect_location": None, "ts": time.time()}
+              "hop": hop, "host": host, "redirect_location": None, "ts": time.time(),
+              "agent_id": agent_id, "task_id": a.task_id, "policy_version": pv, "correlation_id": a.correlation_id or eval_id}
         if verdict == "ALLOW":
             try:                                              # grant + approval consumption are one unit
-                grant = _new_grant(ctx, eval_id, digest)
+                grant = _new_grant(ctx, eval_id, digest, agent_id, a.task_id, pv)
                 if ap is not None:
                     ap["used"] = True                         # single-use: replay is blocked by R6
             except Exception:
@@ -602,7 +695,8 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
                 verdict, rules = "BLOCK", ["R0_FAIL_CLOSED"]
             if grant is not None and ctx.db is not None:     # durable, atomic in the DB BEFORE the decision is recorded
                 try:
-                    ctx.db.save_evaluation(ev, grant, a.approval_id if ap is not None else None)
+                    ctx.db.save_evaluation(ev, grant, a.approval_id if ap is not None else None,
+                                           observer_feed.decision_events(ctx, ev, grant))   # same transaction (§10)
                 except Exception as e:
                     ctx.grants.pop(grant["id"], None)
                     grant = None
@@ -618,15 +712,20 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
         ev["verdict"], ev["rules"] = verdict, rules
         rec = None
         try:
-            rec = _prove(a, verdict, rules, dest, lin, ctx=ctx, evaluation_id=eval_id)   # audit BEFORE any execution
+            rec = _prove(a, verdict, rules, dest, lin, ctx=ctx, evaluation_id=eval_id, agent_id=agent_id, pv=pv)   # audit BEFORE any execution
         except Exception:
             if grant:                                         # roll back: no evidence => no grant, approval unused
                 ctx.grants.pop(grant["id"], None)
                 if ctx.db is not None:                        # best-effort compensation; a grant without an ALLOW
                     try:                                      # proof record is never loaded after a restart anyway
-                        ctx.db.revoke_grant(grant["id"], "system:proof-write-failed")
+                        evs = observer_feed.revocation_events(ctx, grant, "PROOF_WRITE_FAILED", ev)   # F4: claims follow
+                        ctx.db.revoke_grant(grant["id"], "system:proof-write-failed", evs)
                     except Exception:
-                        pass
+                        try:                                  # safety first: revoke even if the claims cannot be written
+                            ctx.db.revoke_grant(grant["id"], "system:proof-write-failed")
+                            obs.event("observer_feed_revocation_unrecorded", severity="critical", reason="PROOF_WRITE_FAILED")
+                        except Exception:
+                            pass
                 grant = None
             if ap is not None and verdict == "ALLOW":
                 ap["used"] = False
@@ -639,7 +738,7 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
         ev["verdict"], ev["rules"] = verdict, rules
         if verdict == "BLOCK" and ctx.db is not None and ctx.state["persistence"] == "postgres":
             try:                                              # audit history of blocked evaluations (never authorises)
-                ctx.db.save_evaluation(ev)
+                ctx.db.save_evaluation(ev, events=observer_feed.decision_events(ctx, ev, None, rec))
             except Exception:
                 _db_down(ctx, "EVALUATION_WRITE_FAILED")
         _store_eval(ctx, ev)
@@ -649,6 +748,8 @@ def evaluate(a: Action, ctx: Optional[GateContext] = None) -> Dict:
                 "lineage": ["%s:%s" % (s["id"], s["label"]) for s in lin], "latency_ms": round(ms, 3),
                 "external_calls": ctx.ext["calls"], "executed": False, "exec_status": None, "proof": rec,
                 "gate_evaluation_id": eval_id, "params_digest": digest, "redirect_hop": hop,
+                "correlation_id": a.correlation_id or eval_id, "task_id": a.task_id, "policy_version": pv,
+                "dest_host": host,                       # canonical A-label host: the unambiguous form to display
                 "grant_id": grant["id"] if grant else None, "grant_expires_at": grant["expires_at"] if grant else None}
 
 
@@ -659,14 +760,16 @@ class ExecRefused(Exception):
         self.code, self.status = code, status
 
 
-def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
-    """Execute ONLY what the gate allowed. The request body must be exactly {gate_evaluation_id, grant_id}."""
+def execute_grant(body: Any, ctx: Optional[GateContext] = None, agent_id: Optional[str] = None) -> Dict:
+    """Execute ONLY what the gate allowed. Body: exactly {gate_evaluation_id, grant_id[, task_id]}. The caller must be the
+    agent the grant was issued to, present the same task_id and act under the same policy version."""
     ctx = ctx or PROD
-    if not isinstance(body, dict) or set(body) - {"gate_evaluation_id", "grant_id"}:
+    if not isinstance(body, dict) or set(body) - {"gate_evaluation_id", "grant_id", "task_id"}:
         raise ExecRefused("CLIENT_PARAMS_NOT_ALLOWED", 400)          # before any lookup, invocation or network access
     eid, gid = body.get("gate_evaluation_id"), body.get("grant_id")
     if not isinstance(eid, str) or not isinstance(gid, str) or len(eid) > 64 or len(gid) > 64:
         raise ExecRefused("GATE_EVALUATION_AND_GRANT_REQUIRED", 400)
+    task_id = _task_from(body)
     with ctx.lock:
         ev, g = ctx.evals.get(eid), ctx.grants.get(gid)
         code = None
@@ -674,12 +777,16 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
             code = "PROOF_DEGRADED"
         elif not ev or not g or g["gate_evaluation_id"] != eid or ev["verdict"] != "ALLOW":
             code = "GRANT_INVALID"
+        elif (bind := _binding_refusal(ctx, g, agent_id, task_id)) and bind != "GRANT_POLICY_CHANGED":
+            code = bind
         elif g.get("revoked"):
             code = "GRANT_REVOKED"
         elif g["used"]:
             code = "GRANT_REPLAY"
         elif time.time() > g["exp"]:
             code = "GRANT_EXPIRED"
+        elif bind == "GRANT_POLICY_CHANGED":
+            code = bind
         elif not (params_digest(ev["params"]) == ev["digest"] == g["digest"]):
             code = "PARAMS_DIGEST_MISMATCH"
         elif ev["params"]["tool"] not in ctx.adapters:
@@ -691,7 +798,8 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
                 code = "PERSISTENCE_UNAVAILABLE"
             else:
                 try:                                       # atomic single-use in the database (survives restarts)
-                    if not ctx.db.consume_grant(gid, eid, g["digest"]):
+                    if not ctx.db.consume_grant(gid, eid, g["digest"], agent_id, task_id, g.get("policy_version"),
+                                                observer_feed.consume_event(ctx, eid, g, "executed")):
                         code = "GRANT_REPLAY"
                 except Exception:
                     _db_down(ctx, "GRANT_CONSUME_FAILED")
@@ -702,12 +810,14 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
                               "tool": ev["params"]["tool"] if ev else None, "rule_ids": [code], "ext_calls": ctx.ext["calls"]})
             except Exception:
                 pass
-            raise ExecRefused(code, 409 if code in ("GRANT_REPLAY", "GRANT_EXPIRED", "GRANT_REVOKED") else 503 if code == "PERSISTENCE_UNAVAILABLE" else 403)
+            observer_feed.emit_refusal(ctx, eid, g, code)  # claim only, best effort; the refusal itself is unchanged
+            raise ExecRefused(code, _REFUSAL_STATUS.get(code, 403))
         g["used"] = True                                   # consumed before the adapter runs: no replay, ever
         params = dict(ev["params"])
         try:
             start = _record(ctx, {"kind": "execution", "verdict": "EXECUTION_STARTED", "gate_evaluation_id": eid,
                                   "tool": params["tool"], "method": params["method"], "params_digest": ev["digest"],
+                                  "agent_id": agent_id, "task_id": task_id, "policy_version": g.get("policy_version"),
                                   "rule_ids": [], "ext_calls": ctx.ext["calls"]})
         except Exception:
             raise ExecRefused("PROOF_WRITE_FAILED", 503)   # no evidence => no execution (grant stays consumed)
@@ -715,10 +825,13 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
         real_egress = params["tool"] == "http" and getattr(run, "name", "") == "http"
         if real_egress:
             ctx.ext["calls"] += 1                          # the only place real egress can happen
+    tok = adapters.EXECUTION_ID.set(g.get("execution_id"))   # adapter tags its proxy request (X-Qyrix-Execution)
     try:
         result, ok = run(params), True
     except Exception as e:
         result, ok = {"error": _public_exec_error(e)}, False
+    finally:
+        adapters.EXECUTION_ID.reset(tok)
     with ctx.lock:
         if ok and isinstance(result, dict) and result.get("redirect"):
             ev["redirect_location"] = result["redirect"]["location"]
@@ -741,6 +854,75 @@ def execute_grant(body: Any, ctx: Optional[GateContext] = None) -> Dict:
                 "proof_start": start, "proof_result": done}
 
 
+def redeem_grant(body: Any, integration: str, ctx: Optional[GateContext] = None, agent_id: Optional[str] = None) -> Dict:
+    """Delegated execution (v1.5, platform adapters such as the MCP proxy): the INTEGRATION performs the action itself,
+    so Sentinel never runs an adapter here. The grant is checked exactly like /tools/execute (evaluation match, ALLOW,
+    not revoked, not used, not expired, digest unchanged, current policy re-check) and consumed atomically, single-use.
+    The caller must present the params_digest it will execute: any argument change after the decision is refused.
+    Body: exactly {gate_evaluation_id, grant_id, params_digest[, correlation_id][, task_id]}. Same agent / task / policy
+    binding as /tools/execute."""
+    ctx = ctx or PROD
+    allowed = {"gate_evaluation_id", "grant_id", "params_digest", "correlation_id", "task_id"}
+    if not isinstance(body, dict) or set(body) - allowed:
+        raise ExecRefused("CLIENT_PARAMS_NOT_ALLOWED", 400)
+    eid, gid, dg, corr = body.get("gate_evaluation_id"), body.get("grant_id"), body.get("params_digest"), body.get("correlation_id")
+    if not all(isinstance(x, str) and 0 < len(x) <= 64 for x in (eid, gid, dg)) or (corr is not None and not (isinstance(corr, str) and len(corr) <= 64)):
+        raise ExecRefused("GATE_EVALUATION_GRANT_AND_DIGEST_REQUIRED", 400)
+    task_id = _task_from(body)
+    with ctx.lock:
+        ev, g = ctx.evals.get(eid), ctx.grants.get(gid)
+        code = None
+        if ctx.state["degraded"]:
+            code = "PROOF_DEGRADED"
+        elif not ev or not g or g["gate_evaluation_id"] != eid or ev["verdict"] != "ALLOW":
+            code = "GRANT_INVALID"
+        elif (bind := _binding_refusal(ctx, g, agent_id, task_id)) and bind != "GRANT_POLICY_CHANGED":
+            code = bind
+        elif g.get("revoked"):
+            code = "GRANT_REVOKED"
+        elif g["used"]:
+            code = "GRANT_REPLAY"
+        elif time.time() > g["exp"]:
+            code = "GRANT_EXPIRED"
+        elif bind == "GRANT_POLICY_CHANGED":
+            code = bind
+        elif not (params_digest(ev["params"]) == ev["digest"] == g["digest"] == dg):
+            code = "PARAMS_DIGEST_MISMATCH"
+        elif not _revalidate(ctx, ev["params"]):
+            code = "REVALIDATION_FAILED"
+        elif ctx.db is not None:
+            if _persistence_down(ctx):
+                code = "PERSISTENCE_UNAVAILABLE"
+            else:
+                try:
+                    if not ctx.db.consume_grant(gid, eid, g["digest"], agent_id, task_id, g.get("policy_version"),
+                                                observer_feed.consume_event(ctx, eid, g, "redeemed", integration[:64])):
+                        code = "GRANT_REPLAY"
+                except Exception:
+                    _db_down(ctx, "GRANT_CONSUME_FAILED")
+                    code = "PERSISTENCE_UNAVAILABLE"
+        if code:
+            try:
+                _record(ctx, {"kind": "execution", "verdict": "REDEMPTION_REFUSED", "gate_evaluation_id": eid,
+                              "tool": ev["params"]["tool"] if ev else None, "rule_ids": [code], "integration": integration[:64],
+                              "correlation_id": corr, "ext_calls": ctx.ext["calls"]})
+            except Exception:
+                pass
+            observer_feed.emit_refusal(ctx, eid, g, code, integration[:64])
+            raise ExecRefused(code, _REFUSAL_STATUS.get(code, 403))
+        g["used"] = True                                   # consumed before the integration is told to proceed
+        try:
+            rec = _record(ctx, {"kind": "execution", "verdict": "EXECUTION_DELEGATED", "gate_evaluation_id": eid,
+                                "tool": ev["params"]["tool"], "method": ev["params"]["method"], "params_digest": ev["digest"],
+                                "integration": integration[:64], "correlation_id": corr or eid, "rule_ids": [],
+                                "agent_id": agent_id, "task_id": task_id, "policy_version": g.get("policy_version"),
+                                "ext_calls": ctx.ext["calls"]})
+        except Exception:
+            raise ExecRefused("PROOF_WRITE_FAILED", 503)   # no evidence => integration must not execute
+        return {"redeemed": True, "gate_evaluation_id": eid, "params_digest": ev["digest"], "correlation_id": corr or eid,
+                "execution_id": g.get("execution_id"), "proof": rec}
+
+
 def _revalidate(ctx: GateContext, p: Dict) -> bool:
     """Deterministic re-check of the stored parameters against the CURRENT policy right before execution
     (allowlist / workspace may have changed since the decision, e.g. across a restart)."""
@@ -761,7 +943,12 @@ def revoke_grant(gid: str, who: str, ctx: Optional[GateContext] = None) -> Dict:
             raise ExecRefused("GRANT_NOT_REVOCABLE", 409)
         if ctx.db is not None:
             try:
-                if not ctx.db.revoke_grant(gid, who):
+                try:                                      # C4 / F4: the revocation and its claim commit together
+                    ok = ctx.db.revoke_grant(gid, who, observer_feed.revocation_events(ctx, g, "REVOKED_BY_OPERATOR"))
+                except Exception:                         # claims not writable: revoke anyway (safety beats telemetry);
+                    ok = ctx.db.revoke_grant(gid, who)    # a real DB outage fails again here => 503 below
+                    obs.event("observer_feed_revocation_unrecorded", severity="critical", reason="REVOKED_BY_OPERATOR")
+                if not ok:
                     raise ExecRefused("GRANT_NOT_REVOCABLE", 409)
             except ExecRefused:
                 raise
@@ -790,7 +977,7 @@ def attach_persistence(ctx: GateContext, db) -> None:
         raise RuntimeError("data integrity cannot be established: " + str(ctx.state["integrity"]["reason"]))
     _sync_proof_mirror(ctx)
     allowed = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("kind", "gate_decision") == "gate_decision" and r["verdict"] == "ALLOW"}
-    started = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("verdict") == "EXECUTION_STARTED"}
+    started = {r.get("gate_evaluation_id") for r in ctx.chain if r.get("verdict") in ("EXECUTION_STARTED", "EXECUTION_DELEGATED")}
     recent, index = db.load_steps(ctx.prov.memory_limit, prov.INDEX_LIMIT)
     ctx.prov.restore(recent, index)
     ctx.appr.clear()

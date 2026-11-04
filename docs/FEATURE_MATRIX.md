@@ -1,0 +1,70 @@
+# Feature matrix: Built / Partially built / Proposed (v1.5-dev, 2026-11-04, updated after the C5 hardening sprint)
+
+Rule: **Built** = implemented and covered by automated tests in this repository. Anything else is labelled as such.
+Test counts are from the last full run, recorded in the commit that changed this file.
+
+## Core security (v1.4, unchanged)
+| Feature | Status | Evidence |
+|---|---|---|
+| Deterministic default-deny Execution Gate (R0–R17) | Built | `app/gateway.py`, `tests/test_sentinel.py`, `tests/test_v12_controls.py`, `tests/test_hardening.py` |
+| Skill Inspector, Trust Provenance Engine | Built | `app/gateway.py`, `app/provenance.py` |
+| SHA-256 hash-linked proof chain + offline verifier | Built | `app/proof.py`, `scripts/verify_proof.py` |
+| RFC 3161 external timestamp anchoring | Partially built | Implemented and tested against a local TSA only; no public TSA verified |
+| Meta Llama / Baseten advisory classifier | Partially built | Failure paths tested; **live provider calls not verified** |
+| Single-use, expiring, digest-bound grants | Built | `tests/test_v12_controls.py`, `tests/test_persistence.py` |
+| Agent-bound grants (authenticated credential) | Built (v1.5 P1) | `tests/test_grant_binding.py`, `tests/test_grant_binding_pg.py`; memory + atomic SQL |
+| Task-bound grants (`task_id`) + optional `QYRIX_REQUIRE_TASK_ID` (R18) | Built (v1.5 P1) | **task_id is caller-provided context, not a verified task identity** (`docs/AUTHORIZATION_BINDING.md`) |
+| Policy-version-bound grants (canonical SHA-256 of all policy inputs) | Built (v1.5 P1) | one test per policy input (12) |
+| Migration 007 (additive) verified on real PostgreSQL with pre-existing data | Built (v1.5 P1) | `tests/test_grant_binding_pg.py` |
+| RBAC, tenants (RLS), API keys, sessions, MFA, invitations, password reset | Built | `tests/test_identity.py`, `tests/test_tenancy.py`, `tests/test_accounts.py`, `tests/test_db_privileges.py` |
+| Alerts engine, Prometheus metrics/rules | Built | `app/alerts.py`, `ops/prometheus/`, `tests/test_alerts.py` |
+| Proof export | Built | `GET /api/v1/sentinel/proofs/export` |
+
+## v1.5: Universal adapters + Continuous Enforcement Verification
+| Feature | Status | Evidence |
+|---|---|---|
+| Universal adapter contract + capability-declaring registry | Built | `app/integrations.py`, `GET /api/v1/sentinel/integrations`, `tests/test_cev.py` |
+| Correlation ids on every decision record | Built | `tests/test_cev.py::test_correlation_id_*`, `test_canary_actions_are_must_block_*` |
+| Delegated execution: single-use grant redemption for integrations | Built | `POST /api/v1/tools/redeem`, replay/digest/expiry/concurrency tests |
+| Execution Observer: HTTP canary (loopback listener) | Built (co-located) | `app/cev.py`; independent of the Gate's code path, not of the host |
+| Execution Observer: file canary (write/delete) | Built (co-located) | File **reads are not observed** |
+| Enforcement Reconciler (4 states, missing telemetry never verified) | Built | Truth-table + exhaustive tests in `tests/test_cev.py` |
+| Enforcement canaries (on demand; periodic opt-in) | Built | `POST /api/v1/sentinel/cev/canary`, `QYRIX_CEV_CANARY_INTERVAL_SECONDS` |
+| Honest vs broken adapter demo (controlled test fixtures) | Built | `POST /api/v1/sentinel/cev/demo`, `/enforcement` dashboard |
+| Critical alert + metric on bypass / unauthorized execution | Built | `enforcement_bypass_detected`, `qyrix_cev_results_total` |
+| Enforcement verification dashboard | Built | `frontend/src/app/(app)/enforcement/page.tsx` (verified in a live browser run) |
+| Adapter conformance score (from the proof chain) | Built | `GET /api/v1/sentinel/cev/results`; inconclusive runs excluded, never counted as success |
+| MCP proxy (stdio): tools/call interception, Gate, redemption, forward | Built | `app/mcp_proxy.py`, `tests/test_mcp_proxy.py` (fixture MCP server + end-to-end process test) |
+| MCP compatibility with third-party servers | Proposed | Not yet tested; not claimed |
+| Observer Service C1: signed ingest, root-signed key manifest, gap-free watermarks, heartbeats, epochs/quarantine, window closure, signed hash-chained ledger, separate observer-db (O001) | Built (Phase C1) | `backend/observer/`, `tests/test_observer_unit.py`, `tests/test_observer_pg.py`; claims only (E0/E1): **no sensors, nothing can be ENFORCEMENT_VERIFIED** (`docs/OBSERVER.md`) |
+| Observer feed C2: migration 008, same-transaction outbox, publisher + heartbeats, operator-signed epoch change, `execution_id`, CONNECT execution header (pinned IP), MCP adapter reports | Built (Phase C2) | `app/observer_feed.py`, `tests/test_observer_feed_pg.py`, `tests/test_egress_tagging.py` |
+| Observer deployed as a separate container (compose overlay, egress chokepoint, host attestor) | Built (C5; single host, boundary D shared) | `docker-compose.observer.yml`; real-host validated on the production image |
+| Observer canaries C3: CSPRNG tokens (hash-only storage), run-before-submission, loopback HTTP + observer-owned file sensors (E3), positive controls, DECISION_MISSING, discrepancies, restart/expiry, O002 | Built (Phase C3; test-only reach) | `observer/canary.py`, `tests/test_observer_canary_pg.py`; **live P2 disabled, no deployed reachability, no verdicts** (`docs/OBSERVER.md` §1.3) |
+| Observer reconciliation C4 (canary runs only): BYPASS / UNAUTHORIZED / INCONCLUSIVE, versioned + signed, tenant-scoped read API, dashboard panel; audit F4/F9/F13 fixes | Built (Phase C4; fixture-tested) | `observer/reconcile.py`, O003, `tests/test_observer_reconcile*.py`, `tests/test_observer_relay_pg.py`; **ENFORCEMENT_VERIFIED not producible until C5** |
+| C5 blockers F1 (refusal flooding), F2 (mTLS), F3 (event loop), F7 (non-finite numbers) | Built (fixed) | `tests/test_observer_c5_blockers.py`, `tests/test_observer_mtls.py` |
+| C5 egress chokepoint: proxy (pinned-IP CONNECT, SNI peek, tunnel lifecycle, execution-id uniqueness), DNS forwarder, coverage sink, compose overlay, DOCKER-USER rules | Built (Phase C5; validated on a real Docker host) | `observer/egress.py`, `docker-compose.observer.yml`, `ops/observer/`, `evidence/c5/validation.json` |
+| Host attestor + signed coverage attestation judged by the observer; ENFORCEMENT_VERIFIED for canary runs | Built (Phase C5; real-host validated, incl. negative controls) | `observer/attestor.py`, `observer/coverage.py`; **IPv6 path not exercised** (`docs/OBSERVER.md` §1.5) |
+| N2: proxy denies untagged egress; execution id must carry a signed, unquarantined, unrevoked ALLOW grant claim for the host; one use | Built (hardening) | `observer/egress.py`, O005, `tests/test_observer_n2_pg.py`; real-host 403s; **a compromised backend with the GATE key can still self-grant** |
+| Attestor automation: systemd timer + docker-events watcher, signed FAILED attestation on absence, latest attestation decides | Built (hardening) | `observer/attestor_watch.py`, `ops/observer/systemd/`, `tests/test_attestor_automation.py`; **units not run under a real systemd** |
+| Secret ownership/modes (10001/0400), offline CA/root/attestor keys | Built (hardening) | `ops/observer/secure_secrets.py` |
+| Signed, offline-verifiable real-host evidence (commit, image, compose hashes, signed ledger rows) | Built (hardening) | `ops/observer/verify_evidence.py --trusted-root`, `evidence/c5/validation.json`; INTEGRITY_VERIFIED only against an externally supplied root pin; proves integrity, not runner identity |
+| DNS anomaly alerts (rate, subdomain burst, long / high-entropy labels) | Built (detection only) | `observer/egress.py::DnsMonitor`; **DNS tunnelling not prevented** |
+| MCP proxy over Streamable HTTP (MCP 2025-11-25, POST-only subset): authenticated listener, session isolation, Gate + single-use grants before any upstream call, duplicate/unknown-outcome protection | Built (hand-written fixture only) | `app/mcp_http_proxy.py`, `app/adapter_core.py`, `tests/test_mcp_http_proxy.py`, `docs/MCP_HTTP_PROXY.md`; **no third-party interop test, not exactly-once, direct upstream access bypasses it** |
+| Real-traffic reconciliation (ALLOW claims ↔ observed tunnels as verdicts) | Not built | — |
+| Real-traffic (ALLOW) reconciliation by execution id; policy bundle; anchoring/export (C6, C7) | Proposed | |
+
+## Still to do (master plan, in priority order)
+| Feature | Status |
+|---|---|
+| Trusted task identity (signed task tokens from a task issuer / orchestrator) | Proposed: today task_id is caller-provided context |
+| Red-team generator: schema, safety filter, dedupe, isolated runner, deterministic replay, review workflow | Built (v1.5 P2-A) | `app/redteam.py`, `tests/test_redteam.py` (44) |
+| Meta Llama as red-team case author (live generation) | Partially built | Provider path tested with a mock transport only; **live generation not verified** (no credentials) |
+| Template red-team corpus (40 cases, 16 categories) + report | Built (preliminary, synthetic) | `evidence/redteam/`; 37/37 attacks stopped, 0 false positives after R19/R20 |
+| R19 untrusted state change (approved host is not authorization) | Built (v1.5) | `tests/test_gate_hardening.py` |
+| R20 strict hostname canonicalization (IDNA2008, invisible chars, look-alike dots, mixed scripts) | Built (v1.5) | `tests/test_gate_hardening.py`; whole-script homographs not detected (shown as A-label, never match ASCII allowlist) |
+| Benchmark v2: 127 unique synthetic cases in tiers (template 120 / human 7 / model 0), all 22 Gate rules, system checks, reproducible full digest | Built (v1.5 P2-B, synthetic) | `app/benchmark_v2.py`, `evidence/benchmark-v2/`, `tests/test_benchmark_v2.py` |
+| Public benchmarks (AgentDojo: MIT; InjecAgent: no licence found) | Not run | `docs/BENCHMARK_V2.md` §2 (licence review); AgentDojo needs a live LLM agent |
+| Browser-based proof bundle verifier | Proposed (offline CLI verifier is built) |
+| CLI, VS Code, n8n, GitHub, browser-agent integrations; Python/TypeScript SDKs | Roadmap |
+| Agent registry, incident investigation UI, team reports | Proposed |
+| Public demo deployment | Blocked (see deployment notes: persistent storage needs a paid plan; awaiting owner approval) |

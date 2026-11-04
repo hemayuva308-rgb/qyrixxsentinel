@@ -32,6 +32,7 @@ _HELP = {
     "qyrix_mfa_failures_total": "MFA failures by reason",
     "qyrix_rate_limit_denials_total": "Requests denied by the shared limiter by scope",
     "qyrix_rate_limit_backend_errors_total": "Shared rate-limit store errors by scope",
+    "qyrix_cev_results_total": "Continuous Enforcement Verification results by adapter, channel and result",
 }
 _FORBIDDEN = {"token", "credential", "password", "secret", "data", "dest", "text", "authorization", "session_token", "key",
               "code", "recovery_code", "otp", "totp", "email", "challenge", "cookie"}

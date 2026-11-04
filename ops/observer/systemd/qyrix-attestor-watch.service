@@ -1,0 +1,19 @@
+# Event-driven re-attestation on container / network changes (C5).
+[Unit]
+Description=Qyrix Sentinel attestor watcher (docker events -> immediate re-attestation)
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Environment=PYTHONPATH=/opt/qyrix/backend
+ExecStart=/usr/bin/python3 -I -m observer.attestor_watch --config /etc/qyrix/attestor.json
+Restart=always
+RestartSec=2
+User=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

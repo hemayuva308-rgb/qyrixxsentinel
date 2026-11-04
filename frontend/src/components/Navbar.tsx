@@ -18,7 +18,7 @@ export default function Navbar() {
     <nav aria-label="Product" className="sticky top-0 z-40 border-b border-white/10 bg-bg/85 backdrop-blur">
       <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-4 py-2.5">
         <Link href="/dashboard" className="flex items-center gap-2.5 font-semibold tracking-[.2em]" aria-label="QYRIX SENTINEL dashboard"><BrandMark size={26} title={null} />QYRIX <span className="text-neon">SENTINEL</span></Link>
-        <div className="flex gap-1">{tab("/dashboard", "OPERATIONS DASHBOARD")}{tab("/forensic", "GLOBAL FORENSIC LAB")}</div>
+        <div className="flex gap-1">{tab("/dashboard", "OPERATIONS DASHBOARD")}{tab("/forensic", "GLOBAL FORENSIC LAB")}{tab("/enforcement", "ENFORCEMENT VERIFICATION")}</div>
         <div className="ml-auto flex items-center gap-2">
           {error ? <Badge t="crit">● BACKEND OFFLINE</Badge>
             : !data ? <Badge>● CONNECTING</Badge>

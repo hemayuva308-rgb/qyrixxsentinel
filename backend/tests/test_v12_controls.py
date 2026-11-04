@@ -115,10 +115,14 @@ def test_file_read_executes_through_grant_and_is_single_use():
         f.write("hello password=hunter2hunter2")
     r = gate(tool="file.read", dest="notes.txt", lineage=[step()["id"]])
     body = {"gate_evaluation_id": r["gate_evaluation_id"], "grant_id": r["grant_id"]}
-    x = agent.post(EX, json=body).json()
+    # v1.5 P1: the grant is bound to the credential that obtained it (admin here); another credential is refused and
+    # its attempt does not consume the grant
+    foreign = agent.post(EX, json=body)
+    assert foreign.status_code == 403 and foreign.json()["detail"] == "GRANT_AGENT_MISMATCH"
+    x = c.post(EX, json=body).json()
     assert x["executed"] and x["result"]["bytes"] == 29 and "hunter2" not in x["result"]["content"]
     assert x["external_calls"] == 0
-    again = agent.post(EX, json=body)
+    again = c.post(EX, json=body)
     assert again.status_code == 409 and again.json()["detail"] == "GRANT_REPLAY"
 
 

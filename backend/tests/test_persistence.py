@@ -196,7 +196,9 @@ def test_revalidation_blocks_execution_when_policy_changed(env):
     t = c1.prov.add_step("ticket", "TRUSTED", "read")
     r = g.evaluate(A(tool="file.read", dest="README.md", lineage=[t["id"]]), c1)
     c1.workspace = None                                             # policy changed after the decision
-    assert refused(c1, {"gate_evaluation_id": r["gate_evaluation_id"], "grant_id": r["grant_id"]}) == "REVALIDATION_FAILED"
+    # v1.5 P1: the workspace is part of the policy version, so the bound grant is refused before the (still present)
+    # destination re-check runs. Stricter than v1.4's REVALIDATION_FAILED, never weaker.
+    assert refused(c1, {"gate_evaluation_id": r["gate_evaluation_id"], "grant_id": r["grant_id"]}) == "GRANT_POLICY_CHANGED"
 
 
 def test_truncated_chain_file_vs_mirror_degrades_gate(env):

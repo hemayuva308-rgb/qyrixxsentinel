@@ -1,0 +1,16 @@
+# Periodic host attestation (C5). Install: cp qyrix-attestor.* /etc/systemd/system/ && systemctl enable --now qyrix-attestor.timer
+[Unit]
+Description=Qyrix Sentinel host attestor (signed coverage attestation of the backend namespace)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# config: /etc/qyrix/attestor.json (root:root 0600) - paths to the attestor key / client cert, never inline secrets
+Environment=PYTHONPATH=/opt/qyrix/backend
+ExecStart=/usr/bin/python3 -I -m observer.attestor --config /etc/qyrix/attestor.json
+User=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+TimeoutStartSec=120

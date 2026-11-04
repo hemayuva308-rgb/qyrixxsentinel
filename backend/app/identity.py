@@ -48,6 +48,7 @@ PERMISSIONS: Dict[str, frozenset] = {
     "keys.manage":      frozenset({"owner", "admin"}),
     "demo.reset":       frozenset({"owner", "admin"}),
     "users.manage":     frozenset({"owner", "admin"}),
+    "cev.run":          frozenset({"owner", "admin", "security_reviewer"}),               # v1.5 enforcement canaries
 }
 # Roles a key creator may grant: nobody can mint a key more powerful than themselves; owner keys only by owner/platform.
 GRANTABLE = {"owner": set(ROLES), "admin": set(ROLES) - {"owner"}}

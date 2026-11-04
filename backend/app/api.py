@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import accounts, anchor, gateway as g, identity, observability as obs, persistence, proof, tenancy
+from app import accounts, anchor, gateway as g, identity, observability as obs, observer_feed, persistence, proof, tenancy
 from app.auth import client_key, principal, require, require_platform
 from app.identity import AuthError, Principal
 
@@ -74,7 +74,7 @@ def gate_ep(a: g.Action, p: Principal = Depends(require("gate.evaluate"))):
     if a.execute:
         raise HTTPException(400, "EXECUTE_MOVED: evaluate first, then POST /api/v1/tools/execute with gate_evaluation_id and grant_id")
     ctx = tenancy.ctx_for(p)
-    r = g.evaluate(a, ctx)
+    r = g.evaluate(a, ctx, p.cred_id)          # any grant is bound to THIS authenticated credential
     obs.inc("qyrix_gate_decisions_total", tenant=p.tenant, verdict=r["verdict"])
     for rule in r["rules"]:
         obs.inc("qyrix_gate_rule_hits_total", rule=rule)
@@ -91,7 +91,7 @@ async def execute_ep(request: Request, p: Principal = Depends(require("tools.exe
         raise HTTPException(400, "INVALID_JSON")
     ctx = tenancy.ctx_for(p)
     try:
-        x = g.execute_grant(body, ctx)
+        x = g.execute_grant(body, ctx, p.cred_id)
     except g.ExecRefused as e:
         obs.inc("qyrix_executions_total", tenant=p.tenant, outcome=e.code)
         obs.event("execution_refused", tenant=p.tenant, cred=p.cred_id, refusal=e.code)
@@ -109,6 +109,97 @@ def revoke_ep(gid: str, p: Principal = Depends(require("grant.revoke"))):
         _err(e)
     obs.event("grant_revoked", tenant=p.tenant, cred=p.cred_id, grant=gid[:64])
     return r
+
+
+_INTEGRATION_RE = __import__("re").compile(r"^[a-z0-9_-]{1,64}$")
+
+
+@tools.post("/redeem")
+async def redeem_ep(request: Request, p: Principal = Depends(require("tools.execute")),
+                    x_qyrix_integration: Optional[str] = Header(None)):
+    """v1.5 delegated execution for platform adapters (e.g. the MCP proxy): consume the single-use grant for the exact
+    params_digest the integration will execute. Sentinel performs no tool call here."""
+    try:
+        body = json.loads(await request.body() or b"null")
+    except ValueError:
+        raise HTTPException(400, "INVALID_JSON")
+    integ = x_qyrix_integration if x_qyrix_integration and _INTEGRATION_RE.match(x_qyrix_integration) else "external"
+    ctx = tenancy.ctx_for(p)
+    try:
+        r = g.redeem_grant(body, integ, ctx, p.cred_id)
+    except g.ExecRefused as e:
+        obs.inc("qyrix_executions_total", tenant=p.tenant, outcome=e.code)
+        obs.event("redemption_refused", tenant=p.tenant, cred=p.cred_id, refusal=e.code, scope=integ)
+        raise HTTPException(e.status, e.code)
+    obs.inc("qyrix_executions_total", tenant=p.tenant, outcome="DELEGATED")
+    obs.event("execution_delegated", tenant=p.tenant, cred=p.cred_id, evaluation=r["gate_evaluation_id"], scope=integ)
+    return r
+
+
+# ---------------- universal adapters + Continuous Enforcement Verification (v1.5) ----------------
+class CanaryReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    adapter: str = Field(..., max_length=64)
+    channel: str = Field("http", pattern="^(http|file)$")
+
+
+class CevDemoReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel: str = Field("http", pattern="^(http|file)$")
+
+
+def _fixtures_enabled() -> bool:
+    return os.getenv("QYRIX_CEV_TEST_FIXTURES") == "1" or g._demo_enabled()
+
+
+def _cev_adapter(adapter_id: str):
+    from app import integrations
+    ad = integrations.ADAPTERS.get(adapter_id)
+    if ad is None:
+        raise HTTPException(404, "UNKNOWN_ADAPTER")
+    if adapter_id in integrations.FIXTURES and not _fixtures_enabled():
+        raise HTTPException(403, "TEST_FIXTURES_DISABLED: set QYRIX_CEV_TEST_FIXTURES=1 (evaluation environments only)")
+    return ad
+
+
+@sentinel.get("/integrations")
+def integrations_ep(p: Principal = Depends(require("read"))):
+    from app import integrations
+    return {"contract": "qyrix-adapter-contract/v1", "integrations": integrations.listing(),
+            "test_fixtures_enabled": _fixtures_enabled()}
+
+
+@sentinel.post("/cev/canary")
+def cev_canary_ep(b: CanaryReq, p: Principal = Depends(require("cev.run"))):
+    from app import cev
+    ad = _cev_adapter(b.adapter)
+    return cev.run_canary(tenancy.ctx_for(p), ad, b.channel)
+
+
+@sentinel.post("/cev/demo")
+def cev_demo_ep(b: CevDemoReq = CevDemoReq(), p: Principal = Depends(require("cev.run"))):
+    """Signature demonstration: the SAME must-block canary through an honest and a deliberately broken TEST FIXTURE."""
+    from app import cev
+    ctx = tenancy.ctx_for(p)
+    honest = cev.run_canary(ctx, _cev_adapter("honest_fixture"), b.channel)
+    broken = cev.run_canary(ctx, _cev_adapter("broken_fixture"), b.channel)
+    return {"channel": b.channel, "honest": honest, "broken": broken, "chain_verify": g.verify_chain(ctx),
+            "note": "Both adapters are controlled test fixtures; the broken one touches only an isolated canary."}
+
+
+@sentinel.get("/observer/reconciliations")
+def observer_reconciliations_ep(p: Principal = Depends(require("read"))):
+    """C4: the independent observer's canary reconciliations for the CALLER'S tenant (read-only relay)."""
+    return observer_feed.fetch_reconciliations(p.tenant)
+
+
+@sentinel.get("/cev/results")
+def cev_results_ep(p: Principal = Depends(require("read"))):
+    from app import cev
+    ctx = tenancy.ctx_for(p)
+    # design §10: today's in-process CEV is labelled `colocated` - it never counts as observer evidence (E3)
+    return {"results": [{**r, "evidence_level": "colocated"} for r in cev.results(ctx, 100)], "evidence_level": "colocated",
+            "conformance": cev.conformance(ctx), "window_ms": int(cev.window_seconds() * 1000)}
 
 
 # ---------------- proof ----------------
@@ -226,7 +317,9 @@ def reset_ep(p: Principal = Depends(require("demo.reset"))):
 def status_ep(p: Principal = Depends(require("read"))):
     ctx = tenancy.ctx_for(p)
     return {**g.status_snapshot(ctx, p.role), "tenant": p.tenant, "credential": p.cred_id, "multi_tenant": identity.multi_tenant_enabled(),
-            "integrity": {k: v for k, v in tenancy.ctx_for(p).state.get("integrity", {"status": "NOT_APPLICABLE"}).items() if k != "pending"}}
+            "integrity": {k: v for k, v in tenancy.ctx_for(p).state.get("integrity", {"status": "NOT_APPLICABLE"}).items() if k != "pending"},
+            "observer_feed": {k: v for k, v in observer_feed.status().items()
+                              if k in ("state", "reason", "outbox_depth", "stale_epoch_unsent", "heartbeats", "last_error")}}
 
 
 @sentinel.post("/benchmark")

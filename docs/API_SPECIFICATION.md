@@ -55,14 +55,25 @@ Response:
 Rules: `R0_FAIL_CLOSED`, `R1_DEST_NOT_APPROVED`, `R2_SECRET_EXFIL`, `R3_UNTRUSTED_LINEAGE`, `R4_APPROVAL_SCOPE_MISMATCH`,
 `R5_COMMAND_INJECTION`, `R6_APPROVAL_REPLAY`, `R7_APPROVAL_REQUIRED`, `R8_UNSUPPORTED_TOOL`, `R9_SSRF_BLOCKED`,
 `R10_PATH_NOT_ALLOWED`, `R11_PROOF_DEGRADED`, `R12_SECRET_TO_EXTERNAL`, `R13_LINEAGE_MISSING`, `R14_APPROVAL_EXPIRED`,
-`R15_REDIRECT_LIMIT`, `R16_REDIRECT_INVALID`, `R17_PERSISTENCE_UNAVAILABLE`, `LINEAGE_CYCLE_DETECTED`.
+`R15_REDIRECT_LIMIT`, `R16_REDIRECT_INVALID`, `R17_PERSISTENCE_UNAVAILABLE`, `R18_TASK_ID_REQUIRED` (v1.5, only with
+`QYRIX_REQUIRE_TASK_ID=1`), `R19_UNTRUSTED_STATE_CHANGE` (v1.5: POST/PUT/PATCH/DELETE with tainted lineage
+needs a valid human approval of the exact action, even to approved hosts), `R20_DECEPTIVE_HOSTNAME` (v1.5: invisible
+characters, look-alike dots, compatibility forms, non-NFC or mixed-script labels; hosts are compared and shown as
+IDNA2008 A-labels, response field `dest_host`), `LINEAGE_CYCLE_DETECTED`.
+
+v1.5 request fields (optional): `correlation_id`, `task_id` (`^[A-Za-z0-9_.:-]{1,64}$`; caller-provided context, not a
+verified identity). v1.5 response fields: `correlation_id`, `task_id`, `policy_version`. A grant is bound to the calling
+credential, the `task_id` and the `policy_version` (`docs/AUTHORIZATION_BINDING.md`).
 
 ### `POST /sentinel/grants/{grant_id}/revoke` — `grant.revoke` (owner, admin, approver)
 Revokes an unused grant (DB + memory) and appends a `GRANT_REVOKED` proof record. Already used/revoked/unknown ⇒ `409 GRANT_NOT_REVOCABLE`.
 
 ## Controlled execution
 ### `POST /tools/execute` — `tools.execute`
-Body must be **exactly** `{"gate_evaluation_id": string ≤64, "grant_id": string ≤64}`.
+Body must be **exactly** `{"gate_evaluation_id": string ≤64, "grant_id": string ≤64}` plus, from v1.5, an optional
+`"task_id"` that must equal the task the grant was issued for. The caller must be the credential that obtained the grant.
+v1.5 refusals: `403 GRANT_AGENT_MISMATCH`, `403 GRANT_TASK_MISMATCH`, `409 GRANT_POLICY_CHANGED`, `400 TASK_ID_INVALID`.
+The same binding applies to `POST /tools/redeem` (delegated execution, `docs/CONTINUOUS_ENFORCEMENT_VERIFICATION.md`).
 
 | Condition | Status | detail |
 |---|---|---|
