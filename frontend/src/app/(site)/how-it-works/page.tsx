@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Container, PageHero, SectionHead, ButtonLink } from "@/components/site/primitives";
 import { DataFlow } from "@/components/site/visuals";
 import { FinalCta } from "@/components/site/blocks";
+import LiveDemo from "@/components/site/LiveDemo";
 
 export const metadata: Metadata = { title: "How It Works", description: "Inspect, establish trust, evaluate, authorise or block, execute safely, verify proof." };
 
@@ -63,6 +64,14 @@ export default function HowItWorks() {
             <div className="mt-6"><ButtonLink href="/docs" kind="ghost" arrow>API reference</ButtonLink></div>
           </div>
           <pre className="reveal overflow-x-auto rounded-3xl bg-site-deep p-6 font-mono text-[12.5px] leading-relaxed text-slate-200 shadow-lift"><code>{CODE}</code></pre>
+        </Container>
+      </section>
+      {/* Moved here from the homepage (the new homepage specification has no demo section). Same component, same public sandbox API. */}
+      <section id="demo" className="scroll-mt-20 border-t border-site-line bg-gradient-to-b from-white to-site-mist py-20 sm:py-28" aria-labelledby="demo-h">
+        <Container>
+          <SectionHead id="demo-h" eyebrow="Interactive demo" title="Run an attack. Watch it stop before execution."
+            lead="Each button sends a fixed scenario to an isolated sandbox on the server. The Gate decision you see is the real one; the tool execution is simulated, and nothing touches the production audit chain." />
+          <div className="reveal mt-10"><LiveDemo /></div>
         </Container>
       </section>
       <FinalCta />

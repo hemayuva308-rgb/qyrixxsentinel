@@ -27,7 +27,7 @@ export default function Features() {
     <>
       <PageHero eyebrow="Features" title={<>Four modules. <span className="text-gradient">One enforcement path.</span></>}
         lead="Each module has a narrow job and a concrete output. Together they turn what an agent read into a deterministic, provable decision about what it may do.">
-        <div className="flex flex-wrap gap-3"><ButtonLink href="/#demo" kind="blue" arrow>Try the live demo</ButtonLink><ButtonLink href="/how-it-works" kind="ghost">See the full flow</ButtonLink></div>
+        <div className="flex flex-wrap gap-3"><ButtonLink href="/how-it-works#demo" kind="blue" arrow>Try the live demo</ButtonLink><ButtonLink href="/how-it-works" kind="ghost">See the full flow</ButtonLink></div>
       </PageHero>
       {MODULES.map((m, i) => {
         const Icon = ICON[m.id];
