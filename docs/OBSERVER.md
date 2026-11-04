@@ -181,8 +181,12 @@ three ways:
 - **Continuity:** contiguous `n`, links, hashes, and observer signatures by keys of a manifest signed by the **pinned** root key, valid at the recorded time (`observer.ledger.verify`).
 - **Order:** `recorded_at` is non-decreasing.
 - **Replay:** no duplicated row hash, signature, accepted event id, `(producer, epoch, tenant, seq)`, or reconciliation / attestation id.
-- **Sequence:** heartbeat `hb_seq` strictly increases per `(producer, epoch)`; a producer's epoch never goes back.
-- **Tenant / epoch:** reconciliations belong to the evidence tenant; no event is accepted on a stream after its quarantine.
+- **Sequence:** heartbeat `hb_seq` strictly increases per `(producer, epoch)`.
+- **Epoch progression:** a producer starts at epoch 1; only a recorded `EPOCH_CHANGED` moves it, by exactly +1 from the tracked epoch; accepted events and heartbeats must be on the current epoch (old, future or regressed epochs fail). `adapter_report` rows are exempt (E1, no stream).
+- **Quarantine:** `PRODUCER_REGRESSION` records no epoch, so the verifier quarantines the producer's *current* epoch (as the ingest does). Any later accepted event **or heartbeat** on it fails.
+- **Tenant:** the evidence is single-tenant; every ledger row that names a tenant (events, canaries, reconciliations, alerts) must name the evidence tenant. A multi-tenant ledger export therefore fails by design.
+- **Format and malformed input:** only `qyrix-c5-validation-evidence/3` is accepted; any other format, or any malformed field, gives `INTEGRITY_FAILED` with an `error` (never an exception).
+- **Repo binding:** without `--repo` the commit / compose-hash binding is not checked, so the best result is `INTEGRITY_INCOMPLETE_NO_REPO_CHECK` (exit 1).
 - **Verdict support:** every `ENFORCEMENT_VERIFIED` row has no reasons and canary scope, and the latest coverage record before it is a valid attestation.
 - **Run window:** reported ids are signed ledger rows recorded inside the run window (2 s slack).
 
@@ -191,7 +195,8 @@ three ways:
 - No pin → at best `INTEGRITY_SELF_CONSISTENT_UNPINNED`, never `INTEGRITY_VERIFIED`; exit 1.
 - Correct pin → `INTEGRITY_VERIFIED` (all other checks must also pass); exit 0.
 - **Provisioning:** `validate_c5.py` prints the run's root public key on the console and writes it to `$QYRIX_OFFLINE_DIR/trusted_root.pub`, **not** into the repository. The operator must record it through a channel independent of the evidence file (signed release note, ticket, separate secure store) and pass it with `--trusted-root`. The pin in the committed `evidence/c5/validation.json` is only as independent as the channel it was recorded in; a pin copied out of the same file proves nothing.
-Output says `INTEGRITY_VERIFIED`, `INTEGRITY_SELF_CONSISTENT_UNPINNED` or `INTEGRITY_FAILED`, and never an enforcement verdict. **Integrity is not occurrence:** valid signatures prove the records are authentic and unaltered, not that the underlying events happened (E0/E1 are backend claims). Tests: `test_c6_verifier.py` (22, each check on a properly signed synthetic chain).
+Output says `INTEGRITY_VERIFIED` (pin + repo + all checks), `INTEGRITY_INCOMPLETE_NO_REPO_CHECK`, `INTEGRITY_SELF_CONSISTENT_UNPINNED` or `INTEGRITY_FAILED`, and never an enforcement verdict. **Integrity is not occurrence:** valid signatures prove the records are authentic and unaltered, not that the underlying events happened (E0/E1 are backend claims). Tests: `test_c6_verifier.py` (22, each check on a properly signed synthetic chain).
+**Still not checked:** that an `EPOCH_CHANGED` was signed by a recovery key (the ledger row does not record the signer), the ledger tail (no head commitment: dropping trailing rows is detectable only because the document is signed), and freshness (a genuine old file still verifies).
 **Not C6-complete:** no signed policy bundle or stateless-rule divergence check (the original C6 slice in the design doc), no per-event re-derivation from raw telemetry, and the verifier trusts the exporter's database dump (whoever controls the pinned root key can forge a consistent chain; with no pin, anyone can).
 
 **C5 limitations (honest):**

@@ -24,7 +24,9 @@ Checks, with nothing but the file (and optionally the git repository):
  10. (--repo) the recorded commit exists, and the compose files at that commit hash to the recorded values;
  11. the tracked tree was clean when the validation ran (so the commit IS the code that ran).
 The verifier never emits an enforcement verdict. `integrity` says whether the records are authentic, complete and
-mutually consistent; `occurrence` states what that does NOT prove. Missing or partial data => INTEGRITY_FAILED.
+mutually consistent; `occurrence` states what that does NOT prove. Missing or partial data => INTEGRITY_FAILED. Without --repo the commit/compose binding is not
+checked, so the best result is INTEGRITY_INCOMPLETE_NO_REPO_CHECK (exit 1). Unsupported format or malformed fields =>
+INTEGRITY_FAILED (never an exception).
 Limitation: the root key is generated per validation run, so a valid signature proves the evidence is internally
 consistent and untampered since signing - not WHO ran the validation."""
 import argparse
@@ -74,28 +76,37 @@ def chain_checks(rows, m, doc) -> dict:
             dup |= k in seen
             seen.add(k)
     res["no_replayed_records"] = not dup
-    hb, ep, seq_ok = {}, {}, True
+    # producer epoch progression. A producer starts at epoch 1 (O001 default); only a recorded EPOCH_CHANGED moves it, by
+    # exactly +1 from the epoch we are tracking. PRODUCER_REGRESSION carries NO epoch, but the ingest only quarantines the
+    # stream of the producer's CURRENT epoch, so that is what we quarantine. Accepted events AND heartbeats on a
+    # quarantined or non-current stream are impossible in the real ingest and therefore invalid here.
+    hb, cur_ep, seq_ok, epoch_ok = {}, {}, True, True
     quarantined, quarantine_ok = set(), True
     for r in rows:
         d, pid = r["detail"] or {}, r["producer_id"]
-        if r["code"] == "PRODUCER_REGRESSION":
-            quarantined.add((pid, d.get("epoch", ep.get(pid))))
-        if r["code"] != "ACCEPTED" or r["kind"] not in ("event", "heartbeat") or "epoch" not in d:
-            continue
-        if d["epoch"] < ep.get(pid, d["epoch"]):
-            seq_ok = False
-        ep[pid] = max(ep.get(pid, d["epoch"]), d["epoch"])
-        if r["kind"] == "heartbeat":
-            k = (pid, d["epoch"])
-            if d.get("hb_seq", 0) <= hb.get(k, -1):
-                seq_ok = False
-            hb[k] = d.get("hb_seq", 0)
-        elif (pid, d["epoch"]) in quarantined:
-            quarantine_ok = False
+        e = cur_ep.get(pid, 1)
+        if r["code"] == "EPOCH_CHANGED":
+            if d.get("from") != e or d.get("to") != e + 1 or not isinstance(d.get("to"), int):
+                epoch_ok = False
+            cur_ep[pid] = e + 1
+        elif r["code"] == "PRODUCER_REGRESSION":
+            quarantined.add((pid, e))
+        elif r["code"] == "ACCEPTED" and r["kind"] in ("event", "heartbeat") and "epoch" in d:
+            if d["epoch"] != e and not (r["kind"] == "event" and d.get("type") == "adapter_report"):
+                epoch_ok = False                                  # old (closed), future (unknown) or regressed epoch
+            if (pid, d["epoch"]) in quarantined:
+                quarantine_ok = False
+            if r["kind"] == "heartbeat":
+                k = (pid, d["epoch"])
+                if not isinstance(d.get("hb_seq"), int) or d["hb_seq"] <= hb.get(k, -1):
+                    seq_ok = False
+                hb[k] = d.get("hb_seq", 0)
     res["event_sequence_consistent"] = seq_ok
+    res["epoch_progression_consistent"] = epoch_ok
     tenant = doc.get("tenant")
+    # single-tenant evidence: EVERY row that names a tenant must name this one (events, canaries, reconciliations, alerts)
     res["tenant_epoch_consistent"] = quarantine_ok and bool(tenant) and all(
-        r["tenant_id"] == tenant for r in rows if r["kind"] == "reconciliation")
+        r["tenant_id"] in (None, tenant) for r in rows)
     cov, supported = None, True
     for r in rows:
         if r["code"] == "COVERAGE_ATTESTED" or (r["kind"], r["code"]) == ("alert", "COVERAGE_GAP"):
@@ -117,7 +128,7 @@ def chain_checks(rows, m, doc) -> dict:
     return res
 
 
-def verify(doc: dict, repo=None, trusted_root=None) -> dict:
+def _verify(doc: dict, repo=None, trusted_root=None) -> dict:
     """trusted_root: base64 root public key obtained OUT OF BAND (never from `doc`). Without it the document's own
     root_public_key is self-asserted, so the result can never be INTEGRITY_VERIFIED."""
     res = {}
@@ -147,15 +158,18 @@ def verify(doc: dict, repo=None, trusted_root=None) -> dict:
             o = subprocess.run(["git", "-C", repo, "show", "%s:%s" % (doc["commit"], f)], capture_output=True)  # nosec
             hashes[f] = hashlib.sha256(o.stdout).hexdigest() if o.returncode == 0 else None
         res["compose_files_match_commit"] = bool(hashes) and hashes == doc.get("compose_files", {})
+    res["repo_binding_checked"] = bool(repo)                  # no --repo => commit/compose binding NOT checked => not verified
     res["all_passed_recorded"] = doc.get("all_passed") is True
     res["tracked_tree_clean_at_validation"] = doc.get("git_dirty") is False
     failure = res.pop("ledger_chain_failure", None)
     res["valid"] = all(v is True for v in res.values())
-    rest_ok = all(v is True for k, v in res.items() if k not in ("trusted_root_pinned", "valid"))
+    rest_ok = all(v is True for k, v in res.items() if k not in ("trusted_root_pinned", "repo_binding_checked", "valid"))
     if res["valid"]:
         res["integrity"] = "INTEGRITY_VERIFIED"
     elif rest_ok and not pin:                                 # internally consistent, but the trust anchor is the file's own
         res["integrity"] = "INTEGRITY_SELF_CONSISTENT_UNPINNED"
+    elif rest_ok and pin and res["trusted_root_pinned"] and not repo:   # pinned and consistent, repo binding not performed
+        res["integrity"] = "INTEGRITY_INCOMPLETE_NO_REPO_CHECK"
     else:
         res["integrity"] = "INTEGRITY_FAILED"
     if failure:
@@ -167,13 +181,38 @@ def verify(doc: dict, repo=None, trusted_root=None) -> dict:
     return res
 
 
+SUPPORTED_FORMATS = ("qyrix-c5-validation-evidence/3",)       # earlier formats lack the complete ledger / tenant field
+
+
+def _failed(error: str) -> dict:
+    return {"valid": False, "integrity": "INTEGRITY_FAILED", "error": error, "occurrence": OCCURRENCE}
+
+
+def verify(doc, repo=None, trusted_root=None) -> dict:
+    """Never raises: malformed or unsupported evidence is INTEGRITY_FAILED."""
+    if not isinstance(doc, dict):
+        return _failed("MALFORMED_EVIDENCE: not a JSON object")
+    if doc.get("format") not in SUPPORTED_FORMATS:
+        return _failed("UNSUPPORTED_FORMAT: %r (supported: %s)" % (str(doc.get("format"))[:80], ", ".join(SUPPORTED_FORMATS)))
+    try:
+        return _verify(doc, repo, trusted_root)
+    except Exception as e:  # nosec B110 - fail closed on any malformed field
+        return _failed("MALFORMED_EVIDENCE: %s" % type(e).__name__)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("file")
     ap.add_argument("--repo")
     ap.add_argument("--trusted-root", help="base64 root public key from an independent channel (NOT from the evidence file)")
     a = ap.parse_args(argv)
-    r = verify(json.load(open(a.file)), a.repo, a.trusted_root)
+    try:
+        doc = json.load(open(a.file))
+    except (OSError, ValueError) as e:
+        doc = None
+        print(json.dumps(_failed("UNREADABLE_EVIDENCE: %s" % type(e).__name__), indent=1))
+        return 1
+    r = verify(doc, a.repo, a.trusted_root)
     print(json.dumps(r, indent=1))
     return 0 if r["valid"] else 1
 
