@@ -18,6 +18,7 @@ Sink          observer-controlled listeners on the observer's EXTERNAL side used
 All records are observer-originated (E3) and append-only (O004)."""
 import ipaddress
 import json
+import os
 import re
 import secrets
 import socket
@@ -36,17 +37,36 @@ ALABEL_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a
 TOKEN_RE = re.compile(rb"qxtok[-/ _]([0-9a-f]{32})")
 MAX_HEAD = 8192
 T_TUNNEL = 30.0
-GRANT_WAIT = 5.0          # N2: how long the proxy waits for the grant claim to arrive through the outbox
-GRANT_MAX_AGE = 300.0     # N2: a grant claim older than this cannot open egress (grants live QYRIX_GRANT_TTL_SECONDS)
+GRANT_WAIT = 5.0          # N2: how long the proxy waits for the grant + redemption claims to arrive through the outbox
+
+
+def _grant_ttl() -> float:
+    """The Gate's grant lifetime (app.gateway.GRANT_TTL reads the same variable, default 120 s). A missing, malformed or
+    non-positive value falls back to the default: the proxy never accepts a claim for longer than a grant can live."""
+    try:
+        v = float(os.getenv("QYRIX_GRANT_TTL_SECONDS", "120"))
+    except ValueError:
+        return 120.0
+    return v if 0 < v <= 86400 else 120.0
+
+
+GRANT_MAX_AGE = _grant_ttl()   # N2: an execution older than the grant TTL (from its `issued` claim) cannot open egress
+CONSUMED_KINDS = frozenset(("redeemed", "executed"))   # written in the SAME transaction that marks the grant used
+TAGGED_PORTS = frozenset((443,))   # tagged CONNECT: the decision claim binds the host, not the port => HTTPS port only
 
 
 def grant_authorizer(db, clock=time.time, wait: float = GRANT_WAIT, max_age: float = GRANT_MAX_AGE):
-    """Audit N2: an execution id opens egress ONLY if the observer holds a SIGNED, SEQUENCED grant claim for it
-    (kind issued/executed, not revoked), linked to an ALLOW decision claim for the SAME host, from an ACTIVE current-epoch
-    gate stream, issued within max_age. Claims are E0 (backend-signed): this does not make a compromised backend honest,
-    but every egress now leaves a signed, gap-checked authorization trail, and unknown / missing / reused ids are refused."""
+    """Audit N2 (+ n8n Phase 1A remediation): an execution id opens egress ONLY if the observer holds SIGNED, SEQUENCED
+    claims, from an ACTIVE current-epoch gate stream, showing that its grant was
+      1. issued (`issued`) for an ALLOW decision on the SAME host, less than max_age (the grant TTL) ago, and
+      2. CONSUMED (`redeemed` by a delegated integration or `executed` by the Gate's own adapter) - the claim is written
+         in the same transaction that marks the grant used, so it is the observer-side proof of single-use redemption,
+    and that no `revoked` or `refused` claim exists for it. A missing consumption claim is waited for (it travels through
+    the outbox) and then refused: no redemption evidence => no egress. Claims are E0 (backend-signed): this does not make
+    a compromised backend honest, but every egress leaves a signed, gap-checked authorization trail."""
     def check(exec_id: str, host: str):
         end = clock() + wait
+        pending = "EXECUTION_NOT_AUTHORISED"
         while True:
             try:
                 r = db.run(lambda cur: (cur.execute("SELECT out_tenant, out_kinds, out_first_issued, out_verdict, out_dest_host,"
@@ -59,19 +79,22 @@ def grant_authorizer(db, clock=time.time, wait: float = GRANT_WAIT, max_age: flo
                 kinds = set(kinds or [])
                 if "revoked" in kinds:
                     return "GRANT_REVOKED"
-                if not kinds & {"issued", "executed"} or issued is None:
-                    return "EXECUTION_NOT_AUTHORISED"
-                if verdict != "ALLOW":
-                    return "DECISION_NOT_ALLOW"
-                if dest_host != host:
-                    return "HOST_NOT_AUTHORISED"
-                if not stream_ok:
-                    return "GRANT_CLAIM_STREAM_UNTRUSTED"
-                if clock() - issued.timestamp() > max_age:
-                    return "GRANT_TOO_OLD"
-                return None
+                if "refused" in kinds:
+                    return "GRANT_REDEMPTION_REFUSED"
+                if "issued" in kinds and issued is not None:
+                    if verdict != "ALLOW":
+                        return "DECISION_NOT_ALLOW"
+                    if dest_host != host:
+                        return "HOST_NOT_AUTHORISED"
+                    if not stream_ok:
+                        return "GRANT_CLAIM_STREAM_UNTRUSTED"
+                    if clock() - issued.timestamp() > max_age:
+                        return "GRANT_TOO_OLD"
+                    if kinds & CONSUMED_KINDS:
+                        return None
+                    pending = "EXECUTION_NOT_REDEEMED"   # issued but not (yet) consumed: wait, then fail closed
             if clock() >= end:
-                return "EXECUTION_NOT_AUTHORISED"
+                return pending
             time.sleep(0.2)
     return check
 
@@ -167,8 +190,13 @@ class EgressProxy:
     def __init__(self, recorder: Recorder, host: str, port: int, resolve: Callable[[str], List[str]] = default_resolve,
                  allow_cidrs: Iterable[str] = (), t_tunnel: float = T_TUNNEL, max_concurrency: int = 64,
                  clock: Callable[[], float] = time.time, authorize: Optional[Callable[[str, str], Optional[str]]] = None,
-                 untagged_allow: Iterable[str] = ()):
+                 untagged_allow: Iterable[str] = (), tagged_ports: Iterable[int] = TAGGED_PORTS):
         self.rec, self.resolve, self.t_tunnel, self.clock = recorder, resolve, t_tunnel, clock
+        # tagged (execution-id) CONNECT may only reach these ports: the decision claim binds the host, not the port.
+        # Production uses the default (443); tests that cannot bind 443 name their port explicitly.
+        self.tagged_ports = frozenset(int(p) for p in tagged_ports)
+        if not self.tagged_ports or any(not 0 < p < 65536 for p in self.tagged_ports):
+            raise ValueError("tagged_ports must be a non-empty set of TCP ports")
         # observer-owned external addresses (sink, canary sensor): reachable without a grant (needed for coverage
         # attestation and for detecting a backend that executes a blocked canary); still recorded
         self.allow = [ipaddress.ip_network(c, strict=False) for c in allow_cidrs]
@@ -309,6 +337,9 @@ class EgressProxy:
             ipaddress.ip_address(host[1:-1] if host.startswith("[") else host)
         except ValueError:
             name = host.lower()
+        if xexec is not None and not self._observer_owned(ip) and port not in self.tagged_ports:
+            self.rec.alert("EGRESS_DENIED", {"reason": "PORT_NOT_AUTHORISED"}, self.clock())
+            return self._refuse(conn, peer, "PORT_NOT_AUTHORISED", host=xhost, dest_ip=ip, dest_port=port, execution_id=xexec)
         why, sni_expect = self._authorized(ip, name, xhost, xexec, connect=True)
         if why:
             self.rec.alert("EGRESS_DENIED", {"reason": why}, self.clock())
