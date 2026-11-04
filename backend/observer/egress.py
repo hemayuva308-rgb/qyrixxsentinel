@@ -455,11 +455,75 @@ class EgressProxy:
             up.close()
 
 
+class DnsMonitor:
+    """Bounded DNS anomaly MONITORING (detection, not prevention): per-source query rate, unusually long names / labels,
+    high-entropy labels, and bursts of distinct subdomains under one zone. Alerts are ledger records (throttled per
+    code). Memory is bounded (LRU of sources and zones). The attestor's own probe zone is exempt."""
+
+    def __init__(self, recorder, rate_per_min: int = 300, subdomains_per_min: int = 60, max_sources: int = 1024,
+                 max_zones: int = 4096, exempt_zones=("dnscheck.qyrix.invalid",), clock=time.time):
+        from collections import OrderedDict
+        self.rec, self.rate, self.subs, self.clock = recorder, rate_per_min, subdomains_per_min, clock
+        self.max_sources, self.max_zones, self.exempt = max_sources, max_zones, tuple(exempt_zones)
+        self.sources: "OrderedDict[str, list]" = OrderedDict()
+        self.zones: "OrderedDict[str, dict]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def entropy(label: str) -> float:
+        import math
+        from collections import Counter
+        n = len(label)
+        return -sum(c / n * math.log2(c / n) for c in Counter(label).values()) if n else 0.0
+
+    def _lru(self, d, key, default, cap):
+        v = d.pop(key, None)
+        v = default() if v is None else v
+        d[key] = v
+        while len(d) > cap:
+            d.popitem(last=False)
+        return v
+
+    def observe(self, peer: str, qname: str) -> List[str]:
+        now, found = self.clock(), []
+        if any(qname == z or qname.endswith("." + z) for z in self.exempt):
+            return found
+        labels = qname.split(".")
+        with self._lock:
+            ts = self._lru(self.sources, peer, list, self.max_sources)
+            ts.append(now)
+            while ts and now - ts[0] > 60:
+                ts.pop(0)
+            del ts[:-(self.rate + 1)]                            # bounded per source
+            if len(ts) > self.rate:
+                found.append("DNS_QUERY_RATE")
+            if len(labels) >= 3:
+                zone = ".".join(labels[-2:])
+                z = self._lru(self.zones, zone, dict, self.max_zones)
+                z[labels[0]] = now
+                for k in [k for k, t in z.items() if now - t > 60]:
+                    del z[k]
+                while len(z) > self.subs + 1:
+                    z.pop(next(iter(z)))
+                if len(z) > self.subs:
+                    found.append("DNS_SUBDOMAIN_BURST")
+        if len(qname) > 100 or any(len(l) > 50 for l in labels):
+            found.append("DNS_LONG_NAME")
+        if any(len(l) >= 20 and self.entropy(l) >= 3.8 for l in labels):
+            found.append("DNS_HIGH_ENTROPY_LABEL")
+        for code in found:
+            self.rec.count(code)
+            self.rec.alert(code, {"peer": peer, "zone": ".".join(labels[-2:])}, now)
+        return found
+
+
 class DnsForwarder:
     """UDP DNS forwarder: records every query (qname, qtype, peer) as E3, then relays to the upstream resolver."""
 
-    def __init__(self, recorder: Recorder, host: str, port: int, upstream: Tuple[str, int], clock=time.time):
+    def __init__(self, recorder: Recorder, host: str, port: int, upstream: Tuple[str, int], clock=time.time,
+                 monitor: Optional["DnsMonitor"] = None):
         self.rec, self.upstream, self.clock = recorder, upstream, clock
+        self.monitor = monitor if monitor is not None else DnsMonitor(recorder, clock=clock)
         fwd = self
 
         class H(socketserver.BaseRequestHandler):
@@ -501,6 +565,10 @@ class DnsForwarder:
             return
         self.rec.insert({"sensor": "dns", "kind": "dns_query", "observed_at": self.clock(), "peer": addr[0],
                          "qname": q[0], "qtype": q[1]})
+        try:
+            self.monitor.observe(addr[0], q[0])           # P2: anomaly alerts (monitoring only)
+        except Exception:
+            self.rec.count("dns_monitor_error")
         u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         u.settimeout(2)
         try:
