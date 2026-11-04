@@ -49,7 +49,7 @@ def q(admin, sql, p=()):
         return cur.fetchall() if cur.description else None
 
 
-def _tls_server(tmp_path):
+def _tls_server(tmp_path, port=0):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -64,7 +64,7 @@ def _tls_server(tmp_path):
     open(cp, "wb").write(c.public_bytes(serialization.Encoding.PEM))
     open(kp, "wb").write(k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(cp, kp)
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(8)
+    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", port)); s.listen(8)
 
     def run():
         while True:

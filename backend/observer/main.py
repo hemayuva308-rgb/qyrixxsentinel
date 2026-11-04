@@ -95,7 +95,8 @@ def build_c5(obs: Observer, env=os.environ):
     def resolve(h):
         return sorted(set(static.get(h, [])) | set(default_resolve(h) if h not in static else []))
     ph, pp = env["OBSERVER_EGRESS_BIND"].rsplit(":", 1)
-    proxy = EgressProxy(rec, ph, int(pp), resolve, [c for c in env.get("OBSERVER_EGRESS_ALLOW_CIDRS", "").split(",") if c])
+    proxy = EgressProxy(rec, ph, int(pp), resolve, [c for c in env.get("OBSERVER_EGRESS_ALLOW_CIDRS", "").split(",") if c],
+                        untagged_allow=[h for h in env.get("OBSERVER_EGRESS_UNTAGGED_ALLOW", "").split(",") if h])
     dh, dp = env["OBSERVER_DNS_BIND"].rsplit(":", 1)
     uh, up = env.get("OBSERVER_DNS_UPSTREAM", "127.0.0.11:53").rsplit(":", 1)
     dns = DnsForwarder(rec, dh, int(dp), (uh, int(up)))

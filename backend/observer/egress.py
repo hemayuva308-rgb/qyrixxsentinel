@@ -36,6 +36,44 @@ ALABEL_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a
 TOKEN_RE = re.compile(rb"qxtok[-/ _]([0-9a-f]{32})")
 MAX_HEAD = 8192
 T_TUNNEL = 30.0
+GRANT_WAIT = 5.0          # N2: how long the proxy waits for the grant claim to arrive through the outbox
+GRANT_MAX_AGE = 300.0     # N2: a grant claim older than this cannot open egress (grants live QYRIX_GRANT_TTL_SECONDS)
+
+
+def grant_authorizer(db, clock=time.time, wait: float = GRANT_WAIT, max_age: float = GRANT_MAX_AGE):
+    """Audit N2: an execution id opens egress ONLY if the observer holds a SIGNED, SEQUENCED grant claim for it
+    (kind issued/executed, not revoked), linked to an ALLOW decision claim for the SAME host, from an ACTIVE current-epoch
+    gate stream, issued within max_age. Claims are E0 (backend-signed): this does not make a compromised backend honest,
+    but every egress now leaves a signed, gap-checked authorization trail, and unknown / missing / reused ids are refused."""
+    def check(exec_id: str, host: str):
+        end = clock() + wait
+        while True:
+            try:
+                r = db.run(lambda cur: (cur.execute("SELECT out_tenant, out_kinds, out_first_issued, out_verdict, out_dest_host,"
+                                                    " out_stream_ok FROM observer_grant_lookup(%s)", (exec_id,)), cur.fetchone())[1],
+                           lock=False)
+            except DbError:
+                return "OBSERVER_CANNOT_AUTHORIZE"
+            if r is not None:
+                tenant, kinds, issued, verdict, dest_host, stream_ok = r
+                kinds = set(kinds or [])
+                if "revoked" in kinds:
+                    return "GRANT_REVOKED"
+                if not kinds & {"issued", "executed"} or issued is None:
+                    return "EXECUTION_NOT_AUTHORISED"
+                if verdict != "ALLOW":
+                    return "DECISION_NOT_ALLOW"
+                if dest_host != host:
+                    return "HOST_NOT_AUTHORISED"
+                if not stream_ok:
+                    return "GRANT_CLAIM_STREAM_UNTRUSTED"
+                if clock() - issued.timestamp() > max_age:
+                    return "GRANT_TOO_OLD"
+                return None
+            if clock() >= end:
+                return "EXECUTION_NOT_AUTHORISED"
+            time.sleep(0.2)
+    return check
 
 
 def _dt(t: float) -> datetime:
@@ -128,9 +166,16 @@ def default_resolve(host: str) -> List[str]:
 class EgressProxy:
     def __init__(self, recorder: Recorder, host: str, port: int, resolve: Callable[[str], List[str]] = default_resolve,
                  allow_cidrs: Iterable[str] = (), t_tunnel: float = T_TUNNEL, max_concurrency: int = 64,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, authorize: Optional[Callable[[str, str], Optional[str]]] = None,
+                 untagged_allow: Iterable[str] = ()):
         self.rec, self.resolve, self.t_tunnel, self.clock = recorder, resolve, t_tunnel, clock
+        # observer-owned external addresses (sink, canary sensor): reachable without a grant (needed for coverage
+        # attestation and for detecting a backend that executes a blocked canary); still recorded
         self.allow = [ipaddress.ip_network(c, strict=False) for c in allow_cidrs]
+        self.authorize = authorize or grant_authorizer(recorder.db, clock)
+        # N2: explicit operator allow-list of hostnames reachable WITHOUT an execution id (e.g. an LLM provider or TSA).
+        # CONNECT only, observer-resolved, SNI must equal the hostname. Empty by default.
+        self.untagged_allow = frozenset(h.strip().lower() for h in untagged_allow if h.strip())
         self.open_tunnels: Dict[str, Dict] = {}
         self._lock = threading.Lock()
         slots = threading.BoundedSemaphore(max_concurrency)
@@ -160,9 +205,26 @@ class EgressProxy:
         self.server.shutdown(); self.server.server_close()
 
     # -- policy
-    def _dest_allowed(self, ip: str) -> bool:
+    def _is_public(self, ip: str) -> bool:
+        return ipaddress.ip_address(ip).is_global
+
+    def _observer_owned(self, ip: str) -> bool:
         a = ipaddress.ip_address(ip)
-        return a.is_global or any(a in n for n in self.allow)
+        return any(a in n for n in self.allow)
+
+    def _dest_allowed(self, ip: str) -> bool:
+        return self._is_public(ip) or self._observer_owned(ip)
+
+    def _authorized(self, ip: str, name: Optional[str], xhost: Optional[str], xexec: Optional[str], connect: bool):
+        """N2 default deny. -> (reason or None, SNI the tunnel must present or None)."""
+        if self._observer_owned(ip):
+            return None, xhost                          # observer-owned resource; tagged probes keep the SNI check
+        if xexec is None:
+            if connect and name and name in self.untagged_allow:
+                return None, name                       # operator allow-list: observer-resolved, SNI-bound
+            return "UNTAGGED_EGRESS_DENIED", None
+        why = self.authorize(xexec, xhost)
+        return why, xhost
 
     def _refuse(self, conn, peer, reason, status=403, **kw):
         now = self.clock()
@@ -242,6 +304,15 @@ class EgressProxy:
         ip, why = self._target_ip(host, xhost)
         if why:
             return self._refuse(conn, peer, why, host=xhost, dest_port=port, execution_id=xexec)
+        name = None
+        try:
+            ipaddress.ip_address(host[1:-1] if host.startswith("[") else host)
+        except ValueError:
+            name = host.lower()
+        why, sni_expect = self._authorized(ip, name, xhost, xexec, connect=True)
+        if why:
+            self.rec.alert("EGRESS_DENIED", {"reason": why}, self.clock())
+            return self._refuse(conn, peer, why, host=xhost or name, dest_ip=ip, dest_port=port, execution_id=xexec)
         tid, now = str(uuid.uuid4()), self.clock()
         try:
             ok = self.rec.insert({"sensor": "egress_proxy", "kind": "tunnel_open", "observation_id": tid, "tunnel_id": tid,
@@ -274,7 +345,7 @@ class EgressProxy:
                 if len(first) > 65536:
                     break
             sni = parse_sni(first)
-            if xhost is not None and sni != xhost:
+            if sni_expect is not None and sni != sni_expect:
                 reason = "SNI_MISMATCH"                  # incl. no SNI / not TLS on a tagged tunnel (fronting, ECH)
                 self.rec.insert({"sensor": "egress_proxy", "kind": "refused", "observed_at": self.clock(), "peer": peer,
                                  "tunnel_id": tid, "host": xhost, "sni": sni, "dest_ip": ip, "dest_port": port,
@@ -340,6 +411,10 @@ class EgressProxy:
         import hashlib
         if why:
             return self._refuse(conn, peer, why, host=xhost, dest_port=port, execution_id=xexec)
+        why, _ = self._authorized(ip, None, xhost, xexec, connect=False)   # untagged plain HTTP is never allow-listed
+        if why:
+            self.rec.alert("EGRESS_DENIED", {"reason": why}, self.clock())
+            return self._refuse(conn, peer, why, host=xhost, dest_ip=ip, dest_port=port, execution_id=xexec)
         now = self.clock()
         try:
             ok = self.rec.insert({"sensor": "egress_proxy", "kind": "http_request", "observed_at": now, "peer": peer,
