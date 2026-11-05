@@ -32,7 +32,7 @@ export default function SiteHeader() {
         <Link href="/" className="flex items-center gap-2.5" aria-label="Qyrix Sentinel home">
           <BrandMark size={30} title={null} /><Wordmark />
         </Link>
-        <nav aria-label="Primary" className="ml-4 hidden items-center gap-0.5 lg:flex">
+        <nav aria-label="Primary" className="ml-2 hidden items-center gap-0.5 lg:flex xl:ml-4">
           {NAV.map((n) => (
             <Link key={n.href} href={n.href} aria-current={active(n.href) ? "page" : undefined}
               className={`relative whitespace-nowrap rounded-full px-2.5 py-1.5 text-[13.5px] xl:px-3 font-medium transition-colors duration-200 ${active(n.href) ? "text-qx-ink" : "text-qx-body hover:text-qx-ink"}`}>
@@ -41,7 +41,7 @@ export default function SiteHeader() {
             </Link>))}
         </nav>
         <div className="ml-auto hidden items-center gap-2 sm:flex">
-          <Link href="/login" className="hidden rounded-full px-4 py-2 text-[13.5px] font-semibold text-qx-ink transition hover:text-qx-blue xl:block">Login</Link>
+          <Link href="/login" className="rounded-full px-3 py-2 text-[13.5px] font-semibold text-qx-ink transition hover:text-qx-blue lg:px-2 xl:px-3">Login</Link>
           <Link href={DEMO_HREF} className="shrink-0 whitespace-nowrap rounded-full bg-qx-blue px-4 py-2 text-[13.5px] font-semibold text-white shadow-[0_8px_20px_-10px_rgba(37,99,235,.8)] transition duration-300 hover:bg-[#1d4fd0] active:scale-[.98]">Request a Demo</Link>
         </div>
         <button ref={toggle} type="button" className="ml-auto flex h-11 w-11 items-center justify-center rounded-lg text-qx-ink sm:ml-2 lg:hidden" aria-expanded={open} aria-controls="mobile-nav"
