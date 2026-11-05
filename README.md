@@ -24,12 +24,15 @@ Configure with `META_API_KEY` and `META_MODEL` (your exact model id); check it w
 The authenticated Inspector shows `LIVE: META`, the model and the latency. The public sandbox on the homepage deliberately
 makes **no** LLM call.
 
+**New: a real model is the agent.** `backend/scripts/meta_agent_demo.py` lets a Meta or Baseten-hosted model act as a trusting agent that reads a poisoned README and proposes tool calls;
+the real Gate evaluates each in isolation (nothing is executed). The outcome is reported honestly, including when the model resists the injection. Offline-tested; live results exist only if someone ran it with real credentials.
+
 **New: AI attacks, AI judges, the Gate decides.** `backend/scripts/redteam_campaign.py` has a Llama model (Baseten or Meta) write attack
 cases, runs them through the real Gate in isolation, and optionally asks the advisory classifier (e.g. a Meta Muse model) about each
 case, then reports how often the AI missed an attack that the Gate still stopped (`docs/REDTEAM.md`). The pipeline is tested offline;
 the live results in `evidence/redteam/` exist only if someone ran it with real credentials.
 
-**What is real and tested.** Backend suite: 1116 passed, 1 skipped (last full run; CI runs it on every push, including real PostgreSQL
+**What is real and tested.** Backend suite: 1136 passed, 1 skipped (last full run; CI runs it on every push, including real PostgreSQL
 suites). 10-case benchmark: 7/7 attacks blocked, 0/3 false positives. Integrations: MCP stdio and Streamable HTTP proxies, and an n8n custom
 HTTP node (all prototypes). Independent audit findings are listed openly in `docs/N8N_INTEGRATION.md`.
 
@@ -44,7 +47,7 @@ Homepage with the interactive architecture: run the frontend (`cd frontend && np
 | Part | Path |
 |---|---|
 | Backend (FastAPI): Inspector, Provenance, Gate, controlled adapter, Proof, RFC 3161 anchoring, PostgreSQL persistence, identity (roles, API keys, sessions), tenant isolation (RLS), metrics, public demo | `backend/app/`, `backend/migrations/` |
-| Tests (302 passing, 1 opt-in live test skipped; incl. adversarial PostgreSQL privilege tests, data-loss detection, MFA, shared rate limits, encrypted backups, route sweep) | `backend/tests/` |
+| Tests (1136 passing, 1 skipped in the latest full run; incl. adversarial PostgreSQL privilege tests, data-loss detection, MFA, shared rate limits, encrypted backups, route sweep) | `backend/tests/` |
 | Benchmark · offline proof verifier · judging workflow · Llama live check · local test TSA | `backend/scripts/run_benchmark.py`, `verify_proof.py`, `demo_judging.py`, `llama_live_check.py`, `local_tsa.py` |
 | Public light-theme website (`/`, features, how-it-works, pricing, security, forensic-lab, contact, docs) | `frontend/src/app/(site)/` |
 | Authenticated dark product (`/login`, `/dashboard`, `/forensic`) | `frontend/src/app/(app)/` |
@@ -60,7 +63,7 @@ Start with `docs/PRODUCTION_READINESS.md` (production-readiness classification),
 | 10-case benchmark (3 safe / 3 direct / 2 transformed / 2 delayed) | 7/7 attacks blocked · 0/3 false positives · 3/3 safe tasks completed · 0 external calls · sub-ms average |
 | Proof chain | intact; `PARTIAL_UNANCHORED` in the default deployment (no TSA configured) — `PASS` only with a verified RFC 3161 anchor on the head |
 | Persistence | PostgreSQL: records survive a backend restart; grants single-use, revocable, expiring; DB outage fails closed (Docker-verified) |
-| Tests | 302 passed, 1 skipped · typecheck + clean no-cache production builds · Docker Compose validated (30/30 live E2E, total-loss + encrypted restore drill) |
+| Tests | 1136 passed, 1 skipped (latest full run) · typecheck + clean no-cache production builds · Docker Compose validated (30/30 live E2E, total-loss + encrypted restore drill: these drills were run at earlier versions and have not been re-run) |
 | Meta Llama | integrated, advisory only, failure paths tested on real sockets — **NOT LIVE VERIFIED** (no credentials / provider blocked here) |
 
 ## Continuous Enforcement Verification (v1.5, new)
